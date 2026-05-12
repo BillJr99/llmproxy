@@ -349,6 +349,40 @@ response = client.chat.completions.create(
 )
 ```
 
+### opencode
+
+Add the following to `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "plugin": [
+    "opencode-lmstudio"
+  ],
+
+  "provider": {
+    "lmstudio": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llmproxy",
+      "options": {
+        "baseURL": "http://localhost:8080/v1",
+        "apiKey": "sk-local"
+      }
+    }
+  }
+}
+```
+
+The `opencode-lmstudio` plugin provides the `@ai-sdk/openai-compatible` adapter.
+The `apiKey` value is not used by llmproxy but is required by the adapter; any
+non-empty string works.
+
+### pi.dev
+
+Install the [pi-openai-compat](https://github.com/BillJr99/pi-openai-compat)
+plugin and point it at `http://localhost:8080`.  No API key is required.
+
 ### curl
 
 ```bash
