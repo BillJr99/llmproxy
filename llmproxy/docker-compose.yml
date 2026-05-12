@@ -1,0 +1,71 @@
+# ============================================================
+# llmproxy — docker-compose.yml
+# ============================================================
+#
+# Quick start (runs the proxy server):
+#   docker-compose up -d
+#
+# First-time setup / reconfigure:
+#   docker-compose run --rm setup
+#
+# After setup, apply new config without rebuilding:
+#   docker-compose restart llmproxy
+#
+# View logs:
+#   docker-compose logs -f llmproxy
+#
+# Stop and remove containers (config volume is preserved):
+#   docker-compose down
+#
+# Destroy everything including the config volume:
+#   docker-compose down -v
+#
+# ============================================================
+
+services:
+
+  # ── Proxy server ────────────────────────────────────────
+  llmproxy:
+    build: .
+    image: llmproxy:latest
+    container_name: llmproxy
+    restart: unless-stopped
+    ports:
+      - "${LLMPROXY_PORT:-8080}:8080"
+    volumes:
+      - llmproxy_config:/root/.config/llmproxy
+    environment:
+      # Optional: override via shell env or a .env file.
+      # LLMPROXY_CONFIG: /root/.config/llmproxy/config.json  # default
+      - LLMPROXY_CONFIG=${LLMPROXY_CONFIG:-/root/.config/llmproxy/config.json}
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── Interactive setup service ────────────────────────────
+  # Usage:  docker-compose run --rm setup
+  #
+  # Runs the wizard in a temporary container that shares the same
+  # named config volume as the server.  The server container does
+  # NOT need to be stopped; restart it after setup to apply changes.
+  setup:
+    build: .
+    image: llmproxy:latest
+    volumes:
+      - llmproxy_config:/root/.config/llmproxy
+    environment:
+      - LLMPROXY_CONFIG=${LLMPROXY_CONFIG:-/root/.config/llmproxy/config.json}
+    entrypoint: ["python", "-m", "llmproxy", "--setup"]
+    stdin_open: true   # -i
+    tty: true          # -t
+    profiles:
+      - setup          # only started when explicitly requested
+
+# ── Named volume for persistent configuration ────────────
+volumes:
+  llmproxy_config:
+    name: llmproxy_config
