@@ -173,7 +173,7 @@ def _edit_provider(name: str, existing: Optional[dict] = None) -> dict:
         try:
             api_key = getpass.getpass("").strip()
         except (EOFError, KeyboardInterrupt):
-            api_key = 
+            api_key = ""
 
     # Model filter
     existing_filter = ex.get("model_filter")
