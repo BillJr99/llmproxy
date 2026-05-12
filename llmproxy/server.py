@@ -22,12 +22,13 @@ each request to the appropriate upstream base URL.
 """
 
 import logging
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 
 import requests
-from flask import Flask, Response, jsonify, request, stream_with_context
+from flask import Flask, Response, g, jsonify, request, stream_with_context
 
 from .config import (
     get_provider,
@@ -42,6 +43,23 @@ from .config import (
 
 app = Flask(__name__)
 logger = logging.getLogger("llmproxy.server")
+
+# Populated by _fetch_provider_models; maps proxy display ID -> (provider, upstream_id).
+# Lets _resolve_provider route correctly even when the display ID omits the provider prefix.
+_model_route_cache: dict[str, tuple[str, str]] = {}
+
+
+@app.before_request
+def _log_request() -> None:
+    g._start_time = time.monotonic()
+    logger.info("→ %s %s", request.method, request.path)
+
+
+@app.after_request
+def _log_response(response: Response) -> Response:
+    elapsed_ms = (time.monotonic() - g._start_time) * 1000
+    logger.info("← %s %s  %d  %.0fms", request.method, request.path, response.status_code, elapsed_ms)
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -151,11 +169,33 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         upstream_id: str = model.get("id", "")
         if model_filter is not None and upstream_id not in model_filter:
             continue
-        # Build a proxy-facing model object.
-        proxy_model = dict(model)
-        proxy_model["id"] = f"{provider_name}/{upstream_id}"
-        # Preserve original id for reference.
+        # Skip embedding models — clients that validate modalities (e.g.
+        # opencode) reject "embedding" as an output type, and these models
+        # cannot be used for chat/completions anyway.  Check the modalities
+        # field when present, and fall back to the model name for upstreams
+        # (e.g. nvidia) that don't include modalities in their /models response.
+        output_modalities = model.get("modalities", {}).get("output", [])
+        is_embedding = "embedding" in output_modalities or (
+            not output_modalities and "embed" in upstream_id.lower()
+        )
+        if is_embedding:
+            logger.info(
+                "  skipping embedding model %s/%s", provider_name, upstream_id,
+            )
+            continue
+        # Build a proxy-facing model object.  Drop non-standard fields that
+        # some upstreams (e.g. LM Studio) add and that strict clients reject.
+        proxy_model = {k: v for k, v in model.items() if k != "modalities"}
+        # Strip a duplicate provider prefix so "nvidia/nvidia/llama-x" → "llama-x".
+        auto_prefix = provider_name + "/"
+        stripped = upstream_id[len(auto_prefix):] if upstream_id.startswith(auto_prefix) else upstream_id
+        # Use "model (provider)" as the proxy ID — shows fully in client menus
+        # without being silently truncated at a "/" boundary.
+        proxy_id = f"{stripped} ({provider_name})"
+        proxy_model["id"] = proxy_id
+        proxy_model["name"] = proxy_id
         proxy_model["_upstream_id"] = upstream_id
+        _model_route_cache[proxy_id] = (provider_name, upstream_id)
         proxy_model["_provider"] = provider_name
         result.append(proxy_model)
 
@@ -295,8 +335,10 @@ def _proxy_request(
     url = f"{base_url}/{endpoint}"
     headers = _upstream_headers(provider_cfg)
 
+    logger.info("  upstream POST %s  model=%s", url, payload.get("model", "?"))
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        logger.info("  upstream %d  %.0fms", resp.status_code, resp.elapsed.total_seconds() * 1000)
         content_type = resp.headers.get("Content-Type", "application/json")
         return Response(resp.content, status=resp.status_code, content_type=content_type)
     except requests.exceptions.Timeout:
@@ -332,6 +374,8 @@ def _proxy_streaming(
     url = f"{base_url}/{endpoint}"
     headers = _upstream_headers(provider_cfg)
 
+    logger.info("  upstream POST %s  model=%s  [streaming]", url, payload.get("model", "?"))
+
     @stream_with_context
     def generate():
         try:
@@ -342,8 +386,16 @@ def _proxy_streaming(
                 stream=True,
                 timeout=timeout,
             ) as upstream_resp:
+                first = True
                 for chunk in upstream_resp.iter_content(chunk_size=None):
                     if chunk:
+                        if first:
+                            logger.info(
+                                "  upstream %d  first chunk: %s",
+                                upstream_resp.status_code,
+                                chunk[:200],
+                            )
+                            first = False
                         yield chunk
         except requests.exceptions.Timeout:
             logger.error(
@@ -377,12 +429,22 @@ def _resolve_provider(model_full: str) -> tuple[Optional[str], Optional[dict], O
     resolution fails, otherwise None.  Callers should check the last element
     before using the first three.
     """
-    try:
-        provider_name, upstream_model = parse_model_string(model_full)
-    except ValueError as e:
-        return None, None, None, _error(str(e), status=400)
-
     config = load_config()
+
+    # Cache-first: the display ID format "model (provider)" is not parseable by
+    # parse_model_string, so the cache (populated by /v1/models) is authoritative.
+    if model_full in _model_route_cache:
+        provider_name, upstream_model = _model_route_cache[model_full]
+    elif model_full.endswith(")") and " (" in model_full:
+        # Cold-cache fallback for "model (provider)" format.
+        model_part, _, provider_name = model_full[:-1].rpartition(" (")
+        upstream_model = model_part  # may be missing a provider prefix; best-effort
+    else:
+        try:
+            provider_name, upstream_model = parse_model_string(model_full)
+        except ValueError as e:
+            return None, None, None, _error(str(e), status=400)
+
     provider_cfg = get_provider(config, provider_name)
     if not provider_cfg:
         return None, None, None, _error(
@@ -421,6 +483,8 @@ def _proxy_endpoint(endpoint: str) -> Response:
     provider_name, provider_cfg, upstream_model, err = _resolve_provider(model_full)
     if err is not None:
         return err
+
+    logger.info("  provider=%s  model=%s", provider_name, upstream_model)
 
     config = load_config()
     server_cfg = config.get("server", {})
@@ -577,8 +641,15 @@ def run_server(config_path: Optional[str] = None) -> None:
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
 
-    providers = list(config.get("providers", {}).keys())
-    logger.info("llmproxy starting — providers: %s", providers or ["(none — run --setup)"])
+    providers_cfg: dict = config.get("providers", {})
+    logger.info("llmproxy starting — providers: %s", list(providers_cfg) or ["(none — run --setup)"])
     logger.info("Listening on %s:%d", host, port)
+
+    # Pre-warm the model route cache so routing works even before the first
+    # /v1/models call (eliminates the cold-cache edge case for all clients).
+    timeout = server_cfg.get("request_timeout", 120)
+    for pname, pcfg in providers_cfg.items():
+        _fetch_provider_models(pname, pcfg, timeout)
+    logger.info("Model cache warmed: %d entries", len(_model_route_cache))
 
     app.run(host=host, port=port, threaded=True, debug=False)
