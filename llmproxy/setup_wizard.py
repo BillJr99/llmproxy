@@ -13,6 +13,8 @@ import sys
 import traceback
 from typing import Optional
 
+import requests as _requests
+
 from .config import (
     DEFAULT_SERVER_CONFIG,
     get_config_path,
@@ -408,6 +410,296 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
 
 
 # ---------------------------------------------------------------------------
+# Scrollable model picker (queries providers directly)
+# ---------------------------------------------------------------------------
+
+_PAGE_SIZE = 20
+_REASONING_LEVELS = ("exploratory", "standard", "deep")
+
+
+def _fetch_provider_models_direct(providers: dict) -> list[tuple[str, str]]:
+    """
+    Query every configured provider's /models endpoint directly and return a
+    flat list of (provider_name, upstream_model_id) tuples.  Providers that
+    are unreachable are skipped with a warning.
+    """
+    results: list[tuple[str, str]] = []
+    for provider_name, provider_cfg in providers.items():
+        base_url = provider_cfg.get("base_url", "").rstrip("/")
+        api_key = provider_cfg.get("api_key", "")
+        model_filter = provider_cfg.get("model_filter")
+        try:
+            resp = _requests.get(
+                f"{base_url}/models",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=10,
+            )
+            resp.raise_for_status()
+            for m in resp.json().get("data", []):
+                uid = m.get("id", "")
+                if uid and (model_filter is None or uid in model_filter):
+                    results.append((provider_name, uid))
+        except Exception as exc:
+            print(_warn(f"  Could not reach '{provider_name}': {exc}"))
+    return results
+
+
+def _pick_model_scrollable(
+    providers: dict,
+    prompt: str = "Select a model",
+    exclude: Optional[set] = None,
+) -> Optional[str]:
+    """
+    Fetch models from all configured providers and show a paginated, filterable
+    numbered list.
+
+    Returns the selected entry as "provider_name/upstream_model_id", or None if
+    the user cancels.
+
+    Navigation:
+      <number>   — select that entry
+      n / p      — next / previous page
+      <text>     — narrow the list to entries whose provider or model ID contains
+                   the text (re-type or press Enter on empty to reset)
+      Enter      — cancel (when input is blank and no filter is active)
+    """
+    exclude = exclude or set()
+
+    print()
+    print(_dim("  Fetching models from configured providers…"))
+    raw_models = _fetch_provider_models_direct(providers)
+    if not raw_models:
+        print(_warn("  No models found. Check that your providers are reachable."))
+        return None
+
+    # Remove already-listed entries so the picker shows only new additions.
+    all_models = [(pn, uid) for pn, uid in raw_models
+                  if f"{pn}/{uid}" not in exclude and uid not in exclude]
+
+    if not all_models:
+        print(_warn("  All models are already in the list."))
+        return None
+
+    active = list(all_models)
+    filter_str = ""
+    page = 0
+
+    while True:
+        total = len(active)
+        total_pages = max(1, (total + _PAGE_SIZE - 1) // _PAGE_SIZE)
+        page = max(0, min(page, total_pages - 1))
+        start = page * _PAGE_SIZE
+        page_slice = active[start: start + _PAGE_SIZE]
+
+        print()
+        header = f"  {prompt}"
+        if filter_str:
+            header += f"  {_dim(f'[filter: {filter_str!r}]')}"
+        header += f"  {_dim(f'({total} entries, page {page+1}/{total_pages})')}"
+        print(_h(header))
+        print()
+
+        for i, (pn, uid) in enumerate(page_slice, start + 1):
+            print(f"    {_bold_num(i):>4}.  {pn}/{uid}")
+
+        print()
+        nav_hints = []
+        if page < total_pages - 1:
+            nav_hints.append("n=next")
+        if page > 0:
+            nav_hints.append("p=prev")
+        if filter_str:
+            nav_hints.append("r=reset filter")
+        nav = ("  [" + "  " .join(nav_hints) + "]  ") if nav_hints else "  "
+
+        try:
+            raw = input(f"{nav}Number, text to filter, or Enter to cancel: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+
+        if not raw:
+            if filter_str:
+                # Reset filter
+                active = list(all_models)
+                filter_str = ""
+                page = 0
+                continue
+            return None
+
+        low = raw.lower()
+
+        if low == "n" and page < total_pages - 1:
+            page += 1
+            continue
+        if low == "p" and page > 0:
+            page -= 1
+            continue
+        if low == "r":
+            active = list(all_models)
+            filter_str = ""
+            page = 0
+            continue
+
+        # Numeric selection
+        if raw.isdigit():
+            idx = int(raw)
+            if 1 <= idx <= len(active):
+                pn, uid = active[idx - 1]
+                chosen = f"{pn}/{uid}"
+                print(_ok(f"  Selected: {chosen}"))
+                return chosen
+            print(_warn(f"  Number out of range (1–{len(active)})."))
+            continue
+
+        # Text filter / narrow
+        narrowed = [(pn, uid) for pn, uid in active
+                    if low in uid.lower() or low in pn.lower()]
+        if not narrowed:
+            print(_warn(f"  No entries match '{raw}'."))
+            continue
+        if len(narrowed) == 1:
+            pn, uid = narrowed[0]
+            chosen = f"{pn}/{uid}"
+            print(_ok(f"  Selected: {chosen}"))
+            return chosen
+        # Narrow the list
+        active = narrowed
+        filter_str = raw
+        page = 0
+
+
+# ---------------------------------------------------------------------------
+# Model-tags menu (known_free + model_reasoning)
+# ---------------------------------------------------------------------------
+
+def _edit_model_tags(config: dict, providers: dict) -> bool:
+    """
+    Interactive sub-menu for managing known_free and model_reasoning.
+    Returns True if the config was modified.
+    """
+    modified = False
+
+    while True:
+        known_free: list = config.setdefault("known_free", [])
+        reasoning: dict = config.setdefault("model_reasoning", {})
+
+        print()
+        print(_divider())
+        print(_h("  Model Tags"))
+        print()
+        print(f"  {_dim('known_free:')}     {len(known_free)} entr{'y' if len(known_free)==1 else 'ies'}")
+        print(f"  {_dim('model_reasoning:')} {len(reasoning)} entr{'y' if len(reasoning)==1 else 'ies'}")
+        print()
+
+        options = [
+            "Add model to known_free",
+            "Remove model from known_free",
+            "Tag model with reasoning level  (exploratory / standard / deep)",
+            "Remove reasoning tag from model",
+            "View current tags",
+            "Back to main menu",
+        ]
+        choice = _pick(options, label="Option")
+        if choice is None or choice == 5:
+            break
+
+        # ── Add to known_free ──────────────────────────────────────────────
+        if choice == 0:
+            if not providers:
+                print(_warn("  No providers configured — add a provider first."))
+                continue
+            entry = _pick_model_scrollable(
+                providers,
+                prompt="Add to known_free — pick a model",
+                exclude=set(known_free),
+            )
+            if entry:
+                known_free.append(entry)
+                config["known_free"] = known_free
+                print(_ok(f"  Added '{entry}' to known_free."))
+                modified = True
+
+        # ── Remove from known_free ─────────────────────────────────────────
+        elif choice == 1:
+            if not known_free:
+                print(_warn("  known_free is empty."))
+                continue
+            print()
+            print(_h("  Remove from known_free:"))
+            idx = _pick(known_free)
+            if idx is None:
+                continue
+            removed = known_free.pop(idx)
+            config["known_free"] = known_free
+            print(_ok(f"  Removed '{removed}' from known_free."))
+            modified = True
+
+        # ── Tag model with reasoning level ────────────────────────────────
+        elif choice == 2:
+            if not providers:
+                print(_warn("  No providers configured — add a provider first."))
+                continue
+            entry = _pick_model_scrollable(
+                providers,
+                prompt="Tag with reasoning level — pick a model",
+                exclude=set(reasoning.keys()),
+            )
+            if not entry:
+                continue
+            print()
+            print(f"  Reasoning level for {_ok(entry)}:")
+            level_idx = _pick(list(_REASONING_LEVELS), label="Level")
+            if level_idx is None:
+                continue
+            level = _REASONING_LEVELS[level_idx]
+            reasoning[entry] = level
+            config["model_reasoning"] = reasoning
+            print(_ok(f"  Tagged '{entry}' as '{level}'."))
+            modified = True
+
+        # ── Remove reasoning tag ──────────────────────────────────────────
+        elif choice == 3:
+            if not reasoning:
+                print(_warn("  model_reasoning is empty."))
+                continue
+            print()
+            print(_h("  Remove reasoning tag:"))
+            entries = [f"{k}  →  {v}" for k, v in reasoning.items()]
+            idx = _pick(entries)
+            if idx is None:
+                continue
+            key = list(reasoning.keys())[idx]
+            del reasoning[key]
+            config["model_reasoning"] = reasoning
+            print(_ok(f"  Removed reasoning tag for '{key}'."))
+            modified = True
+
+        # ── View current tags ─────────────────────────────────────────────
+        elif choice == 4:
+            print()
+            print(_h("  known_free:"))
+            if known_free:
+                for entry in known_free:
+                    print(f"    • {entry}")
+            else:
+                print(_dim("    (empty)"))
+            print()
+            print(_h("  model_reasoning:"))
+            if reasoning:
+                for k, v in reasoning.items():
+                    print(f"    {v:<14}  {k}")
+            else:
+                print(_dim("    (empty)"))
+            print()
+
+    return modified
+
+
+# ---------------------------------------------------------------------------
 # Main wizard entry point
 # ---------------------------------------------------------------------------
 
@@ -450,6 +742,7 @@ def run_setup(config_path: Optional[str] = None) -> None:
             "Add / edit a provider (manual)",
             "Remove a provider",
             "Configure server settings",
+            "Manage model tags  (known_free / reasoning levels)",
             "View current configuration (JSON)",
             "Save and exit",
             "Exit without saving",
@@ -513,6 +806,11 @@ def run_setup(config_path: Optional[str] = None) -> None:
             modified = True
 
         elif choice == 4:
+            # Model tags
+            if _edit_model_tags(config, providers):
+                modified = True
+
+        elif choice == 5:
             # View config
             print()
             print(_h("  Current configuration:"))
@@ -520,7 +818,7 @@ def run_setup(config_path: Optional[str] = None) -> None:
             display = _redact_config(config)
             print(json.dumps(display, indent=2))
 
-        elif choice == 5:
+        elif choice == 6:
             # Save and exit
             if save_config(config, config_path):
                 print(_ok("  Configuration saved. Exiting setup."))
@@ -528,7 +826,7 @@ def run_setup(config_path: Optional[str] = None) -> None:
                 print(_err("  Failed to save configuration. Check permissions."))
             break
 
-        elif choice == 6:
+        elif choice == 7:
             # Exit without saving
             if modified and not _confirm("You have unsaved changes. Exit anyway?", default=False):
                 continue

@@ -1008,6 +1008,31 @@ def _resolve_provider(model_full: str) -> tuple[Optional[str], Optional[dict], O
     return provider_name, provider_cfg, upstream_model, None
 
 
+def _virtual_model_hint(model_full: str) -> str:
+    """Return a one-sentence config hint for an unavailable virtual model."""
+    if model_full == "free":
+        return (
+            "Check that at least one provider exposes a free-tier model "
+            "(upstream ID contains 'free', or add it to config['known_free'])."
+        )
+    if model_full == "local":
+        return "Check that at least one provider has a localhost base_url."
+    for level in _REASONING_LEVELS:
+        if model_full == level:
+            return f"Tag at least one model with '{level}' in config['model_reasoning']."
+        if model_full == f"{level}/free":
+            return (
+                f"Need a model tagged '{level}' in config['model_reasoning'] "
+                f"that is also free-tier."
+            )
+        if model_full == f"{level}/local":
+            return (
+                f"Need a model tagged '{level}' in config['model_reasoning'] "
+                f"that is also served by a localhost provider."
+            )
+    return ""
+
+
 def _proxy_endpoint(endpoint: str) -> Response:
     """
     Generic handler that routes a POST request to the correct upstream provider.
@@ -1051,7 +1076,8 @@ def _proxy_endpoint(endpoint: str) -> Response:
         candidates = _get_virtual_candidates(model_full)
         if not candidates:
             return _error(
-                f"No '{model_full}' models are currently available.",
+                f"No '{model_full}' models are currently available. "
+                + _virtual_model_hint(model_full),
                 status=503,
             )
         candidates = _cycling_candidates(candidates)
