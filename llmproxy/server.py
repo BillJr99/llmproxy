@@ -298,6 +298,12 @@ def _rebuild_route_cache(providers_cfg: dict, timeout: int) -> list[dict]:
                 )
                 continue
             futures[executor.submit(_fetch_provider_models, name, cfg, timeout)] = name
+        if not futures and providers_cfg:
+            logger.error(
+                "[server:_rebuild_route_cache] All configured provider names are reserved "
+                "(%s); no real providers will be queried.",
+                ", ".join(repr(n) for n in providers_cfg),
+            )
         for future in as_completed(futures):
             try:
                 all_models.extend(future.result())
@@ -363,6 +369,10 @@ def list_models() -> Response:
     """
     config = load_config()
     providers: dict = config.get("providers", {})
+    # Strip reserved names before presence check so a config that contains only
+    # reserved providers triggers the "no providers configured" warning rather
+    # than returning a silently empty model list.
+    providers = {k: v for k, v in providers.items() if k not in RESERVED_PROVIDER_NAMES}
     server_cfg: dict = config.get("server", {})
     timeout: int = server_cfg.get("request_timeout", 120)
     models_ttl: int = server_cfg.get("models_cache_ttl", _DEFAULT_MODELS_CACHE_TTL)
