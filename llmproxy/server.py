@@ -21,14 +21,19 @@ The server strips the leading <provider_name>/ prefix before forwarding
 each request to the appropriate upstream base URL.
 """
 
+import hashlib
+import json
 import logging
+import random
+import threading
 import time
 import traceback
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 
 import requests
-from flask import Flask, Response, g, jsonify, request, stream_with_context
+from flask import Flask, Response, g, jsonify, make_response, request, stream_with_context
 
 from .config import (
     get_provider,
@@ -44,9 +49,51 @@ from .config import (
 app = Flask(__name__)
 logger = logging.getLogger("llmproxy.server")
 
-# Populated by _fetch_provider_models; maps proxy display ID -> (provider, upstream_id).
-# Lets _resolve_provider route correctly even when the display ID omits the provider prefix.
+# Maps proxy display ID -> (provider_name, upstream_id).
+# Always access under _model_route_cache_lock.
 _model_route_cache: dict[str, tuple[str, str]] = {}
+_model_route_cache_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Short-lived response cache (non-streaming only)
+# ---------------------------------------------------------------------------
+# Keyed on SHA-256(endpoint + sorted JSON payload).  Only 2xx responses are
+# stored.  Entries expire after server.response_cache_ttl seconds (default 120).
+
+_response_cache: dict[str, tuple[bytes, int, str, float]] = {}
+_response_cache_lock = threading.Lock()
+_DEFAULT_RESPONSE_CACHE_TTL = 120
+
+
+def _response_cache_key(endpoint: str, payload: dict, auth: str = "") -> str:
+    """Stable hash of the request, scoped by caller identity and excluding 'stream'."""
+    filtered = {k: v for k, v in payload.items() if k != "stream"}
+    raw = json.dumps({"_endpoint": endpoint, "_auth": auth, **filtered}, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _response_cache_prune(ttl: int) -> None:
+    """Evict all expired entries. Must be called with _response_cache_lock held."""
+    now = time.monotonic()
+    expired = [k for k, (_, _, _, ts) in _response_cache.items() if now - ts > ttl]
+    for k in expired:
+        del _response_cache[k]
+
+
+def _response_cache_get(key: str, ttl: int) -> Optional[tuple[bytes, int, str]]:
+    with _response_cache_lock:
+        _response_cache_prune(ttl)
+        entry = _response_cache.get(key)
+    if entry is None:
+        return None
+    content, status, content_type, _ = entry
+    return content, status, content_type
+
+
+def _response_cache_put(key: str, content: bytes, status: int, content_type: str, ttl: int) -> None:
+    with _response_cache_lock:
+        _response_cache_prune(ttl)
+        _response_cache[key] = (content, status, content_type, time.monotonic())
 
 
 @app.before_request
@@ -100,13 +147,13 @@ def _upstream_headers(provider_cfg: dict) -> dict:
 
 def _error(message: str, status: int = 400, code: str = "invalid_request_error") -> Response:
     """Return an OpenAI-schema-compatible JSON error response."""
-    return jsonify({
+    return make_response(jsonify({
         "error": {
             "message": message,
             "type": code,
             "code": None,
         }
-    }), status
+    }), status)
 
 
 def _upstream_error(provider_name: str, e: Exception, status: int = 502) -> Response:
@@ -195,7 +242,7 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         proxy_model["id"] = proxy_id
         proxy_model["name"] = proxy_id
         proxy_model["_upstream_id"] = upstream_id
-        _model_route_cache[proxy_id] = (provider_name, upstream_id)
+        proxy_model["_route"] = (provider_name, upstream_id)
         proxy_model["_provider"] = provider_name
         result.append(proxy_model)
 
@@ -207,14 +254,83 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
     return result
 
 
+def _rebuild_route_cache(providers_cfg: dict, timeout: int) -> list[dict]:
+    """
+    Fetch models from all providers concurrently, rebuild _model_route_cache
+    atomically, and return the full flat model list.
+
+    The cache is replaced wholesale on each call so that removed or renamed
+    upstream models do not linger as stale entries.
+    """
+    if not providers_cfg:
+        with _model_route_cache_lock:
+            _model_route_cache.clear()
+        return []
+
+    all_models: list[dict] = []
+
+    with ThreadPoolExecutor(max_workers=min(len(providers_cfg), 10)) as executor:
+        futures = {
+            executor.submit(_fetch_provider_models, name, cfg, timeout): name
+            for name, cfg in providers_cfg.items()
+        }
+        for future in as_completed(futures):
+            try:
+                all_models.extend(future.result())
+            except Exception as e:
+                provider_name = futures[future]
+                logger.warning(
+                    "[server:_rebuild_route_cache] Unexpected error from provider %s: %s",
+                    provider_name, e,
+                )
+
+    new_cache: dict[str, tuple[str, str]] = {}
+    for m in all_models:
+        route = m.pop("_route", None)
+        if route:
+            new_cache[m["id"]] = route
+
+    with _model_route_cache_lock:
+        _model_route_cache.clear()
+        _model_route_cache.update(new_cache)
+
+    logger.info("[server:_rebuild_route_cache] %d entries", len(new_cache))
+    return all_models
+
+
+def _get_route_cache_snapshot() -> dict[str, tuple[str, str]]:
+    """
+    Return a point-in-time copy of the route cache.
+
+    If the cache is empty (e.g. gunicorn worker that has not yet served a
+    /v1/models request), the cache is warmed on-demand before the snapshot
+    is taken so that virtual model routing works from the very first request.
+    """
+    with _model_route_cache_lock:
+        if _model_route_cache:
+            return dict(_model_route_cache)
+
+    config = load_config()
+    providers_cfg = config.get("providers", {})
+    timeout = config.get("server", {}).get("request_timeout", 120)
+    _rebuild_route_cache(providers_cfg, timeout)
+
+    with _model_route_cache_lock:
+        return dict(_model_route_cache)
+
+
 @app.route("/v1/models", methods=["GET"])
 def list_models() -> Response:
     """
     Aggregate model listings from all configured providers.
 
-    Each provider is queried concurrently with a thread pool.  Providers that
-    fail (network error, auth failure, etc.) are logged as warnings and
-    omitted from the response rather than causing an overall failure.
+    Each provider is queried concurrently.  Providers that fail are logged as
+    warnings and omitted rather than causing an overall failure.  The route
+    cache is rebuilt atomically on each call so stale entries do not linger.
+
+    Two synthetic virtual models are prepended when their backing candidates
+    exist: 'free' (cycles through models whose ID contains 'free') and
+    'local' (cycles through models on localhost providers).
     """
     config = load_config()
     providers: dict = config.get("providers", {})
@@ -228,26 +344,64 @@ def list_models() -> Response:
             "_warning": "No providers configured. Run 'llmproxy --setup'.",
         })
 
-    all_models: list[dict] = []
+    all_models = _rebuild_route_cache(providers, timeout)
 
-    with ThreadPoolExecutor(max_workers=min(len(providers), 10)) as executor:
-        futures = {
-            executor.submit(_fetch_provider_models, name, cfg, timeout): name
-            for name, cfg in providers.items()
-        }
-        for future in as_completed(futures):
-            try:
-                all_models.extend(future.result())
-            except Exception as e:
-                provider_name = futures[future]
-                logger.warning(
-                    "[server:list_models] Unexpected error from provider %s: %s",
-                    provider_name, e,
-                )
+    # Prepend synthetic virtual models when their backing candidates exist.
+    with _model_route_cache_lock:
+        snapshot = dict(_model_route_cache)
+    synthetic: list[dict] = []
+    if any("free" in uid.lower() for _, uid in snapshot.values()):
+        synthetic.append({
+            "id": "free",
+            "object": "model",
+            "owned_by": "llmproxy",
+            "name": "free",
+            "_note": "Virtual model: cycles through all models whose ID contains 'free' until one succeeds.",
+        })
+    if any(
+        _is_local_url(cfg.get("base_url", ""))
+        for pn, _ in snapshot.values()
+        if (cfg := get_provider(config, pn))
+    ):
+        synthetic.append({
+            "id": "local",
+            "object": "model",
+            "owned_by": "llmproxy",
+            "name": "local",
+            "_note": "Virtual model: cycles through all models served on localhost until one succeeds.",
+        })
 
     return jsonify({
         "object": "list",
-        "data": all_models,
+        "data": synthetic + all_models,
+    })
+
+
+@app.route("/v1/models/free", methods=["GET"])
+def get_free_model() -> Response:
+    """Return metadata for the synthetic 'free' cycling model."""
+    candidates = _get_free_model_candidates()
+    return jsonify({
+        "id": "free",
+        "object": "model",
+        "owned_by": "llmproxy",
+        "name": "free",
+        "_note": "Virtual model: cycles through all models whose ID contains 'free' until one succeeds.",
+        "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
+    })
+
+
+@app.route("/v1/models/local", methods=["GET"])
+def get_local_model() -> Response:
+    """Return metadata for the synthetic 'local' cycling model."""
+    candidates = _get_local_model_candidates()
+    return jsonify({
+        "id": "local",
+        "object": "model",
+        "owned_by": "llmproxy",
+        "name": "local",
+        "_note": "Virtual model: cycles through all models served on localhost until one succeeds.",
+        "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
     })
 
 
@@ -256,19 +410,21 @@ def get_model(model_id: str) -> Response:
     """
     Return metadata for a single proxy model ID.
 
-    The model_id must follow the '<provider>/<upstream_model>' convention.
-
-    Rather than proxying to the upstream (many providers do not implement the
-    single-model GET endpoint), we validate the provider and model-filter
-    locally, then fetch the full model list from that provider and return the
-    matching entry.  If the provider's /models endpoint does not return that
-    model, we fall back to a minimal constructed object so that clients that
-    call this endpoint for validation do not get a spurious 404.
+    Accepts both the display format returned by /v1/models ("model (provider)")
+    and the slash format ("provider/upstream_model").  The route cache is
+    checked first so display-format IDs resolve correctly without parsing.
     """
-    try:
-        provider_name, upstream_model = parse_model_string(model_id)
-    except ValueError as e:
-        return _error(str(e), status=400)
+    # Prefer the route cache so clients can use the display ID they got from
+    # /v1/models directly.  Fall back to parse_model_string for slash format.
+    with _model_route_cache_lock:
+        cached = _model_route_cache.get(model_id)
+    if cached:
+        provider_name, upstream_model = cached
+    else:
+        try:
+            provider_name, upstream_model = parse_model_string(model_id)
+        except ValueError as e:
+            return _error(str(e), status=400)
 
     config = load_config()
     provider_cfg = get_provider(config, provider_name)
@@ -283,10 +439,15 @@ def get_model(model_id: str) -> Response:
 
     timeout = config.get("server", {}).get("request_timeout", 120)
 
-    # Fetch the full model list from this provider and find the matching entry.
+    # Fetch this provider's models and merge new route entries into the cache.
     provider_models = _fetch_provider_models(provider_name, provider_cfg, timeout)
+    new_routes = {m["id"]: m.pop("_route") for m in provider_models if "_route" in m}
+    with _model_route_cache_lock:
+        _model_route_cache.update(new_routes)
+
+    # Match by proxy display ID or by upstream model ID (clients may use either).
     for m in provider_models:
-        if m.get("id") == model_id:
+        if m.get("id") == model_id or m.get("_upstream_id") == upstream_model:
             return jsonify(m)
 
     # The model passed the filter check but was not returned by the upstream
@@ -418,6 +579,151 @@ def _proxy_streaming(
 
 
 # ---------------------------------------------------------------------------
+# Virtual models — shared cycling logic + per-model candidate selectors
+# ---------------------------------------------------------------------------
+
+def _proxy_cycling_non_streaming(
+    endpoint: str,
+    label: str,
+    candidates: list[tuple[str, dict, str]],
+    payload: dict,
+    timeout: int,
+) -> Response:
+    """Try each candidate in order, returning the first success."""
+    last: Optional[Response] = None
+    for provider_name, provider_cfg, upstream_model in candidates:
+        upstream_payload = {**payload, "model": upstream_model}
+        logger.info("  [%s] trying %s/%s", label, provider_name, upstream_model)
+        resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, timeout)
+        if resp.status_code < 400:
+            return resp
+        logger.warning(
+            "  [%s] %s/%s returned %d, trying next", label, provider_name, upstream_model, resp.status_code
+        )
+        last = resp
+    return last or _error(f"No '{label}' models available.", status=503)
+
+
+def _proxy_cycling_streaming(
+    endpoint: str,
+    label: str,
+    candidates: list[tuple[str, dict, str]],
+    payload: dict,
+    timeout: int,
+) -> Response:
+    """
+    Try each candidate in order.  Checks the HTTP status code before committing
+    to stream the response so failed upstreams are skipped transparently.
+    When all candidates fail the last upstream error body is returned so
+    clients receive the same diagnostic information as the non-streaming path.
+    """
+    last_error: Optional[tuple[bytes, int, str]] = None
+
+    for provider_name, provider_cfg, upstream_model in candidates:
+        upstream_payload = {**payload, "model": upstream_model}
+        base_url = provider_cfg.get("base_url", "").rstrip("/")
+        url = f"{base_url}/{endpoint}"
+        headers = _upstream_headers(provider_cfg)
+        logger.info("  [%s] trying %s/%s  [streaming]", label, provider_name, upstream_model)
+        try:
+            resp = requests.post(url, headers=headers, json=upstream_payload, stream=True, timeout=timeout)
+            if resp.status_code >= 400:
+                last_error = (
+                    resp.content,
+                    resp.status_code,
+                    resp.headers.get("Content-Type", "application/json"),
+                )
+                resp.close()
+                logger.warning(
+                    "  [%s] %s/%s -> %d, trying next", label, provider_name, upstream_model, resp.status_code
+                )
+                continue
+
+            captured_resp = resp
+            captured_provider = provider_name
+
+            @stream_with_context
+            def generate(r=captured_resp, pn=captured_provider):
+                try:
+                    with r:
+                        first = True
+                        for chunk in r.iter_content(chunk_size=None):
+                            if chunk:
+                                if first:
+                                    logger.info("  upstream %d  first chunk: %s", r.status_code, chunk[:200])
+                                    first = False
+                                yield chunk
+                except requests.exceptions.Timeout:
+                    logger.error("[%s] provider=%s timed out mid-stream", label, pn)
+                    yield b'data: {"error":{"message":"Upstream stream timed out."}}\n\n'
+                except Exception as e:
+                    logger.error("[%s] provider=%s mid-stream error: %s", label, pn, e)
+                    msg = str(e).replace('"', "'")
+                    yield f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
+
+            return Response(generate(), content_type="text/event-stream")
+
+        except requests.exceptions.Timeout:
+            logger.warning("  [%s] %s/%s timed out, trying next", label, provider_name, upstream_model)
+            continue
+        except Exception as e:
+            logger.warning("  [%s] %s/%s error: %s, trying next", label, provider_name, upstream_model, e)
+            continue
+
+    if last_error:
+        body, status, ct = last_error
+        return Response(body, status=status, content_type=ct)
+    return _error(f"All '{label}' model candidates failed or are unavailable.", status=503)
+
+
+def _cycling_candidates(
+    candidates: list[tuple[str, dict, str]],
+) -> list[tuple[str, dict, str]]:
+    """Rotate candidates to a random starting position for load spreading."""
+    if not candidates:
+        return candidates
+    start = random.randrange(len(candidates))
+    return candidates[start:] + candidates[:start]
+
+
+# — "free" candidate selector —
+
+def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
+    """(provider_name, provider_cfg, upstream_model) for every model whose upstream ID contains 'free'."""
+    config = load_config()
+    candidates = []
+    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+        if "free" in upstream_id.lower():
+            provider_cfg = get_provider(config, provider_name)
+            if provider_cfg:
+                candidates.append((provider_name, provider_cfg, upstream_id))
+    return candidates
+
+
+# — "local" candidate selector —
+
+def _is_local_url(base_url: str) -> bool:
+    """Return True when *base_url* points at a loopback address."""
+    try:
+        hostname = urllib.parse.urlparse(base_url).hostname or ""
+    except Exception:
+        return False
+    hostname = hostname.strip("[]").lower()
+    return hostname in ("localhost", "127.0.0.1", "::1") or hostname.startswith("127.")
+
+
+def _get_local_model_candidates() -> list[tuple[str, dict, str]]:
+    """(provider_name, provider_cfg, upstream_model) for every model whose provider base_url is localhost."""
+    config = load_config()
+    candidates = []
+    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+        provider_cfg = get_provider(config, provider_name)
+        if provider_cfg and _is_local_url(provider_cfg.get("base_url", "")):
+            candidates.append((provider_name, provider_cfg, upstream_id))
+    return candidates
+
+
+# ---------------------------------------------------------------------------
 # Shared routing logic for all proxied endpoints
 # ---------------------------------------------------------------------------
 
@@ -433,8 +739,10 @@ def _resolve_provider(model_full: str) -> tuple[Optional[str], Optional[dict], O
 
     # Cache-first: the display ID format "model (provider)" is not parseable by
     # parse_model_string, so the cache (populated by /v1/models) is authoritative.
-    if model_full in _model_route_cache:
-        provider_name, upstream_model = _model_route_cache[model_full]
+    with _model_route_cache_lock:
+        cached_route = _model_route_cache.get(model_full)
+    if cached_route:
+        provider_name, upstream_model = cached_route
     elif model_full.endswith(")") and " (" in model_full:
         # Cold-cache fallback for "model (provider)" format.
         model_part, _, provider_name = model_full[:-1].rpartition(" (")
@@ -468,9 +776,14 @@ def _proxy_endpoint(endpoint: str) -> Response:
     """
     Generic handler that routes a POST request to the correct upstream provider.
 
-    Reads the 'model' field from the JSON body, resolves the provider, strips
-    the provider prefix from the model ID, and delegates to either the
-    streaming or non-streaming proxy helper.
+    Reads the 'model' field from the JSON body, resolves the provider, and
+    delegates to the streaming or non-streaming proxy helper.  For non-streaming
+    requests, successful responses are stored in a short-lived cache so that
+    harnesses which replay the same request in quick succession avoid redundant
+    upstream round-trips.
+
+    The special model names "free" and "local" cycle through all matching
+    cached models until one returns a successful response.
     """
     payload = request.get_json(force=True, silent=True)
     if payload is None:
@@ -480,26 +793,64 @@ def _proxy_endpoint(endpoint: str) -> Response:
     if not model_full:
         return _error("Request body must include a 'model' field.", status=400)
 
-    provider_name, provider_cfg, upstream_model, err = _resolve_provider(model_full)
-    if err is not None:
-        return err
-
-    logger.info("  provider=%s  model=%s", provider_name, upstream_model)
-
     config = load_config()
     server_cfg = config.get("server", {})
-
-    # Substitute the upstream (non-prefixed) model ID into the payload.
-    upstream_payload = {**payload, "model": upstream_model}
-
     is_streaming: bool = payload.get("stream", False)
 
-    if is_streaming:
-        timeout = server_cfg.get("stream_timeout", 300)
-        return _proxy_streaming(endpoint, provider_name, provider_cfg, upstream_payload, timeout)
-    else:
+    # Check the short-lived response cache for non-streaming requests.
+    # Virtual cycling models (free/local) bypass the cache so their load-spreading
+    # and failover logic runs on every request rather than pinning to one upstream.
+    cache_key: Optional[str] = None
+    if not is_streaming and model_full not in ("free", "local"):
+        cache_ttl: int = server_cfg.get("response_cache_ttl", _DEFAULT_RESPONSE_CACHE_TTL)
+        if cache_ttl > 0:
+            cache_key = _response_cache_key(endpoint, payload, request.headers.get("Authorization", ""))
+            cached = _response_cache_get(cache_key, cache_ttl)
+            if cached:
+                content, status, ct = cached
+                logger.info("  [cache] HIT  key=%s…", cache_key[:12])
+                return Response(content, status=status, content_type=ct)
+
+    if model_full in ("free", "local"):
+        candidates = (
+            _get_free_model_candidates() if model_full == "free"
+            else _get_local_model_candidates()
+        )
+        if not candidates:
+            hint = (
+                "Check that at least one provider exposes a free-tier model."
+                if model_full == "free"
+                else "Check that at least one provider has a localhost base_url."
+            )
+            return _error(
+                f"No '{model_full}' models are currently available. {hint}",
+                status=503,
+            )
+        candidates = _cycling_candidates(candidates)
+        logger.info("  [%s] cycling through %d candidate(s)", model_full, len(candidates))
+        if is_streaming:
+            timeout = server_cfg.get("stream_timeout", 300)
+            return _proxy_cycling_streaming(endpoint, model_full, candidates, payload, timeout)
         timeout = server_cfg.get("request_timeout", 120)
-        return _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, timeout)
+        resp = _proxy_cycling_non_streaming(endpoint, model_full, candidates, payload, timeout)
+    else:
+        provider_name, provider_cfg, upstream_model, err = _resolve_provider(model_full)
+        if err is not None:
+            return err
+
+        logger.info("  provider=%s  model=%s", provider_name, upstream_model)
+        upstream_payload = {**payload, "model": upstream_model}
+
+        if is_streaming:
+            timeout = server_cfg.get("stream_timeout", 300)
+            return _proxy_streaming(endpoint, provider_name, provider_cfg, upstream_payload, timeout)
+        timeout = server_cfg.get("request_timeout", 120)
+        resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, timeout)
+
+    # Store successful non-streaming responses in the short-lived cache.
+    if cache_key is not None and 200 <= resp.status_code < 300:
+        _response_cache_put(cache_key, resp.get_data(), resp.status_code, resp.content_type, cache_ttl)
+    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -648,8 +999,6 @@ def run_server(config_path: Optional[str] = None) -> None:
     # Pre-warm the model route cache so routing works even before the first
     # /v1/models call (eliminates the cold-cache edge case for all clients).
     timeout = server_cfg.get("request_timeout", 120)
-    for pname, pcfg in providers_cfg.items():
-        _fetch_provider_models(pname, pcfg, timeout)
-    logger.info("Model cache warmed: %d entries", len(_model_route_cache))
+    _rebuild_route_cache(providers_cfg, timeout)
 
     app.run(host=host, port=port, threaded=True, debug=False)
