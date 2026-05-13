@@ -28,8 +28,6 @@ from .config import (
 #   display           – human-readable label shown in the menu
 #   key               – default provider name / model-ID prefix
 #   base_url          – upstream base URL; may contain "{account_id}" as a placeholder
-#   model_filter      – list of upstream model IDs to allow, or None for all
-#   api_key_hint      – one-line hint printed before the API-key prompt
 #   account_id_required – (optional) True when the URL contains "{account_id}"
 #   account_id_label  – (optional) prompt label for the account ID (default "Account ID")
 #   account_id_hint   – (optional) one-line hint for finding the account ID
@@ -38,100 +36,46 @@ PROVIDER_TEMPLATES: list[dict] = [
         "display": "Nous Research (Hermes)",
         "key": "nous",
         "base_url": "https://inference-api.nousresearch.com/v1",
-        "model_filter": ["Hermes-3-Llama-3.1-8B"],
-        "api_key_hint": "Get free key at nousresearch.com",
     },
     {
         "display": "Nvidia NIM",
         "key": "nvidia",
         "base_url": "https://integrate.api.nvidia.com/v1",
-        "model_filter": None,
-        "api_key_hint": "Get free key at build.nvidia.com",
     },
     {
         "display": "Google Gemini (via OpenAI-compat endpoint)",
         "key": "google",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "model_filter": [
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-            "gemini-3-flash-preview",
-            "gemini-3.1-flash-lite-preview",
-            "gemini-3.1-pro-preview",
-        ],
-        "api_key_hint": "Free key from Google AI Studio (aistudio.google.com) — free Google account, no credit card",
     },
     {
         "display": "Cerebras",
         "key": "cerebras",
         "base_url": "https://api.cerebras.ai/v1",
-        "model_filter": ["qwen3-235b"],
-        "api_key_hint": "Free account at cerebras.ai, no credit card",
     },
     {
         "display": "GitHub Models",
         "key": "github",
         "base_url": "https://models.inference.ai.azure.com",
-        "model_filter": ["gpt-4o", "openai/gpt-4.1"],
-        "api_key_hint": "GitHub Personal Access Token (any free GitHub account, no special scopes needed)",
     },
     {
         "display": "SambaNova Cloud",
         "key": "sambanova",
         "base_url": "https://api.sambanova.ai/v1",
-        "model_filter": [
-            "Meta-Llama-3.3-70B-Instruct",
-            "DeepSeek-V3.1",
-            "DeepSeek-V3.2",
-            "gpt-oss-120b",
-            "Llama-4-Maverick-17B-128E-Instruct",
-            "gemma-3-12b-it",
-        ],
-        "api_key_hint": "Free account at cloud.sambanova.ai, no credit card",
     },
     {
         "display": "Mistral AI",
         "key": "mistral",
         "base_url": "https://api.mistral.ai/v1",
-        "model_filter": [
-            "mistral-large-latest",
-            "mistral-medium-latest",
-            "magistral-medium-latest",
-            "codestral-latest",
-            "devstral-latest",
-        ],
-        "api_key_hint": 'Free "Experiment" tier account at console.mistral.ai, no credit card',
     },
     {
         "display": "Groq",
         "key": "groq",
         "base_url": "https://api.groq.com/openai/v1",
-        "model_filter": [
-            "llama-3.3-70b-versatile",
-            "meta-llama/llama-4-scout-17b-16e-instruct",
-            "openai/gpt-oss-120b",
-            "openai/gpt-oss-20b",
-            "qwen/qwen3-32b",
-            "llama-3.1-8b-instant",
-        ],
-        "api_key_hint": "Free account at console.groq.com, no credit card",
     },
     {
         "display": "Cloudflare Workers AI",
         "key": "cloudflare",
         "base_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
-        "model_filter": [
-            "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-            "@cf/meta/llama-4-scout-17b-16e-instruct",
-            "@cf/openai/gpt-oss-120b",
-            "@cf/zai-org/glm-4.7-flash",
-            "@cf/moonshotai/kimi-k2.5",
-            "@cf/moonshotai/kimi-k2.6",
-            "@cf/qwen/qwen3-30b-a3b-fp8",
-            "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
-            "@cf/ibm-granite/granite-4.0-h-micro",
-        ],
-        "api_key_hint": 'Free Cloudflare account — create API Token with "Workers AI Read" permission',
         "account_id_required": True,
         "account_id_label": "Cloudflare Account ID",
         "account_id_hint": "Find your account ID at dash.cloudflare.com (top-right corner)",
@@ -140,15 +84,16 @@ PROVIDER_TEMPLATES: list[dict] = [
         "display": "Zhipu AI (Z.ai / BigModel)",
         "key": "zhipu",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "model_filter": ["glm-4.5-flash", "glm-4.7-flash"],
-        "api_key_hint": "Free account at open.bigmodel.cn, no credit card",
     },
     {
         "display": "Cohere",
         "key": "cohere",
         "base_url": "https://api.cohere.com/compatibility/v1",
-        "model_filter": None,
-        "api_key_hint": "Get key at dashboard.cohere.com",
+    },
+    {
+        "display": "OpenRouter",
+        "key": "openrouter",
+        "base_url": "https://openrouter.ai/api/v1",
     },
 ]
 
@@ -415,11 +360,6 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
     print(_h(f"  Template: {tmpl['display']}"))
     print()
     print(_dim(f"  Base URL : {tmpl['base_url']}"))
-    mf = tmpl["model_filter"]
-    if mf:
-        print(_dim(f"  Models   : {', '.join(mf)}"))
-    else:
-        print(_dim("  Models   : (all models)"))
     print()
 
     # Confirm provider name first so we can look up any existing key below.
@@ -448,9 +388,6 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
 
     # API key — preserve the existing key if the user submits an empty value.
     existing_key = (existing or {}).get("api_key", "")
-    hint = tmpl.get("api_key_hint", "")
-    if hint:
-        print(_dim(f"  API key: {hint}"))
     if existing_key:
         masked = _mask_api_key(existing_key)
         print(f"  API Key [{_dim(masked)}] (press Enter to keep): ", end="", flush=True)
@@ -465,7 +402,7 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
     cfg = {
         "base_url": base_url.rstrip("/"),
         "api_key": api_key,
-        "model_filter": tmpl["model_filter"],
+        "model_filter": None,
     }
     return provider_key, cfg
 
