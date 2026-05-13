@@ -21,6 +21,129 @@ from .config import (
 )
 
 # ---------------------------------------------------------------------------
+# Provider templates
+# ---------------------------------------------------------------------------
+
+# Each entry: (display_name, provider_key, base_url, model_filter, api_key_hint, notes)
+# base_url may contain the placeholder "{account_id}" — the wizard will substitute it.
+PROVIDER_TEMPLATES: list[dict] = [
+    {
+        "display": "Nous Research (Hermes)",
+        "key": "nous",
+        "base_url": "https://inference-api.nousresearch.com/v1",
+        "model_filter": ["Hermes-3-Llama-3.1-8B"],
+        "api_key_hint": "Get free key at nousresearch.com",
+    },
+    {
+        "display": "Nvidia NIM",
+        "key": "nvidia",
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "model_filter": None,
+        "api_key_hint": "Get free key at build.nvidia.com",
+    },
+    {
+        "display": "Google Gemini (via OpenAI-compat endpoint)",
+        "key": "google",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "model_filter": [
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-3-flash-preview",
+            "gemini-3.1-flash-lite-preview",
+            "gemini-3.1-pro-preview",
+        ],
+        "api_key_hint": "Free key from Google AI Studio (aistudio.google.com) — free Google account, no credit card",
+    },
+    {
+        "display": "Cerebras",
+        "key": "cerebras",
+        "base_url": "https://api.cerebras.ai/v1",
+        "model_filter": ["qwen3-235b"],
+        "api_key_hint": "Free account at cerebras.ai, no credit card",
+    },
+    {
+        "display": "GitHub Models",
+        "key": "github",
+        "base_url": "https://models.inference.ai.azure.com",
+        "model_filter": ["gpt-4o", "openai/gpt-4.1"],
+        "api_key_hint": "GitHub Personal Access Token (any free GitHub account, no special scopes needed)",
+    },
+    {
+        "display": "SambaNova Cloud",
+        "key": "sambanova",
+        "base_url": "https://api.sambanova.ai/v1",
+        "model_filter": [
+            "Meta-Llama-3.3-70B-Instruct",
+            "DeepSeek-V3.1",
+            "DeepSeek-V3.2",
+            "gpt-oss-120b",
+            "Llama-4-Maverick-17B-128E-Instruct",
+            "gemma-3-12b-it",
+        ],
+        "api_key_hint": "Free account at cloud.sambanova.ai, no credit card",
+    },
+    {
+        "display": "Mistral AI",
+        "key": "mistral",
+        "base_url": "https://api.mistral.ai/v1",
+        "model_filter": [
+            "mistral-large-latest",
+            "mistral-medium-latest",
+            "magistral-medium-latest",
+            "codestral-latest",
+            "devstral-latest",
+        ],
+        "api_key_hint": 'Free "Experiment" tier account at console.mistral.ai, no credit card',
+    },
+    {
+        "display": "Groq",
+        "key": "groq",
+        "base_url": "https://api.groq.com/openai/v1",
+        "model_filter": [
+            "llama-3.3-70b-versatile",
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "qwen/qwen3-32b",
+            "llama-3.1-8b-instant",
+        ],
+        "api_key_hint": "Free account at console.groq.com, no credit card",
+    },
+    {
+        "display": "Cloudflare Workers AI",
+        "key": "cloudflare",
+        "base_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+        "model_filter": [
+            "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            "@cf/meta/llama-4-scout-17b-16e-instruct",
+            "@cf/openai/gpt-oss-120b",
+            "@cf/zai-org/glm-4.7-flash",
+            "@cf/moonshotai/kimi-k2.5",
+            "@cf/moonshotai/kimi-k2.6",
+            "@cf/qwen/qwen3-30b-a3b-fp8",
+            "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+            "@cf/ibm-granite/granite-4.0-h-micro",
+        ],
+        "api_key_hint": 'Free Cloudflare account — create API Token with "Workers AI Read" permission',
+        "account_id_required": True,
+    },
+    {
+        "display": "Zhipu AI (Z.ai / BigModel)",
+        "key": "zhipu",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "model_filter": ["glm-4.5-flash", "glm-4.7-flash"],
+        "api_key_hint": "Free account at open.bigmodel.cn, no credit card",
+    },
+    {
+        "display": "Cohere",
+        "key": "cohere",
+        "base_url": "https://api.cohere.com/compatibility/v1",
+        "model_filter": None,
+        "api_key_hint": "Get key at dashboard.cohere.com",
+    },
+]
+
+# ---------------------------------------------------------------------------
 # Terminal helpers
 # ---------------------------------------------------------------------------
 
@@ -256,6 +379,75 @@ def _edit_server(existing: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Template-based provider setup
+# ---------------------------------------------------------------------------
+
+def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
+    """
+    Interactively guide the user through adding a provider from a template.
+
+    Returns (provider_key, provider_cfg) on success, or None if the user
+    cancels.
+    """
+    print()
+    print(_h("  Quick setup — choose a provider template:"))
+    print()
+    names = [t["display"] for t in PROVIDER_TEMPLATES]
+    idx = _pick(names, label="Template")
+    if idx is None:
+        return None
+
+    tmpl = PROVIDER_TEMPLATES[idx]
+    print()
+    print(_h(f"  Template: {tmpl['display']}"))
+    print()
+    print(_dim(f"  Base URL : {tmpl['base_url']}"))
+    mf = tmpl["model_filter"]
+    if mf:
+        print(_dim(f"  Models   : {', '.join(mf)}"))
+    else:
+        print(_dim("  Models   : (all models)"))
+    print()
+
+    base_url = tmpl["base_url"]
+
+    # Cloudflare (and any future template) requires account ID substitution
+    if tmpl.get("account_id_required"):
+        print(_dim("  The base URL contains a placeholder for your account ID."))
+        print(_dim("  Find your account ID at dash.cloudflare.com (top-right corner)."))
+        account_id = _prompt("Cloudflare Account ID")
+        base_url = base_url.replace("{account_id}", account_id)
+        print(_dim(f"  Resolved URL: {base_url}"))
+        print()
+
+    # API key
+    hint = tmpl.get("api_key_hint", "")
+    if hint:
+        print(_dim(f"  API key: {hint}"))
+    print(f"  API Key (optional): ", end="", flush=True)
+    try:
+        api_key = getpass.getpass("").strip()
+    except (EOFError, KeyboardInterrupt):
+        api_key = ""
+
+    # Allow the user to override the default provider key
+    print()
+    provider_key = _prompt("Provider name (used as prefix in model IDs)", default=tmpl["key"])
+
+    if provider_key in providers:
+        print(_warn(f"\n  Provider '{provider_key}' already exists. It will be overwritten."))
+        if not _confirm("Overwrite?", default=False):
+            return None
+
+    cfg = {
+        "base_url": base_url.rstrip("/"),
+        "api_key": api_key,
+        "model_filter": tmpl["model_filter"],
+    }
+    return provider_key, cfg
+
+
+# ---------------------------------------------------------------------------
 # Main wizard entry point
 # ---------------------------------------------------------------------------
 
@@ -294,7 +486,8 @@ def run_setup(config_path: Optional[str] = None) -> None:
         print(_h("  Main Menu"))
         print()
         options = [
-            "Add / edit a provider",
+            "Quick setup from template",
+            "Add / edit a provider (manual)",
             "Remove a provider",
             "Configure server settings",
             "View current configuration (JSON)",
@@ -306,7 +499,17 @@ def run_setup(config_path: Optional[str] = None) -> None:
             continue
 
         if choice == 0:
-            # Add / edit provider
+            # Quick setup from template
+            result = _setup_from_template(providers)
+            if result is not None:
+                name, cfg = result
+                providers[name] = cfg
+                print()
+                print(_ok(f"  Provider '{name}' configured from template."))
+                modified = True
+
+        elif choice == 1:
+            # Add / edit provider (manual)
             print()
             provider_names = list(providers.keys())
             if provider_names:
@@ -325,7 +528,7 @@ def run_setup(config_path: Optional[str] = None) -> None:
             print(_ok(f"  Provider '{name}' configured."))
             modified = True
 
-        elif choice == 1:
+        elif choice == 2:
             # Remove provider
             provider_names = list(providers.keys())
             if not provider_names:
@@ -342,14 +545,14 @@ def run_setup(config_path: Optional[str] = None) -> None:
                 print(_ok(f"  Provider '{name}' removed."))
                 modified = True
 
-        elif choice == 2:
+        elif choice == 3:
             # Server settings
             config["server"] = _edit_server(server_cfg)
             server_cfg = config["server"]
             print(_ok("  Server settings updated."))
             modified = True
 
-        elif choice == 3:
+        elif choice == 4:
             # View config
             print()
             print(_h("  Current configuration:"))
@@ -357,7 +560,7 @@ def run_setup(config_path: Optional[str] = None) -> None:
             display = _redact_config(config)
             print(json.dumps(display, indent=2))
 
-        elif choice == 4:
+        elif choice == 5:
             # Save and exit
             if save_config(config, config_path):
                 print(_ok("  Configuration saved. Exiting setup."))
@@ -365,7 +568,7 @@ def run_setup(config_path: Optional[str] = None) -> None:
                 print(_err("  Failed to save configuration. Check permissions."))
             break
 
-        elif choice == 5:
+        elif choice == 6:
             # Exit without saving
             if modified and not _confirm("You have unsaved changes. Exit anyway?", default=False):
                 continue
