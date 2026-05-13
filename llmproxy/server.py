@@ -36,6 +36,7 @@ import requests
 from flask import Flask, Response, g, jsonify, make_response, request, stream_with_context
 
 from .config import (
+    RESERVED_PROVIDER_NAMES,
     get_provider,
     load_config,
     model_is_allowed,
@@ -50,10 +51,8 @@ app = Flask(__name__)
 logger = logging.getLogger("llmproxy.server")
 
 _REASONING_LEVELS: tuple[str, ...] = ("exploratory", "standard", "deep")
-# "llmproxy" is a reserved provider namespace — real providers must not use this name.
-_RESERVED_PROVIDER_NAME = "llmproxy"
 # Per-candidate timeout for virtual-model cycling so a slow upstream doesn't block all failover.
-_VIRTUAL_CANDIDATE_TIMEOUT = 60
+_VIRTUAL_CANDIDATE_TIMEOUT: int = 60
 _VIRTUAL_MODELS: frozenset[str] = frozenset({
     "llmproxy/free", "llmproxy/local",
     *(f"llmproxy/{lvl}" for lvl in _REASONING_LEVELS),
@@ -288,10 +287,17 @@ def _rebuild_route_cache(providers_cfg: dict, timeout: int) -> list[dict]:
     all_models: list[dict] = []
 
     with ThreadPoolExecutor(max_workers=min(len(providers_cfg), 10)) as executor:
-        futures = {
-            executor.submit(_fetch_provider_models, name, cfg, timeout): name
-            for name, cfg in providers_cfg.items()
-        }
+        futures = {}
+        for name, cfg in providers_cfg.items():
+            if name in RESERVED_PROVIDER_NAMES:
+                logger.error(
+                    "[server:_rebuild_route_cache] Provider name %r is reserved; "
+                    "skipping it to avoid virtual-model namespace collision. "
+                    "Rename it in your config.",
+                    name,
+                )
+                continue
+            futures[executor.submit(_fetch_provider_models, name, cfg, timeout)] = name
         for future in as_completed(futures):
             try:
                 all_models.extend(future.result())

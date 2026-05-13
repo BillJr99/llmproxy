@@ -17,6 +17,7 @@ import requests as _requests
 
 from .config import (
     DEFAULT_SERVER_CONFIG,
+    RESERVED_PROVIDER_NAMES,
     get_config_path,
     load_config,
     save_config,
@@ -366,8 +367,8 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
 
     # Confirm provider name first so we can look up any existing key below.
     provider_key = _prompt("Provider name (used as prefix in model IDs)", default=tmpl["key"])
-    if provider_key == "llmproxy":
-        print(_warn("  'llmproxy' is a reserved namespace used for virtual models. Choose a different name."))
+    if provider_key in RESERVED_PROVIDER_NAMES:
+        print(_warn(f"  {provider_key!r} is a reserved provider namespace. Choose a different name."))
         return None
 
     existing = providers.get(provider_key)
@@ -776,8 +777,8 @@ def run_setup(config_path: Optional[str] = None) -> None:
             name = _prompt("Provider name (e.g. openrouter, openai, ollama)")
             if not name:
                 continue
-            if name == "llmproxy":
-                print(_warn("  'llmproxy' is a reserved namespace used for virtual models. Choose a different name."))
+            if name in RESERVED_PROVIDER_NAMES:
+                print(_warn(f"  {name!r} is a reserved provider namespace. Choose a different name."))
                 continue
             existing = providers.get(name)
             if existing:

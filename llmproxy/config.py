@@ -66,6 +66,11 @@ def get_config_path(override: Optional[str] = None) -> Path:
 # Defaults
 # ---------------------------------------------------------------------------
 
+# Provider names in this set are reserved by the proxy itself and must not be
+# used in config['providers'].  The setup wizard enforces this interactively;
+# the server enforces it at model-list build time.
+RESERVED_PROVIDER_NAMES: frozenset[str] = frozenset({"llmproxy"})
+
 DEFAULT_SERVER_CONFIG = {
     "host": "0.0.0.0",
     "port": 8080,
