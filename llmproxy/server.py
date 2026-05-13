@@ -741,16 +741,18 @@ def _normalized_known_free(config: dict) -> set[str]:
         )
         return set()
     valid: set[str] = set()
-    bad: list = []
-    for entry in raw:
+    bad_summary: list[tuple[int, str]] = []
+    for index, entry in enumerate(raw):
         if isinstance(entry, str):
             valid.add(entry.lower())
         else:
-            bad.append(entry)
-    if bad:
+            bad_summary.append((index, type(entry).__name__))
+    if bad_summary:
         logger.warning(
-            "config['known_free'] contains non-string entries (ignored): %r",
-            bad,
+            "config['known_free'] contains %d non-string entr%s (ignored) at index/type: %s",
+            len(bad_summary),
+            "y" if len(bad_summary) == 1 else "ies",
+            ", ".join(f"{i}:{t}" for i, t in bad_summary),
         )
     return valid
 
