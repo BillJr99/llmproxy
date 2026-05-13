@@ -144,6 +144,14 @@ def _json_or_text(resp: requests.Response) -> str:
         return resp.text[:400]
 
 
+def _json_or_text_dict(data: dict) -> str:
+    """Compact single-line dump of a response dict, truncated for readability."""
+    try:
+        return json.dumps(data)[:400]
+    except Exception:
+        return repr(data)[:400]
+
+
 # ---------------------------------------------------------------------------
 # Test suites
 # ---------------------------------------------------------------------------
@@ -213,7 +221,7 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
 
         # Verify naming convention: every non-synthetic ID should use either the
         # slash format ("provider/model") or the display format ("model (provider)").
-        # Virtual cycling models intentionally have no slash (or a slash only within their name).
+        # Virtual cycling models all live under the reserved "llmproxy/" namespace.
         SYNTHETIC_IDS = {
             "llmproxy/free", "llmproxy/local",
             "llmproxy/exploratory", "llmproxy/standard", "llmproxy/deep",
@@ -310,8 +318,7 @@ def test_chat(base_url: str, model: str, **_) -> None:
             if content is None:
                 results.skip(
                     "Response content check",
-                    "content is None (model may require streaming, use thinking tokens, "
-                    "or return content in a non-standard field)",
+                    f"content is None  raw={_json_or_text_dict(data)}",
                 )
             elif "PONG" in content.upper():
                 results.ok("Response contains expected token 'PONG'")
@@ -781,7 +788,7 @@ def test_free_model(base_url: str, **_) -> None:
                 else:
                     results.skip(
                         f"llmproxy/free → {label}",
-                        f"via {used_model}  no content in response (model may use non-standard fields)",
+                        f"via {used_model}  no content in response  raw={_json_or_text_dict(data)}",
                     )
             else:
                 results.fail(f"llmproxy/free → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
@@ -914,7 +921,7 @@ def test_local_model(base_url: str, **_) -> None:
                 else:
                     results.skip(
                         f"llmproxy/local → {label}",
-                        f"via {used_model}  no content in response (model may use non-standard fields)",
+                        f"via {used_model}  no content in response  raw={_json_or_text_dict(data)}",
                     )
             else:
                 results.fail(f"llmproxy/local → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
@@ -1057,7 +1064,7 @@ def test_reasoning_virtual_model(base_url: str, level: str, **_) -> None:
                 else:
                     results.skip(
                         f"llmproxy/{level} → {label}",
-                        f"via {used_model}  no content (model may use non-standard fields)",
+                        f"via {used_model}  no content in response  raw={_json_or_text_dict(data)}",
                     )
             else:
                 results.fail(f"llmproxy/{level} → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")

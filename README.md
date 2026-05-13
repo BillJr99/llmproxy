@@ -122,7 +122,7 @@ with a given level, llmproxy exposes corresponding virtual endpoints:
 | `llmproxy/standard`         | All models tagged `standard`                                  |
 | `llmproxy/deep`             | All models tagged `deep`                                      |
 | `llmproxy/exploratory/free` | Models tagged `exploratory` **and** qualifying as free-tier   |
-| `llmproxy/exploratory/local`| Models tagged `exploratory` **and** served on localhost       |
+| `llmproxy/exploratory/local` | Models tagged `exploratory` **and** served on localhost       |
 | `llmproxy/standard/free`    | Models tagged `standard` **and** qualifying as free-tier      |
 | `llmproxy/standard/local`   | Models tagged `standard` **and** served on localhost          |
 | `llmproxy/deep/free`        | Models tagged `deep` **and** qualifying as free-tier          |
@@ -310,8 +310,8 @@ python llmproxy_test_client.py --use-sdk
 | `health`    | `GET /health` returns 200 and lists active providers                  | No               |
 | `errors`    | Missing model field, bad prefix, unknown provider, non-JSON body      | No               |
 | `models`    | `GET /v1/models` aggregates all providers; naming convention          | Yes              |
-| `free`      | Sends several prompts to `model="free"`; tests cycling + streaming    | Yes (free tier)  |
-| `local`     | Sends several prompts to `model="local"`; skipped if none configured  | Yes (localhost)  |
+| `free`      | Sends several prompts to `model="llmproxy/free"`; tests cycling + streaming    | Yes (free tier)  |
+| `local`     | Sends several prompts to `model="llmproxy/local"`; skipped if none configured  | Yes (localhost)  |
 | `chat`      | Non-streaming chat completion; checks response content                | Yes              |
 | `streaming` | Streaming SSE chat; prints tokens live as they arrive                 | Yes              |
 | `embeddings`| Embedding request; accepts graceful 400/404 if unsupported            | Yes              |
