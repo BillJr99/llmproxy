@@ -335,8 +335,9 @@ def list_models() -> Response:
     cache is rebuilt atomically on each call so stale entries do not linger.
 
     Two synthetic virtual models are prepended when their backing candidates
-    exist: 'free' (cycles through models whose ID contains 'free') and
-    'local' (cycles through models on localhost providers).
+    exist: 'free' (cycles through models whose ID contains 'free' or appears
+    in config['known_free']) and 'local' (cycles through models on localhost
+    providers).
 
     Results are cached for models_cache_ttl seconds (default 60) to avoid
     redundant upstream fetches when clients issue multiple requests in quick
@@ -371,13 +372,20 @@ def list_models() -> Response:
     with _model_route_cache_lock:
         snapshot = dict(_model_route_cache)
     synthetic: list[dict] = []
-    if any("free" in uid.lower() for _, uid in snapshot.values()):
+    known_free = {m.lower() for m in config.get("known_free", []) or []}
+    has_free = any(
+        "free" in uid.lower()
+        or uid.lower() in known_free
+        or f"{pn}/{uid}".lower() in known_free
+        for pn, uid in snapshot.values()
+    )
+    if has_free:
         synthetic.append({
             "id": "free",
             "object": "model",
             "owned_by": "llmproxy",
             "name": "free",
-            "_note": "Virtual model: cycles through all models whose ID contains 'free' until one succeeds.",
+            "_note": "Virtual model: cycles through all models whose ID contains 'free' (or appears in config['known_free']) until one succeeds.",
         })
     if any(
         _is_local_url(cfg.get("base_url", ""))
@@ -412,7 +420,7 @@ def get_free_model() -> Response:
         "object": "model",
         "owned_by": "llmproxy",
         "name": "free",
-        "_note": "Virtual model: cycles through all models whose ID contains 'free' until one succeeds.",
+        "_note": "Virtual model: cycles through all models whose ID contains 'free' (or appears in config['known_free']) until one succeeds.",
         "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
     })
 
@@ -715,11 +723,17 @@ def _cycling_candidates(
 # — "free" candidate selector —
 
 def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
-    """(provider_name, provider_cfg, upstream_model) for every model whose upstream ID contains 'free'."""
+    """(provider_name, provider_cfg, upstream_model) for every model whose upstream ID contains 'free' or appears in config['known_free']."""
     config = load_config()
+    known_free = {m.lower() for m in config.get("known_free", []) or []}
     candidates = []
     for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
-        if "free" in upstream_id.lower():
+        is_free = (
+            "free" in upstream_id.lower()
+            or upstream_id.lower() in known_free
+            or f"{provider_name}/{upstream_id}".lower() in known_free
+        )
+        if is_free:
             provider_cfg = get_provider(config, provider_name)
             if provider_cfg:
                 candidates.append((provider_name, provider_cfg, upstream_id))

@@ -701,6 +701,22 @@ def test_free_model(base_url: str, **_) -> None:
         results.skip("free model cycling", "no free-tier models found across providers")
         return
 
+    # 'known_free' detection: any candidate whose ID does not literally contain
+    # 'free' must have been pulled in via the optional config['known_free']
+    # list, since the default rule matches only on the substring 'free'.
+    known_free_candidates = [c for c in candidates if "free" not in c.lower()]
+    if known_free_candidates:
+        results.ok(
+            "config['known_free'] contributes candidate(s)",
+            f"{len(known_free_candidates)}: {', '.join(known_free_candidates[:4])}"
+            + (" ..." if len(known_free_candidates) > 4 else ""),
+        )
+    else:
+        results.skip(
+            "config['known_free'] contributes candidate(s)",
+            "field is optional; no candidates without 'free' in their ID detected",
+        )
+
     # Non-streaming prompts.
     print()
     print(f"  {BOLD}Non-streaming prompts:{RESET}")

@@ -54,7 +54,9 @@ llmproxy advertises a special synthetic model named `free`.  When a request
 arrives with `"model": "free"`, the proxy:
 
 1. Collects every model across all providers whose upstream ID contains the
-   word `free` (case-insensitive).
+   word `free` (case-insensitive) **or** whose upstream ID (or full
+   `provider/upstream` ID) appears in the top-level `known_free` config list
+   — see [Configuration](#configuration).
 2. Picks a **random starting position** in that list, then tries each
    candidate in order, wrapping around.
 3. Returns the first response with an HTTP status below 400.  If a candidate
@@ -127,6 +129,10 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
       "model_filter": ["model-a", "model-b"]
     }
   },
+  "known_free": [
+    "openrouter/qwen/qwen3-coder:free",
+    "gpt-oss-20b"
+  ],
   "server": {
     "host": "0.0.0.0",
     "port": 8080,
@@ -140,6 +146,15 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
 
 `model_filter` is a list of upstream model IDs to allow (without the provider
 prefix).  Set it to `null` or omit it to permit all models from that provider.
+
+`known_free` is an **optional** top-level array of model names that the
+`free` virtual model should include even when their ID doesn't contain the
+word `free`.  Omit the field entirely (or set it to `[]`) to keep the
+default behaviour — only IDs that literally contain `free` are pulled in.
+Each entry is matched (case-insensitively) against either the upstream
+model ID (e.g. `gpt-oss-20b`) or the full proxy ID (e.g.
+`openrouter/qwen/qwen3-coder:free`).  The setup wizard does not edit this
+field — add it by hand to the config file.
 
 See `config.example.json` for a complete annotated example.
 
