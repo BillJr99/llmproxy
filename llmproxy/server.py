@@ -49,6 +49,14 @@ from .config import (
 app = Flask(__name__)
 logger = logging.getLogger("llmproxy.server")
 
+_REASONING_LEVELS: tuple[str, ...] = ("exploratory", "standard", "deep")
+_VIRTUAL_MODELS: frozenset[str] = frozenset({
+    "free", "local",
+    *_REASONING_LEVELS,
+    *(f"{lvl}/free" for lvl in _REASONING_LEVELS),
+    *(f"{lvl}/local" for lvl in _REASONING_LEVELS),
+})
+
 # Maps proxy display ID -> (provider_name, upstream_id).
 # Always access under _model_route_cache_lock.
 _model_route_cache: dict[str, tuple[str, str]] = {}
@@ -400,6 +408,32 @@ def list_models() -> Response:
             "_note": "Virtual model: cycles through all models served on localhost until one succeeds.",
         })
 
+    for level in _REASONING_LEVELS:
+        if _get_reasoning_model_candidates(level):
+            synthetic.append({
+                "id": level,
+                "object": "model",
+                "owned_by": "llmproxy",
+                "name": level,
+                "_note": f"Virtual model: cycles through all models tagged '{level}' reasoning until one succeeds.",
+            })
+        if _get_reasoning_free_candidates(level):
+            synthetic.append({
+                "id": f"{level}/free",
+                "object": "model",
+                "owned_by": "llmproxy",
+                "name": f"{level}/free",
+                "_note": f"Virtual model: cycles through free-tier models tagged '{level}' reasoning.",
+            })
+        if _get_reasoning_local_candidates(level):
+            synthetic.append({
+                "id": f"{level}/local",
+                "object": "model",
+                "owned_by": "llmproxy",
+                "name": f"{level}/local",
+                "_note": f"Virtual model: cycles through local models tagged '{level}' reasoning.",
+            })
+
     full_list = synthetic + all_models
     if models_ttl > 0:
         with _models_list_cache_lock:
@@ -439,6 +473,48 @@ def get_local_model() -> Response:
     })
 
 
+@app.route("/v1/models/exploratory", methods=["GET"])
+def get_exploratory_model() -> Response:
+    """Return metadata for the synthetic 'exploratory' reasoning virtual model."""
+    candidates = _get_reasoning_model_candidates("exploratory")
+    return jsonify({
+        "id": "exploratory",
+        "object": "model",
+        "owned_by": "llmproxy",
+        "name": "exploratory",
+        "_note": "Virtual model: cycles through all models tagged 'exploratory' reasoning until one succeeds.",
+        "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
+    })
+
+
+@app.route("/v1/models/standard", methods=["GET"])
+def get_standard_model() -> Response:
+    """Return metadata for the synthetic 'standard' reasoning virtual model."""
+    candidates = _get_reasoning_model_candidates("standard")
+    return jsonify({
+        "id": "standard",
+        "object": "model",
+        "owned_by": "llmproxy",
+        "name": "standard",
+        "_note": "Virtual model: cycles through all models tagged 'standard' reasoning until one succeeds.",
+        "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
+    })
+
+
+@app.route("/v1/models/deep", methods=["GET"])
+def get_deep_model() -> Response:
+    """Return metadata for the synthetic 'deep' reasoning virtual model."""
+    candidates = _get_reasoning_model_candidates("deep")
+    return jsonify({
+        "id": "deep",
+        "object": "model",
+        "owned_by": "llmproxy",
+        "name": "deep",
+        "_note": "Virtual model: cycles through all models tagged 'deep' reasoning until one succeeds.",
+        "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
+    })
+
+
 @app.route("/v1/models/<path:model_id>", methods=["GET"])
 def get_model(model_id: str) -> Response:
     """
@@ -447,7 +523,23 @@ def get_model(model_id: str) -> Response:
     Accepts both the display format returned by /v1/models ("model (provider)")
     and the slash format ("provider/upstream_model").  The route cache is
     checked first so display-format IDs resolve correctly without parsing.
+
+    Combo virtual models (e.g. "exploratory/free", "standard/local") are
+    handled here because they look like a provider/model path but are not.
     """
+    # Handle combo virtual models that contain a slash (e.g. "standard/free").
+    # Base reasoning levels have explicit routes; only combos reach here.
+    if model_id in _VIRTUAL_MODELS:
+        candidates = _get_virtual_candidates(model_id)
+        return jsonify({
+            "id": model_id,
+            "object": "model",
+            "owned_by": "llmproxy",
+            "name": model_id,
+            "_note": f"Virtual model: '{model_id}' cycles through matching candidates until one succeeds.",
+            "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
+        })
+
     # Prefer the route cache so clients can use the display ID they got from
     # /v1/models directly.  Fall back to parse_model_string for slash format.
     with _model_route_cache_lock:
@@ -798,6 +890,75 @@ def _get_local_model_candidates() -> list[tuple[str, dict, str]]:
     return candidates
 
 
+# — reasoning-level candidate selectors —
+
+def _get_model_reasoning(config: dict) -> dict[str, str]:
+    """Return the model_reasoning map from config, with keys and values lowercased."""
+    raw = config.get("model_reasoning")
+    if not isinstance(raw, dict):
+        if raw is not None:
+            logger.warning(
+                "config['model_reasoning'] must be a dict; got %s — ignoring.",
+                type(raw).__name__,
+            )
+        return {}
+    result: dict[str, str] = {}
+    for key, val in raw.items():
+        if isinstance(key, str) and isinstance(val, str) and val.lower() in _REASONING_LEVELS:
+            result[key.lower()] = val.lower()
+        else:
+            logger.warning(
+                "config['model_reasoning']: invalid entry %r: %r (level must be one of %s) — skipping.",
+                key, val, "/".join(_REASONING_LEVELS),
+            )
+    return result
+
+
+def _get_reasoning_model_candidates(level: str) -> list[tuple[str, dict, str]]:
+    """(provider_name, provider_cfg, upstream_model) for every model tagged with *level*."""
+    config = load_config()
+    reasoning = _get_model_reasoning(config)
+    candidates = []
+    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+        lvl = (
+            reasoning.get(upstream_id.lower())
+            or reasoning.get(f"{provider_name}/{upstream_id}".lower())
+        )
+        if lvl == level:
+            provider_cfg = get_provider(config, provider_name)
+            if provider_cfg:
+                candidates.append((provider_name, provider_cfg, upstream_id))
+    return candidates
+
+
+def _get_reasoning_free_candidates(level: str) -> list[tuple[str, dict, str]]:
+    """Candidates that are both tagged *level* AND qualify as free."""
+    reasoning_set = {(pn, um) for pn, _, um in _get_reasoning_model_candidates(level)}
+    return [(pn, pc, um) for pn, pc, um in _get_free_model_candidates() if (pn, um) in reasoning_set]
+
+
+def _get_reasoning_local_candidates(level: str) -> list[tuple[str, dict, str]]:
+    """Candidates that are both tagged *level* AND served from localhost."""
+    reasoning_set = {(pn, um) for pn, _, um in _get_reasoning_model_candidates(level)}
+    return [(pn, pc, um) for pn, pc, um in _get_local_model_candidates() if (pn, um) in reasoning_set]
+
+
+def _get_virtual_candidates(model_full: str) -> list[tuple[str, dict, str]]:
+    """Dispatch to the correct candidate selector for any virtual model name."""
+    if model_full == "free":
+        return _get_free_model_candidates()
+    if model_full == "local":
+        return _get_local_model_candidates()
+    if model_full in _REASONING_LEVELS:
+        return _get_reasoning_model_candidates(model_full)
+    for level in _REASONING_LEVELS:
+        if model_full == f"{level}/free":
+            return _get_reasoning_free_candidates(level)
+        if model_full == f"{level}/local":
+            return _get_reasoning_local_candidates(level)
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Shared routing logic for all proxied endpoints
 # ---------------------------------------------------------------------------
@@ -873,10 +1034,10 @@ def _proxy_endpoint(endpoint: str) -> Response:
     is_streaming: bool = payload.get("stream", False)
 
     # Check the short-lived response cache for non-streaming requests.
-    # Virtual cycling models (free/local) bypass the cache so their load-spreading
-    # and failover logic runs on every request rather than pinning to one upstream.
+    # Virtual cycling models bypass the cache so their load-spreading and
+    # failover logic runs on every request rather than pinning to one upstream.
     cache_key: Optional[str] = None
-    if not is_streaming and model_full not in ("free", "local"):
+    if not is_streaming and model_full not in _VIRTUAL_MODELS:
         cache_ttl: int = server_cfg.get("response_cache_ttl", _DEFAULT_RESPONSE_CACHE_TTL)
         if cache_ttl > 0:
             cache_key = _response_cache_key(endpoint, payload, request.headers.get("Authorization", ""))
@@ -886,19 +1047,11 @@ def _proxy_endpoint(endpoint: str) -> Response:
                 logger.info("  [cache] HIT  key=%s…", cache_key[:12])
                 return Response(content, status=status, content_type=ct)
 
-    if model_full in ("free", "local"):
-        candidates = (
-            _get_free_model_candidates() if model_full == "free"
-            else _get_local_model_candidates()
-        )
+    if model_full in _VIRTUAL_MODELS:
+        candidates = _get_virtual_candidates(model_full)
         if not candidates:
-            hint = (
-                "Check that at least one provider exposes a free-tier model."
-                if model_full == "free"
-                else "Check that at least one provider has a localhost base_url."
-            )
             return _error(
-                f"No '{model_full}' models are currently available. {hint}",
+                f"No '{model_full}' models are currently available.",
                 status=503,
             )
         candidates = _cycling_candidates(candidates)

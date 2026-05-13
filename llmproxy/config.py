@@ -16,6 +16,11 @@ Schema:
   "known_free": ["model-a", "provider/model-b"],  // models the 'free' virtual
                                                   // model should include even
                                                   // when their ID lacks 'free'
+  "model_reasoning": {                            // optional; tag individual
+    "<upstream_model_id>": "exploratory",         // models with a reasoning
+    "<provider>/<upstream_model_id>": "standard", // level so they appear under
+    "another-model": "deep"                       // the exploratory/standard/deep
+  },                                              // virtual endpoints
   "server": {
     "host": "0.0.0.0",
     "port": 8080,
@@ -72,6 +77,7 @@ DEFAULT_SERVER_CONFIG = {
 DEFAULT_CONFIG: dict = {
     "providers": {},
     "known_free": [],
+    "model_reasoning": {},
     "server": dict(DEFAULT_SERVER_CONFIG),
 }
 

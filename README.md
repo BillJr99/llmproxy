@@ -111,6 +111,41 @@ provider must be reachable and its `/models` listing must have been fetched
 successfully.  Like `free`, it carries no provider prefix — the model name is
 simply `"local"`.
 
+### Reasoning-level virtual models
+
+You can optionally tag individual models in the config with a **reasoning
+level** — `exploratory`, `standard`, or `deep` — to group them by how much
+thinking effort they are expected to apply.  When at least one model is tagged
+with a given level, llmproxy exposes corresponding virtual endpoints:
+
+| Virtual model name   | Selects                                                       |
+|----------------------|---------------------------------------------------------------|
+| `exploratory`        | All models tagged `exploratory`                               |
+| `standard`           | All models tagged `standard`                                  |
+| `deep`               | All models tagged `deep`                                      |
+| `exploratory/free`   | Models tagged `exploratory` **and** qualifying as free-tier   |
+| `exploratory/local`  | Models tagged `exploratory` **and** served on localhost       |
+| `standard/free`      | Models tagged `standard` **and** qualifying as free-tier      |
+| `standard/local`     | Models tagged `standard` **and** served on localhost          |
+| `deep/free`          | Models tagged `deep` **and** qualifying as free-tier          |
+| `deep/local`         | Models tagged `deep` **and** served on localhost              |
+
+Each virtual endpoint uses the same random-start round-robin with automatic
+failover as `free` and `local`.
+
+```bash
+# Use the deep reasoning virtual model
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "deep", "messages": [{"role": "user", "content": "Prove P≠NP"}]}'
+
+# Inspect which backends are eligible for standard/free
+curl http://localhost:8080/v1/models/standard%2Ffree | jq '._candidates'
+```
+
+Tags are configured via the `model_reasoning` field — see
+[Configuration → model_reasoning](#model_reasoning) below.
+
 ---
 
 ## Configuration
@@ -133,6 +168,12 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "openrouter/qwen/qwen3-coder:free",
     "gpt-oss-20b"
   ],
+  "model_reasoning": {
+    "anthropic/claude-3.5-haiku": "exploratory",
+    "anthropic/claude-sonnet-4-5": "standard",
+    "anthropic/claude-opus-4": "deep",
+    "openrouter/deepseek/deepseek-r1": "deep"
+  },
   "server": {
     "host": "0.0.0.0",
     "port": 8080,
@@ -155,6 +196,18 @@ Each entry is matched (case-insensitively) against either the upstream
 model ID (e.g. `gpt-oss-20b`) or the full proxy ID (e.g.
 `openrouter/qwen/qwen3-coder:free`).  The setup wizard does not edit this
 field — add it by hand to the config file.
+
+<a name="model_reasoning"></a>
+`model_reasoning` is an **optional** top-level object that tags individual
+models with a reasoning level.  Valid levels are `exploratory`, `standard`,
+and `deep`.  Each key is matched (case-insensitively) against either the
+upstream model ID (e.g. `anthropic/claude-opus-4`) or the full
+`provider/upstream_model` proxy ID (e.g.
+`openrouter/anthropic/claude-opus-4`).  When a level has at least one tagged
+model in the route cache, the corresponding virtual endpoint is advertised in
+`GET /v1/models`.  Omit the field entirely (or set it to `{}`) to disable
+reasoning-level routing.  The setup wizard does not edit this field — add it
+by hand to the config file.
 
 See `config.example.json` for a complete annotated example.
 

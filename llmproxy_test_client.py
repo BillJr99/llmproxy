@@ -28,7 +28,7 @@ Usage
   python llmproxy_test_client.py --all-models
   python llmproxy_test_client.py --all-models --model-timeout 30
 
-Available suites: health, models, chat, streaming, completions, embeddings, errors, free, local, all-models
+Available suites: health, models, chat, streaming, completions, embeddings, errors, free, local, reasoning, reasoning-combos, sdk, all-models
 """
 
 import argparse
@@ -212,8 +212,14 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
             print(_info(f"  {prov}: {len(ids)} model{'s' if len(ids) != 1 else ''}"))
 
         # Verify naming convention: every non-synthetic ID should contain at least one slash.
-        # "free" and "local" are built-in synthetic models that intentionally have no slash.
-        SYNTHETIC_IDS = {"free", "local"}
+        # Virtual cycling models intentionally have no slash (or a slash only within their name).
+        SYNTHETIC_IDS = {
+            "free", "local",
+            "exploratory", "standard", "deep",
+            "exploratory/free", "exploratory/local",
+            "standard/free", "standard/local",
+            "deep/free", "deep/local",
+        }
         bad = [m.get("id", "") for m in models
                if "/" not in m.get("id", "") and m.get("id", "") not in SYNTHETIC_IDS]
         if bad:
@@ -230,6 +236,19 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
             results.ok("Synthetic 'local' cycling model is advertised")
         else:
             results.skip("Synthetic 'local' model", "no providers with a localhost base_url found")
+
+        for _level in ("exploratory", "standard", "deep"):
+            if any(m.get("id") == _level for m in models):
+                results.ok(f"Synthetic '{_level}' reasoning model is advertised")
+            else:
+                results.skip(
+                    f"Synthetic '{_level}' reasoning model",
+                    f"no models tagged '{_level}' in config['model_reasoning']",
+                )
+            for _suffix in ("free", "local"):
+                _combo = f"{_level}/{_suffix}"
+                if any(m.get("id") == _combo for m in models):
+                    results.ok(f"Synthetic '{_combo}' combo model is advertised")
 
         return [m.get("id", "") for m in models]
 
@@ -937,6 +956,220 @@ def test_local_model(base_url: str, **_) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Reasoning-level virtual model test suites
+# ---------------------------------------------------------------------------
+
+_REASONING_PROMPTS = [
+    ("one-word reply",    "Reply with exactly one word: PONG"),
+    ("capital of Spain",  "What is the capital of Spain? Answer in one word."),
+    ("simple arithmetic", "What is 5 plus 3? Answer with the number only."),
+]
+
+
+def test_reasoning_virtual_model(base_url: str, level: str, **_) -> None:
+    """
+    Test a named reasoning-level virtual model (exploratory / standard / deep).
+    Mirrors the structure of test_free_model / test_local_model: checks metadata,
+    then exercises non-streaming and streaming chat if candidates exist.
+    """
+    print(_head(f"Reasoning Model: {level}"))
+
+    candidates: list[str] = []
+    try:
+        resp = _get(base_url, f"/models/{level}")
+        if resp.status_code == 200:
+            data = resp.json()
+            candidates = data.get("_candidates", [])
+            assert data.get("id") == level, f"id mismatch: {data.get('id')!r}"
+            results.ok(
+                f"GET /v1/models/{level} returns 200",
+                (f"{len(candidates)} candidate(s): {', '.join(candidates[:4])}"
+                 + (" …" if len(candidates) > 4 else "")) if candidates
+                else "0 candidates",
+            )
+        else:
+            results.fail(f"GET /v1/models/{level}", f"status={resp.status_code}")
+            return
+    except AssertionError as e:
+        results.fail(f"GET /v1/models/{level} schema", str(e))
+        return
+    except Exception as e:
+        results.fail(f"GET /v1/models/{level}", str(e))
+        return
+
+    if not candidates:
+        results.skip(
+            f"{level} model cycling",
+            f"no models tagged '{level}' in config['model_reasoning']",
+        )
+        return
+
+    # Non-streaming prompts.
+    print()
+    print(f"  {BOLD}Non-streaming prompts:{RESET}")
+    for label, prompt in _REASONING_PROMPTS:
+        payload = {
+            "model": level,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 32,
+            "temperature": 0,
+        }
+        try:
+            t0 = time.monotonic()
+            resp = _post(base_url, "/chat/completions", payload, timeout=90)
+            elapsed = time.monotonic() - t0
+            if resp.status_code == 200:
+                data = resp.json()
+                choices = data.get("choices", [])
+                content = (choices[0].get("message", {}).get("content") or "") if choices else ""
+                used_model = data.get("model", "?")
+                if content:
+                    results.ok(
+                        f"{level} → {label}",
+                        f"via {used_model}  reply={repr(content[:60])}  {elapsed:.2f}s",
+                    )
+                else:
+                    results.skip(
+                        f"{level} → {label}",
+                        f"via {used_model}  no content (model may use non-standard fields)",
+                    )
+            else:
+                results.fail(f"{level} → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
+        except requests.exceptions.Timeout:
+            results.fail(f"{level} → {label}", "timed out after 90s")
+        except Exception as e:
+            results.fail(f"{level} → {label}", str(e))
+
+    # Streaming prompt.
+    print()
+    print(f"  {BOLD}Streaming prompt:{RESET}")
+    stream_payload = {
+        "model": level,
+        "messages": [{"role": "user", "content": "Count from 1 to 3, one number per line."}],
+        "max_tokens": 32,
+        "temperature": 0,
+        "stream": True,
+    }
+    try:
+        t0 = time.monotonic()
+        chunks = 0
+        parts: list[str] = []
+        print(_info("Streaming tokens: "), end="", flush=True)
+        with _post_stream(base_url, "/chat/completions", stream_payload, timeout=90) as resp:
+            if resp.status_code != 200:
+                results.fail(f"{level} (streaming)", f"status={resp.status_code}  body={resp.text[:200]}")
+            else:
+                for raw_line in resp.iter_lines():
+                    if not raw_line:
+                        continue
+                    line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    token = delta.get("content") or delta.get("reasoning_content") or ""
+                    chunks += 1
+                    if token:
+                        parts.append(token)
+                        print(token, end="", flush=True)
+        print()
+        elapsed = time.monotonic() - t0
+        full_content = "".join(parts)
+        if full_content:
+            results.ok(
+                f"{level} (streaming)",
+                f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s",
+            )
+        elif chunks > 0:
+            results.skip(
+                f"{level} (streaming)",
+                f"{chunks} chunks received but no content tokens",
+            )
+        else:
+            results.fail(f"{level} (streaming)", "received 0 chunks")
+    except requests.exceptions.Timeout:
+        results.fail(f"{level} (streaming)", "timed out after 90s")
+    except Exception as e:
+        results.fail(f"{level} (streaming)", str(e))
+        traceback.print_exc()
+
+
+def test_reasoning_combos(base_url: str, **_) -> None:
+    """
+    Verify all six combination virtual endpoints (exploratory/free, standard/local,
+    etc.) return valid metadata.  A quick chat probe is attempted only when the
+    endpoint actually has candidates, so the test passes on any configuration.
+    """
+    print(_head("Reasoning Combo Endpoints"))
+
+    _levels = ("exploratory", "standard", "deep")
+    _suffixes = ("free", "local")
+    any_with_candidates = False
+
+    for level in _levels:
+        for suffix in _suffixes:
+            combo = f"{level}/{suffix}"
+            try:
+                resp = _get(base_url, f"/models/{level}/{suffix}")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    assert data.get("id") == combo, f"id mismatch: {data.get('id')!r} != {combo!r}"
+                    candidates = data.get("_candidates", [])
+                    results.ok(
+                        f"GET /v1/models/{combo}",
+                        f"{len(candidates)} candidate(s)",
+                    )
+                    if not candidates:
+                        results.skip(
+                            f"{combo} → chat probe",
+                            f"no models tagged '{level}' that are also {suffix}-tier",
+                        )
+                        continue
+                    any_with_candidates = True
+                    payload = {
+                        "model": combo,
+                        "messages": [{"role": "user", "content": "Reply with one word: OK"}],
+                        "max_tokens": 8,
+                        "temperature": 0,
+                    }
+                    try:
+                        t0 = time.monotonic()
+                        probe = _post(base_url, "/chat/completions", payload, timeout=60)
+                        elapsed = time.monotonic() - t0
+                        if probe.status_code == 200:
+                            choices = probe.json().get("choices", [])
+                            content = (choices[0].get("message", {}).get("content") or "") if choices else ""
+                            results.ok(
+                                f"{combo} → chat probe",
+                                f"reply={repr(content[:40])}  {elapsed:.2f}s",
+                            )
+                        else:
+                            results.fail(f"{combo} → chat probe", f"status={probe.status_code}")
+                    except requests.exceptions.Timeout:
+                        results.fail(f"{combo} → chat probe", "timed out after 60s")
+                    except Exception as e:
+                        results.fail(f"{combo} → chat probe", str(e))
+                else:
+                    results.fail(f"GET /v1/models/{combo}", f"status={resp.status_code}")
+            except AssertionError as e:
+                results.fail(f"GET /v1/models/{combo} schema", str(e))
+            except Exception as e:
+                results.fail(f"GET /v1/models/{combo}", str(e))
+
+    if not any_with_candidates:
+        print(_info(
+            "All combo endpoints have 0 candidates — tag models in config['model_reasoning'] "
+            "and mark some as free/local to populate these endpoints."
+        ))
+
+
+# ---------------------------------------------------------------------------
 # Auto-select a test model from the available list
 # ---------------------------------------------------------------------------
 
@@ -982,7 +1215,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--suite",
         action="append",
-        choices=["health", "models", "chat", "streaming", "completions", "embeddings", "errors", "free", "local", "sdk", "all-models"],
+        choices=[
+            "health", "models", "chat", "streaming", "completions",
+            "embeddings", "errors", "free", "local",
+            "reasoning", "reasoning-combos",
+            "sdk", "all-models",
+        ],
         metavar="SUITE",
         dest="suites",
         help="Run only the named suite(s). Repeatable. Default: all suites.",
@@ -1082,6 +1320,15 @@ def main() -> None:
     # ── Local model cycling ──────────────────────────────────────
     if run_all or "local" in (args.suites or []):
         test_local_model(base_url)
+
+    # ── Reasoning-level virtual models ───────────────────────────
+    if run_all or "reasoning" in (args.suites or []):
+        for _lvl in ("exploratory", "standard", "deep"):
+            test_reasoning_virtual_model(base_url, _lvl)
+
+    # ── Reasoning combo endpoints ─────────────────────────────────
+    if run_all or "reasoning-combos" in (args.suites or []):
+        test_reasoning_combos(base_url)
 
     # ── OpenAI SDK ───────────────────────────────────────────────
     if args.use_sdk or "sdk" in (args.suites or []):
