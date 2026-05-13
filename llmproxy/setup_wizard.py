@@ -185,6 +185,10 @@ def _dim(text: str) -> str:
     return f"{DIM}{text}{RESET}"
 
 
+def _mask_api_key(key: str) -> str:
+    return key[:8] + "..." + key[-4:] if len(key) > 12 else "****"
+
+
 def _prompt(label: str, default: Optional[str] = None, secret: bool = False) -> str:
     """
     Display a prompt and return stripped user input.
@@ -293,7 +297,7 @@ def _edit_provider(name: str, existing: Optional[dict] = None) -> dict:
     print(_dim("  API Key: required for cloud providers (OpenAI, OpenRouter, etc.)."))
     print(_dim("  Leave blank for providers that do not need authentication (e.g. Ollama)."))
     if existing_key:
-        masked = existing_key[:8] + "..." + existing_key[-4:] if len(existing_key) > 12 else "****"
+        masked = _mask_api_key(existing_key)
         print(f"  API Key  [{_dim(masked)}] (press Enter to keep, or type new key):")
         try:
             new_key = getpass.getpass("  API Key (optional): ").strip()
@@ -419,7 +423,6 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
     print()
 
     # Confirm provider name first so we can look up any existing key below.
-    print()
     provider_key = _prompt("Provider name (used as prefix in model IDs)", default=tmpl["key"])
 
     existing = providers.get(provider_key)
@@ -449,7 +452,7 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
     if hint:
         print(_dim(f"  API key: {hint}"))
     if existing_key:
-        masked = existing_key[:8] + "..." + existing_key[-4:] if len(existing_key) > 12 else "****"
+        masked = _mask_api_key(existing_key)
         print(f"  API Key [{_dim(masked)}] (press Enter to keep): ", end="", flush=True)
     else:
         print(f"  API Key (optional): ", end="", flush=True)
@@ -631,5 +634,5 @@ def _redact_config(config: dict) -> dict:
     for name, cfg in display.get("providers", {}).items():
         key = cfg.get("api_key", "")
         if key:
-            cfg["api_key"] = key[:8] + "..." + key[-4:] if len(key) > 12 else "****"
+            cfg["api_key"] = _mask_api_key(key)
     return display
