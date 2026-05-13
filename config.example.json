@@ -1,0 +1,42 @@
+{
+  "providers": {
+    "openai": {
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "sk-...",
+      "model_filter": null
+    },
+    "anthropic": {
+      "base_url": "https://api.anthropic.com/v1",
+      "api_key": "sk-ant-...",
+      "model_filter": ["claude-3-5-sonnet-20241022", "claude-3-haiku-20240307"]
+    },
+    "openrouter": {
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key": "sk-or-...",
+      "model_filter": null
+    },
+    "ollama": {
+      "base_url": "http://localhost:11434/v1",
+      "api_key": "ollama",
+      "model_filter": ["llama3.2", "mistral"]
+    }
+  },
+  "known_free": [
+    "openrouter/mistralai/mistral-7b-instruct:free",
+    "openrouter/meta-llama/llama-3.2-3b-instruct:free"
+  ],
+  "model_reasoning": {
+    "openai/gpt-4o-mini": "exploratory",
+    "openai/gpt-4o": "standard",
+    "openai/o1": "deep",
+    "anthropic/claude-3-haiku-20240307": "exploratory",
+    "anthropic/claude-3-5-sonnet-20241022": "standard"
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "log_level": "INFO",
+    "request_timeout": 120,
+    "stream_timeout": 300
+  }
+}
