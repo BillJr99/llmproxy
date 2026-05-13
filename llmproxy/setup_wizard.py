@@ -24,8 +24,15 @@ from .config import (
 # Provider templates
 # ---------------------------------------------------------------------------
 
-# Each entry: (display_name, provider_key, base_url, model_filter, api_key_hint, notes)
-# base_url may contain the placeholder "{account_id}" — the wizard will substitute it.
+# Each entry is a dict with keys:
+#   display           – human-readable label shown in the menu
+#   key               – default provider name / model-ID prefix
+#   base_url          – upstream base URL; may contain "{account_id}" as a placeholder
+#   model_filter      – list of upstream model IDs to allow, or None for all
+#   api_key_hint      – one-line hint printed before the API-key prompt
+#   account_id_required – (optional) True when the URL contains "{account_id}"
+#   account_id_label  – (optional) prompt label for the account ID (default "Account ID")
+#   account_id_hint   – (optional) one-line hint for finding the account ID
 PROVIDER_TEMPLATES: list[dict] = [
     {
         "display": "Nous Research (Hermes)",
@@ -126,6 +133,8 @@ PROVIDER_TEMPLATES: list[dict] = [
         ],
         "api_key_hint": 'Free Cloudflare account — create API Token with "Workers AI Read" permission',
         "account_id_required": True,
+        "account_id_label": "Cloudflare Account ID",
+        "account_id_hint": "Find your account ID at dash.cloudflare.com (top-right corner)",
     },
     {
         "display": "Zhipu AI (Z.ai / BigModel)",
@@ -409,35 +418,46 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
         print(_dim("  Models   : (all models)"))
     print()
 
+    # Confirm provider name first so we can look up any existing key below.
+    print()
+    provider_key = _prompt("Provider name (used as prefix in model IDs)", default=tmpl["key"])
+
+    existing = providers.get(provider_key)
+    if existing:
+        print(_warn(f"\n  Provider '{provider_key}' already exists. It will be overwritten."))
+        if not _confirm("Overwrite?", default=False):
+            return None
+
     base_url = tmpl["base_url"]
 
-    # Cloudflare (and any future template) requires account ID substitution
+    # Some templates require an account ID to be substituted into the URL.
     if tmpl.get("account_id_required"):
-        print(_dim("  The base URL contains a placeholder for your account ID."))
-        print(_dim("  Find your account ID at dash.cloudflare.com (top-right corner)."))
-        account_id = _prompt("Cloudflare Account ID")
+        acct_hint = tmpl.get("account_id_hint", "")
+        acct_label = tmpl.get("account_id_label", "Account ID")
+        print()
+        print(_dim("  The base URL contains a placeholder for an account ID."))
+        if acct_hint:
+            print(_dim(f"  {acct_hint}"))
+        account_id = _prompt(acct_label)
         base_url = base_url.replace("{account_id}", account_id)
         print(_dim(f"  Resolved URL: {base_url}"))
         print()
 
-    # API key
+    # API key — preserve the existing key if the user submits an empty value.
+    existing_key = (existing or {}).get("api_key", "")
     hint = tmpl.get("api_key_hint", "")
     if hint:
         print(_dim(f"  API key: {hint}"))
-    print(f"  API Key (optional): ", end="", flush=True)
+    if existing_key:
+        masked = existing_key[:8] + "..." + existing_key[-4:] if len(existing_key) > 12 else "****"
+        print(f"  API Key [{_dim(masked)}] (press Enter to keep): ", end="", flush=True)
+    else:
+        print(f"  API Key (optional): ", end="", flush=True)
     try:
-        api_key = getpass.getpass("").strip()
+        new_key = getpass.getpass("").strip()
     except (EOFError, KeyboardInterrupt):
-        api_key = ""
-
-    # Allow the user to override the default provider key
-    print()
-    provider_key = _prompt("Provider name (used as prefix in model IDs)", default=tmpl["key"])
-
-    if provider_key in providers:
-        print(_warn(f"\n  Provider '{provider_key}' already exists. It will be overwritten."))
-        if not _confirm("Overwrite?", default=False):
-            return None
+        new_key = ""
+    api_key = new_key if new_key else existing_key
 
     cfg = {
         "base_url": base_url.rstrip("/"),
