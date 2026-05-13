@@ -33,7 +33,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 
 import requests
-from flask import Flask, Response, g, jsonify, request, stream_with_context
+from flask import Flask, Response, g, jsonify, make_response, request, stream_with_context
 
 from .config import (
     get_provider,
@@ -141,13 +141,13 @@ def _upstream_headers(provider_cfg: dict) -> dict:
 
 def _error(message: str, status: int = 400, code: str = "invalid_request_error") -> Response:
     """Return an OpenAI-schema-compatible JSON error response."""
-    return jsonify({
+    return make_response(jsonify({
         "error": {
             "message": message,
             "type": code,
             "code": None,
         }
-    }), status
+    }), status)
 
 
 def _upstream_error(provider_name: str, e: Exception, status: int = 502) -> Response:
@@ -256,6 +256,11 @@ def _rebuild_route_cache(providers_cfg: dict, timeout: int) -> list[dict]:
     The cache is replaced wholesale on each call so that removed or renamed
     upstream models do not linger as stale entries.
     """
+    if not providers_cfg:
+        with _model_route_cache_lock:
+            _model_route_cache.clear()
+        return []
+
     all_models: list[dict] = []
 
     with ThreadPoolExecutor(max_workers=min(len(providers_cfg), 10)) as executor:
@@ -399,19 +404,21 @@ def get_model(model_id: str) -> Response:
     """
     Return metadata for a single proxy model ID.
 
-    The model_id must follow the '<provider>/<upstream_model>' convention.
-
-    Rather than proxying to the upstream (many providers do not implement the
-    single-model GET endpoint), we validate the provider and model-filter
-    locally, then fetch the full model list from that provider and return the
-    matching entry.  If the provider's /models endpoint does not return that
-    model, we fall back to a minimal constructed object so that clients that
-    call this endpoint for validation do not get a spurious 404.
+    Accepts both the display format returned by /v1/models ("model (provider)")
+    and the slash format ("provider/upstream_model").  The route cache is
+    checked first so display-format IDs resolve correctly without parsing.
     """
-    try:
-        provider_name, upstream_model = parse_model_string(model_id)
-    except ValueError as e:
-        return _error(str(e), status=400)
+    # Prefer the route cache so clients can use the display ID they got from
+    # /v1/models directly.  Fall back to parse_model_string for slash format.
+    with _model_route_cache_lock:
+        cached = _model_route_cache.get(model_id)
+    if cached:
+        provider_name, upstream_model = cached
+    else:
+        try:
+            provider_name, upstream_model = parse_model_string(model_id)
+        except ValueError as e:
+            return _error(str(e), status=400)
 
     config = load_config()
     provider_cfg = get_provider(config, provider_name)
@@ -432,8 +439,9 @@ def get_model(model_id: str) -> Response:
     with _model_route_cache_lock:
         _model_route_cache.update(new_routes)
 
+    # Match by proxy display ID or by upstream model ID (clients may use either).
     for m in provider_models:
-        if m.get("id") == model_id:
+        if m.get("id") == model_id or m.get("_upstream_id") == upstream_model:
             return jsonify(m)
 
     # The model passed the filter check but was not returned by the upstream
@@ -787,12 +795,13 @@ def _proxy_endpoint(endpoint: str) -> Response:
     cache_key: Optional[str] = None
     if not is_streaming:
         cache_ttl: int = server_cfg.get("response_cache_ttl", _DEFAULT_RESPONSE_CACHE_TTL)
-        cache_key = _response_cache_key(endpoint, payload)
-        cached = _response_cache_get(cache_key, cache_ttl)
-        if cached:
-            content, status, ct = cached
-            logger.info("  [cache] HIT  key=%s…", cache_key[:12])
-            return Response(content, status=status, content_type=ct)
+        if cache_ttl > 0:
+            cache_key = _response_cache_key(endpoint, payload)
+            cached = _response_cache_get(cache_key, cache_ttl)
+            if cached:
+                content, status, ct = cached
+                logger.info("  [cache] HIT  key=%s…", cache_key[:12])
+                return Response(content, status=status, content_type=ct)
 
     if model_full in ("free", "local"):
         candidates = (
@@ -831,7 +840,7 @@ def _proxy_endpoint(endpoint: str) -> Response:
         resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, timeout)
 
     # Store successful non-streaming responses in the short-lived cache.
-    if cache_key is not None and resp.status_code < 400:
+    if cache_key is not None and 200 <= resp.status_code < 300:
         _response_cache_put(cache_key, resp.get_data(), resp.status_code, resp.content_type)
     return resp
 

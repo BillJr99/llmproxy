@@ -212,7 +212,7 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
             print(_info(f"  {prov}: {len(ids)} model{'s' if len(ids) != 1 else ''}"))
 
         # Verify naming convention: every non-synthetic ID should contain at least one slash.
-        # "free" is the one built-in synthetic model that intentionally has no slash.
+        # "free" and "local" are built-in synthetic models that intentionally have no slash.
         SYNTHETIC_IDS = {"free", "local"}
         bad = [m.get("id", "") for m in models
                if "/" not in m.get("id", "") and m.get("id", "") not in SYNTHETIC_IDS]
