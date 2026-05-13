@@ -342,6 +342,7 @@ def test_streaming(base_url: str, model: str, **_) -> None:
         t0 = time.monotonic()
         chunks_received = 0
         content_parts = []
+        sample_deltas: list[dict] = []
 
         with _post_stream(base_url, "/chat/completions", payload) as resp:
             if resp.status_code != 200:
@@ -366,6 +367,8 @@ def test_streaming(base_url: str, model: str, **_) -> None:
                 except json.JSONDecodeError:
                     continue
                 delta = chunk.get("choices", [{}])[0].get("delta", {})
+                if delta and len(sample_deltas) < 3:
+                    sample_deltas.append(delta)
                 token = delta.get("content") or delta.get("reasoning_content") or ""
                 if token:
                     content_parts.append(token)
@@ -384,10 +387,12 @@ def test_streaming(base_url: str, model: str, **_) -> None:
             if full_content:
                 results.ok("Stream produced non-empty content", repr(full_content[:60]))
             else:
+                delta_info = f"  sample deltas: {sample_deltas}" if sample_deltas else ""
                 results.skip(
                     "Stream content check",
                     "chunks received but all content tokens were empty "
-                    "(model may use non-standard delta fields)",
+                    "(model may use non-standard delta fields)"
+                    + delta_info,
                 )
         else:
             results.fail("POST /v1/chat/completions (stream)", "received 0 chunks")
@@ -567,6 +572,7 @@ def _stream_response(base_url: str, model: str, prompt: str, timeout: int) -> tu
         "stream": True,
     }
     collected: list[str] = []
+    sample_deltas: list[dict] = []
     error: str = ""
 
     try:
@@ -594,6 +600,8 @@ def _stream_response(base_url: str, model: str, prompt: str, timeout: int) -> tu
                 except json.JSONDecodeError:
                     continue
                 delta = chunk.get("choices", [{}])[0].get("delta", {})
+                if delta and len(sample_deltas) < 3:
+                    sample_deltas.append(delta)
                 token = delta.get("content") or delta.get("reasoning_content") or ""
                 if token:
                     collected.append(token)
@@ -608,7 +616,8 @@ def _stream_response(base_url: str, model: str, prompt: str, timeout: int) -> tu
     if not response_text and error:
         return False, "", error
     if not response_text:
-        return False, "", "no content tokens received (model may use non-standard delta fields)"
+        delta_info = f" — sample deltas: {sample_deltas}" if sample_deltas else ""
+        return False, "", f"no content tokens received (model may use non-standard delta fields){delta_info}"
     return True, response_text, error
 
 
@@ -795,6 +804,7 @@ def test_free_model(base_url: str, **_) -> None:
         t0 = time.monotonic()
         chunks = 0
         parts: list[str] = []
+        sample_deltas: list[dict] = []
         print(_info("Streaming tokens: "), end="", flush=True)
         with _post_stream(base_url, "/chat/completions", stream_payload, timeout=90) as resp:
             if resp.status_code != 200:
@@ -814,6 +824,8 @@ def test_free_model(base_url: str, **_) -> None:
                     except json.JSONDecodeError:
                         continue
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    if delta and len(sample_deltas) < 3:
+                        sample_deltas.append(delta)
                     token = delta.get("content") or delta.get("reasoning_content") or ""
                     chunks += 1
                     if token:
@@ -825,7 +837,8 @@ def test_free_model(base_url: str, **_) -> None:
         if full_content:
             results.ok("free (streaming)", f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s")
         elif chunks > 0:
-            results.skip("free (streaming)", f"{chunks} chunks received but no content tokens (model may use non-standard delta fields)")
+            delta_info = f"  sample deltas: {sample_deltas}" if sample_deltas else ""
+            results.skip("free (streaming)", f"{chunks} chunks received but no content tokens (model may use non-standard delta fields){delta_info}")
         else:
             results.fail("free (streaming)", "received 0 chunks")
     except requests.exceptions.Timeout:
@@ -924,6 +937,7 @@ def test_local_model(base_url: str, **_) -> None:
         t0 = time.monotonic()
         chunks = 0
         parts: list[str] = []
+        sample_deltas: list[dict] = []
         print(_info("Streaming tokens: "), end="", flush=True)
         with _post_stream(base_url, "/chat/completions", stream_payload, timeout=90) as resp:
             if resp.status_code != 200:
@@ -943,6 +957,8 @@ def test_local_model(base_url: str, **_) -> None:
                     except json.JSONDecodeError:
                         continue
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    if delta and len(sample_deltas) < 3:
+                        sample_deltas.append(delta)
                     token = delta.get("content") or delta.get("reasoning_content") or ""
                     chunks += 1
                     if token:
@@ -954,7 +970,8 @@ def test_local_model(base_url: str, **_) -> None:
         if full_content:
             results.ok("local (streaming)", f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s")
         elif chunks > 0:
-            results.skip("local (streaming)", f"{chunks} chunks received but no content tokens (model may use non-standard delta fields)")
+            delta_info = f"  sample deltas: {sample_deltas}" if sample_deltas else ""
+            results.skip("local (streaming)", f"{chunks} chunks received but no content tokens (model may use non-standard delta fields){delta_info}")
         else:
             results.fail("local (streaming)", "received 0 chunks")
     except requests.exceptions.Timeout:
@@ -1063,6 +1080,7 @@ def test_reasoning_virtual_model(base_url: str, level: str, **_) -> None:
         t0 = time.monotonic()
         chunks = 0
         parts: list[str] = []
+        sample_deltas: list[dict] = []
         print(_info("Streaming tokens: "), end="", flush=True)
         with _post_stream(base_url, "/chat/completions", stream_payload, timeout=90) as resp:
             if resp.status_code != 200:
@@ -1082,6 +1100,8 @@ def test_reasoning_virtual_model(base_url: str, level: str, **_) -> None:
                     except json.JSONDecodeError:
                         continue
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    if delta and len(sample_deltas) < 3:
+                        sample_deltas.append(delta)
                     token = delta.get("content") or delta.get("reasoning_content") or ""
                     chunks += 1
                     if token:
@@ -1096,9 +1116,10 @@ def test_reasoning_virtual_model(base_url: str, level: str, **_) -> None:
                 f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s",
             )
         elif chunks > 0:
+            delta_info = f"  sample deltas: {sample_deltas}" if sample_deltas else ""
             results.skip(
                 f"{level} (streaming)",
-                f"{chunks} chunks received but no content tokens",
+                f"{chunks} chunks received but no content tokens (model may use non-standard delta fields){delta_info}",
             )
         else:
             results.fail(f"{level} (streaming)", "received 0 chunks")
