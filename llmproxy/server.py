@@ -51,10 +51,10 @@ logger = logging.getLogger("llmproxy.server")
 
 _REASONING_LEVELS: tuple[str, ...] = ("exploratory", "standard", "deep")
 _VIRTUAL_MODELS: frozenset[str] = frozenset({
-    "free", "local",
-    *_REASONING_LEVELS,
-    *(f"{lvl}/free" for lvl in _REASONING_LEVELS),
-    *(f"{lvl}/local" for lvl in _REASONING_LEVELS),
+    "llmproxy/free", "llmproxy/local",
+    *(f"llmproxy/{lvl}" for lvl in _REASONING_LEVELS),
+    *(f"llmproxy/{lvl}/free" for lvl in _REASONING_LEVELS),
+    *(f"llmproxy/{lvl}/local" for lvl in _REASONING_LEVELS),
 })
 
 # Maps proxy display ID -> (provider_name, upstream_id).
@@ -389,10 +389,10 @@ def list_models() -> Response:
     )
     if has_free:
         synthetic.append({
-            "id": "free",
+            "id": "llmproxy/free",
             "object": "model",
             "owned_by": "llmproxy",
-            "name": "free",
+            "name": "llmproxy/free",
             "_note": "Virtual model: cycles through all models whose ID contains 'free' (or appears in config['known_free']) until one succeeds.",
         })
     if any(
@@ -401,36 +401,36 @@ def list_models() -> Response:
         if (cfg := get_provider(config, pn))
     ):
         synthetic.append({
-            "id": "local",
+            "id": "llmproxy/local",
             "object": "model",
             "owned_by": "llmproxy",
-            "name": "local",
+            "name": "llmproxy/local",
             "_note": "Virtual model: cycles through all models served on localhost until one succeeds.",
         })
 
     for level in _REASONING_LEVELS:
         if _get_reasoning_model_candidates(level):
             synthetic.append({
-                "id": level,
+                "id": f"llmproxy/{level}",
                 "object": "model",
                 "owned_by": "llmproxy",
-                "name": level,
+                "name": f"llmproxy/{level}",
                 "_note": f"Virtual model: cycles through all models tagged '{level}' reasoning until one succeeds.",
             })
         if _get_reasoning_free_candidates(level):
             synthetic.append({
-                "id": f"{level}/free",
+                "id": f"llmproxy/{level}/free",
                 "object": "model",
                 "owned_by": "llmproxy",
-                "name": f"{level}/free",
+                "name": f"llmproxy/{level}/free",
                 "_note": f"Virtual model: cycles through free-tier models tagged '{level}' reasoning.",
             })
         if _get_reasoning_local_candidates(level):
             synthetic.append({
-                "id": f"{level}/local",
+                "id": f"llmproxy/{level}/local",
                 "object": "model",
                 "owned_by": "llmproxy",
-                "name": f"{level}/local",
+                "name": f"llmproxy/{level}/local",
                 "_note": f"Virtual model: cycles through local models tagged '{level}' reasoning.",
             })
 
@@ -945,16 +945,17 @@ def _get_reasoning_local_candidates(level: str) -> list[tuple[str, dict, str]]:
 
 def _get_virtual_candidates(model_full: str) -> list[tuple[str, dict, str]]:
     """Dispatch to the correct candidate selector for any virtual model name."""
-    if model_full == "free":
+    name = model_full[len("llmproxy/"):] if model_full.startswith("llmproxy/") else model_full
+    if name == "free":
         return _get_free_model_candidates()
-    if model_full == "local":
+    if name == "local":
         return _get_local_model_candidates()
-    if model_full in _REASONING_LEVELS:
-        return _get_reasoning_model_candidates(model_full)
+    if name in _REASONING_LEVELS:
+        return _get_reasoning_model_candidates(name)
     for level in _REASONING_LEVELS:
-        if model_full == f"{level}/free":
+        if name == f"{level}/free":
             return _get_reasoning_free_candidates(level)
-        if model_full == f"{level}/local":
+        if name == f"{level}/local":
             return _get_reasoning_local_candidates(level)
     return []
 
@@ -1010,22 +1011,23 @@ def _resolve_provider(model_full: str) -> tuple[Optional[str], Optional[dict], O
 
 def _virtual_model_hint(model_full: str) -> str:
     """Return a one-sentence config hint for an unavailable virtual model."""
-    if model_full == "free":
+    name = model_full[len("llmproxy/"):] if model_full.startswith("llmproxy/") else model_full
+    if name == "free":
         return (
             "Check that at least one provider exposes a free-tier model "
             "(upstream ID contains 'free', or add it to config['known_free'])."
         )
-    if model_full == "local":
+    if name == "local":
         return "Check that at least one provider has a localhost base_url."
     for level in _REASONING_LEVELS:
-        if model_full == level:
+        if name == level:
             return f"Tag at least one model with '{level}' in config['model_reasoning']."
-        if model_full == f"{level}/free":
+        if name == f"{level}/free":
             return (
                 f"Need a model tagged '{level}' in config['model_reasoning'] "
                 f"that is also free-tier."
             )
-        if model_full == f"{level}/local":
+        if name == f"{level}/local":
             return (
                 f"Need a model tagged '{level}' in config['model_reasoning'] "
                 f"that is also served by a localhost provider."
