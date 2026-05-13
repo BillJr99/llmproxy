@@ -54,6 +54,12 @@ logger = logging.getLogger("llmproxy.server")
 _model_route_cache: dict[str, tuple[str, str]] = {}
 _model_route_cache_lock = threading.Lock()
 
+# Cached full model list returned by GET /v1/models.
+# Tuple is (model_list, timestamp).  Protected by _models_list_cache_lock.
+_models_list_cache: Optional[tuple[list[dict], float]] = None
+_models_list_cache_lock = threading.Lock()
+_DEFAULT_MODELS_CACHE_TTL = 60
+
 # ---------------------------------------------------------------------------
 # Short-lived response cache (non-streaming only)
 # ---------------------------------------------------------------------------
@@ -331,11 +337,16 @@ def list_models() -> Response:
     Two synthetic virtual models are prepended when their backing candidates
     exist: 'free' (cycles through models whose ID contains 'free') and
     'local' (cycles through models on localhost providers).
+
+    Results are cached for models_cache_ttl seconds (default 60) to avoid
+    redundant upstream fetches when clients issue multiple requests in quick
+    succession (e.g. at startup).
     """
     config = load_config()
     providers: dict = config.get("providers", {})
     server_cfg: dict = config.get("server", {})
     timeout: int = server_cfg.get("request_timeout", 120)
+    models_ttl: int = server_cfg.get("models_cache_ttl", _DEFAULT_MODELS_CACHE_TTL)
 
     if not providers:
         return jsonify({
@@ -343,6 +354,16 @@ def list_models() -> Response:
             "data": [],
             "_warning": "No providers configured. Run 'llmproxy --setup'.",
         })
+
+    # Return cached model list if still fresh.
+    global _models_list_cache
+    if models_ttl > 0:
+        with _models_list_cache_lock:
+            if _models_list_cache is not None:
+                cached_data, cached_ts = _models_list_cache
+                if time.monotonic() - cached_ts < models_ttl:
+                    logger.info("  [models cache] HIT (%.0fs old)", time.monotonic() - cached_ts)
+                    return jsonify({"object": "list", "data": cached_data})
 
     all_models = _rebuild_route_cache(providers, timeout)
 
@@ -371,9 +392,14 @@ def list_models() -> Response:
             "_note": "Virtual model: cycles through all models served on localhost until one succeeds.",
         })
 
+    full_list = synthetic + all_models
+    if models_ttl > 0:
+        with _models_list_cache_lock:
+            _models_list_cache = (full_list, time.monotonic())
+
     return jsonify({
         "object": "list",
-        "data": synthetic + all_models,
+        "data": full_list,
     })
 
 
