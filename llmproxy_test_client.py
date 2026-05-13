@@ -680,7 +680,8 @@ def test_free_model(base_url: str, **_) -> None:
     """
     print(_head("Free Model Cycling"))
 
-    # Confirm the model is advertised.
+    # Confirm the model is advertised; skip suite if no free-tier candidates exist.
+    candidates: list[str] = []
     try:
         resp = _get(base_url, "/models/free")
         if resp.status_code == 200:
@@ -691,8 +692,14 @@ def test_free_model(base_url: str, **_) -> None:
                        + (" ..." if len(candidates) > 4 else ""))
         else:
             results.fail("GET /v1/models/free", f"status={resp.status_code}")
+            return
     except Exception as e:
         results.fail("GET /v1/models/free", str(e))
+        return
+
+    if not candidates:
+        results.skip("free model cycling", "no free-tier models found across providers")
+        return
 
     # Non-streaming prompts.
     print()

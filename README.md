@@ -103,9 +103,11 @@ curl http://localhost:8080/v1/chat/completions \
 curl http://localhost:8080/v1/models/local | jq '._candidates'
 ```
 
-The `local` model appears in `GET /v1/models` only when at least one provider
-with a localhost `base_url` is configured.  Like `free`, it carries no
-provider prefix — the model name is simply `"local"`.
+The `local` model appears in `GET /v1/models` only when at least one model
+from a localhost-backed provider is present in the route cache — meaning the
+provider must be reachable and its `/models` listing must have been fetched
+successfully.  Like `free`, it carries no provider prefix — the model name is
+simply `"local"`.
 
 ---
 

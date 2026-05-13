@@ -63,12 +63,13 @@ _model_route_cache_lock = threading.Lock()
 _response_cache: dict[str, tuple[bytes, int, str, float]] = {}
 _response_cache_lock = threading.Lock()
 _DEFAULT_RESPONSE_CACHE_TTL = 120
+_RESPONSE_CACHE_MAX_ENTRIES = 512
 
 
-def _response_cache_key(endpoint: str, payload: dict) -> str:
-    """Stable hash of the request, excluding the 'stream' flag."""
+def _response_cache_key(endpoint: str, payload: dict, auth: str = "") -> str:
+    """Stable hash of the request, scoped by caller identity and excluding 'stream'."""
     filtered = {k: v for k, v in payload.items() if k != "stream"}
-    raw = json.dumps({"_endpoint": endpoint, **filtered}, sort_keys=True, ensure_ascii=False)
+    raw = json.dumps({"_endpoint": endpoint, "_auth": auth, **filtered}, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -88,6 +89,9 @@ def _response_cache_get(key: str, ttl: int) -> Optional[tuple[bytes, int, str]]:
 def _response_cache_put(key: str, content: bytes, status: int, content_type: str) -> None:
     with _response_cache_lock:
         _response_cache[key] = (content, status, content_type, time.monotonic())
+        if len(_response_cache) > _RESPONSE_CACHE_MAX_ENTRIES:
+            oldest = min(_response_cache, key=lambda k: _response_cache[k][3])
+            _response_cache.pop(oldest, None)
 
 
 @app.before_request
@@ -796,7 +800,7 @@ def _proxy_endpoint(endpoint: str) -> Response:
     if not is_streaming:
         cache_ttl: int = server_cfg.get("response_cache_ttl", _DEFAULT_RESPONSE_CACHE_TTL)
         if cache_ttl > 0:
-            cache_key = _response_cache_key(endpoint, payload)
+            cache_key = _response_cache_key(endpoint, payload, request.headers.get("Authorization", ""))
             cached = _response_cache_get(cache_key, cache_ttl)
             if cached:
                 content, status, ct = cached
