@@ -359,9 +359,9 @@ def list_models() -> Response:
             "_note": "Virtual model: cycles through all models whose ID contains 'free' until one succeeds.",
         })
     if any(
-        _is_local_url(get_provider(config, pn).get("base_url", ""))
+        _is_local_url(cfg.get("base_url", ""))
         for pn, _ in snapshot.values()
-        if get_provider(config, pn)
+        if (cfg := get_provider(config, pn))
     ):
         synthetic.append({
             "id": "local",
@@ -798,8 +798,10 @@ def _proxy_endpoint(endpoint: str) -> Response:
     is_streaming: bool = payload.get("stream", False)
 
     # Check the short-lived response cache for non-streaming requests.
+    # Virtual cycling models (free/local) bypass the cache so their load-spreading
+    # and failover logic runs on every request rather than pinning to one upstream.
     cache_key: Optional[str] = None
-    if not is_streaming:
+    if not is_streaming and model_full not in ("free", "local"):
         cache_ttl: int = server_cfg.get("response_cache_ttl", _DEFAULT_RESPONSE_CACHE_TTL)
         if cache_ttl > 0:
             cache_key = _response_cache_key(endpoint, payload, request.headers.get("Authorization", ""))

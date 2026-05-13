@@ -83,8 +83,8 @@ provider prefix.
 llmproxy also advertises a synthetic model named `local`.  When a request
 arrives with `"model": "local"`, the proxy:
 
-1. Collects every model across all providers whose `base_url` resolves to a
-   loopback address (`localhost`, `127.x.x.x`, `::1`).
+1. Collects every model across all providers whose `base_url` hostname matches
+   a loopback address (`localhost`, `127.x.x.x`, `::1`).
 2. Picks a **random starting position** in that list, then tries each
    candidate in order, wrapping around.
 3. Returns the first response with an HTTP status below 400.
