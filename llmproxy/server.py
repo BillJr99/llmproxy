@@ -72,27 +72,28 @@ def _response_cache_key(endpoint: str, payload: dict, auth: str = "") -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _response_cache_prune(ttl: int) -> None:
+    """Evict all expired entries. Must be called with _response_cache_lock held."""
+    now = time.monotonic()
+    expired = [k for k, (_, _, _, ts) in _response_cache.items() if now - ts > ttl]
+    for k in expired:
+        del _response_cache[k]
+
+
 def _response_cache_get(key: str, ttl: int) -> Optional[tuple[bytes, int, str]]:
     with _response_cache_lock:
+        _response_cache_prune(ttl)
         entry = _response_cache.get(key)
     if entry is None:
         return None
-    content, status, content_type, ts = entry
-    if time.monotonic() - ts > ttl:
-        with _response_cache_lock:
-            _response_cache.pop(key, None)
-        return None
+    content, status, content_type, _ = entry
     return content, status, content_type
 
 
 def _response_cache_put(key: str, content: bytes, status: int, content_type: str, ttl: int) -> None:
-    now = time.monotonic()
     with _response_cache_lock:
-        # Prune any entries that have already expired before adding the new one.
-        expired = [k for k, (_, _, _, ts) in _response_cache.items() if now - ts > ttl]
-        for k in expired:
-            del _response_cache[k]
-        _response_cache[key] = (content, status, content_type, now)
+        _response_cache_prune(ttl)
+        _response_cache[key] = (content, status, content_type, time.monotonic())
 
 
 @app.before_request
