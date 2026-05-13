@@ -84,17 +84,18 @@ def _print_banner(base_url: str, model: Optional[str]) -> None:
     print(f"{BOLD}{CYAN}{_hr()}{RESET}\n")
 
 
-def _fetch_models(base_url: str) -> list[dict]:
+def _fetch_models(base_url: str) -> Optional[list[dict]]:
+    """Return model list on success, or None if the server is unreachable."""
     try:
         resp = requests.get(f"{base_url}/models", timeout=10)
         resp.raise_for_status()
         return resp.json().get("data", [])
     except requests.exceptions.ConnectionError:
         print(f"{RED}Cannot connect to {base_url} — is llmproxy running?{RESET}")
-        return []
+        return None
     except Exception as e:
         print(f"{YELLOW}Warning: could not fetch models: {e}{RESET}")
-        return []
+        return None
 
 
 def _auto_pick(models: list[dict]) -> Optional[str]:
@@ -169,15 +170,16 @@ def _pick_model(models: list[dict], current: Optional[str], initial_filter: str 
                     in_virtual = False
 
                 marker = f"{GREEN}▸{RESET} " if mid == current else "  "
-                # Display label: strip provider prefix for real models to save space
                 if mid in _VIRTUAL_IDS:
-                    label = f"{CYAN}{mid}{RESET}"
-                else:
-                    prov = m.get("_provider") or (mid.split("/")[0] if "/" in mid else "?")
-                    short = mid[len(prov) + 1:] if mid.startswith(prov + "/") else mid
-                    label = short
-                    # Append reasoning tag annotation if present
+                    # For virtual models show a short description from _note
                     note = m.get("_note", "")
+                    short_note = note.split(":")[1].strip()[:55] if ": " in note else ""
+                    suffix = f"  {DIM}{short_note}{RESET}" if short_note else ""
+                    label = f"{CYAN}{mid}{RESET}{suffix}"
+                else:
+                    # Strip provider prefix for real models to save space
+                    prov = m.get("_provider") or (mid.split("/")[0] if "/" in mid else "?")
+                    label = mid[len(prov) + 1:] if mid.startswith(prov + "/") else mid
                 print(f"  {marker}{idx:>3}.  {label}")
 
         print(f"\n{DIM}{_hr('─')}{RESET}")
@@ -380,7 +382,7 @@ def main() -> None:
 
     # Startup: fetch model list
     print(f"{DIM}Connecting to {base_url}…{RESET}", end="", flush=True)
-    models = _fetch_models(base_url)
+    models: list[dict] = _fetch_models(base_url) or []
     print(f"\r{' ' * (_W)}\r", end="", flush=True)
 
     model: Optional[str] = args.model or _auto_pick(models)
@@ -450,17 +452,17 @@ def main() -> None:
         if low.startswith("/url "):
             new_url = user_input[5:].strip().rstrip("/")
             print(f"{DIM}Fetching models from {new_url}…{RESET}", end="", flush=True)
-            new_models = _fetch_models(new_url)
-            if new_models is not None:
+            fetched = _fetch_models(new_url)
+            if fetched is not None:
                 base_url = new_url
-                models = new_models
+                models = fetched
                 print(f"\r{' ' * _W}\r{DIM}Switched to {base_url} — {len(models)} model(s) found.{RESET}\n")
                 if not model or not any(m["id"] == model for m in models):
                     model = _auto_pick(models)
                     if model:
                         print(f"{DIM}Auto-selected model: {model}{RESET}\n")
             else:
-                print(f"\r{' ' * _W}\r{RED}Could not connect to {new_url}.{RESET}\n")
+                print(f"\r{' ' * _W}\r{RED}Could not connect to {new_url} — staying on {base_url}.{RESET}\n")
             continue
 
         if user_input.startswith("/"):
