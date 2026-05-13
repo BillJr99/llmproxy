@@ -147,12 +147,14 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
 `model_filter` is a list of upstream model IDs to allow (without the provider
 prefix).  Set it to `null` or omit it to permit all models from that provider.
 
-`known_free` is an optional top-level array of model names that the `free`
-virtual model should include even when their ID doesn't contain the word
-`free`.  Each entry is matched (case-insensitively) against either the
-upstream model ID (e.g. `gpt-oss-20b`) or the full proxy ID
-(e.g. `openrouter/qwen/qwen3-coder:free`).  The setup wizard does not edit
-this field — add it by hand to the config file.
+`known_free` is an **optional** top-level array of model names that the
+`free` virtual model should include even when their ID doesn't contain the
+word `free`.  Omit the field entirely (or set it to `[]`) to keep the
+default behaviour — only IDs that literally contain `free` are pulled in.
+Each entry is matched (case-insensitively) against either the upstream
+model ID (e.g. `gpt-oss-20b`) or the full proxy ID (e.g.
+`openrouter/qwen/qwen3-coder:free`).  The setup wizard does not edit this
+field — add it by hand to the config file.
 
 See `config.example.json` for a complete annotated example.
 
