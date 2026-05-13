@@ -63,7 +63,6 @@ _model_route_cache_lock = threading.Lock()
 _response_cache: dict[str, tuple[bytes, int, str, float]] = {}
 _response_cache_lock = threading.Lock()
 _DEFAULT_RESPONSE_CACHE_TTL = 120
-_RESPONSE_CACHE_MAX_ENTRIES = 512
 
 
 def _response_cache_key(endpoint: str, payload: dict, auth: str = "") -> str:
@@ -86,12 +85,14 @@ def _response_cache_get(key: str, ttl: int) -> Optional[tuple[bytes, int, str]]:
     return content, status, content_type
 
 
-def _response_cache_put(key: str, content: bytes, status: int, content_type: str) -> None:
+def _response_cache_put(key: str, content: bytes, status: int, content_type: str, ttl: int) -> None:
+    now = time.monotonic()
     with _response_cache_lock:
-        _response_cache[key] = (content, status, content_type, time.monotonic())
-        if len(_response_cache) > _RESPONSE_CACHE_MAX_ENTRIES:
-            oldest = min(_response_cache, key=lambda k: _response_cache[k][3])
-            _response_cache.pop(oldest, None)
+        # Prune any entries that have already expired before adding the new one.
+        expired = [k for k, (_, _, _, ts) in _response_cache.items() if now - ts > ttl]
+        for k in expired:
+            del _response_cache[k]
+        _response_cache[key] = (content, status, content_type, now)
 
 
 @app.before_request
@@ -845,7 +846,7 @@ def _proxy_endpoint(endpoint: str) -> Response:
 
     # Store successful non-streaming responses in the short-lived cache.
     if cache_key is not None and 200 <= resp.status_code < 300:
-        _response_cache_put(cache_key, resp.get_data(), resp.status_code, resp.content_type)
+        _response_cache_put(cache_key, resp.get_data(), resp.status_code, resp.content_type, cache_ttl)
     return resp
 
 
