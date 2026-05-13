@@ -4,13 +4,14 @@ test_tui.py — Interactive chat TUI for llmproxy.
 
 Connects to an llmproxy server and provides a conversational interface with
 streaming responses.  Supports model switching including all virtual endpoints
-(free, local, exploratory, standard, deep, and their combinations).
+(llmproxy/free, llmproxy/local, llmproxy/exploratory, llmproxy/standard, llmproxy/deep,
+and their free/local combinations).
 
 Usage
 -----
   python test_tui.py
   python test_tui.py --base-url http://localhost:8080/v1
-  python test_tui.py --model standard --system "You are a concise assistant."
+  python test_tui.py --model llmproxy/standard --system "You are a concise assistant."
 
 Commands (type inside the chat)
 --------------------------------

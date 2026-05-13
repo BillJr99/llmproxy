@@ -50,6 +50,10 @@ app = Flask(__name__)
 logger = logging.getLogger("llmproxy.server")
 
 _REASONING_LEVELS: tuple[str, ...] = ("exploratory", "standard", "deep")
+# "llmproxy" is a reserved provider namespace — real providers must not use this name.
+_RESERVED_PROVIDER_NAME = "llmproxy"
+# Per-candidate timeout for virtual-model cycling so a slow upstream doesn't block all failover.
+_VIRTUAL_CANDIDATE_TIMEOUT = 60
 _VIRTUAL_MODELS: frozenset[str] = frozenset({
     "llmproxy/free", "llmproxy/local",
     *(f"llmproxy/{lvl}" for lvl in _REASONING_LEVELS),
@@ -457,8 +461,6 @@ def get_model(model_id: str) -> Response:
     All virtual models (e.g. "llmproxy/free", "llmproxy/standard/local") are
     handled here via the _VIRTUAL_MODELS membership check.
     """
-    # Handle combo virtual models that contain a slash (e.g. "standard/free").
-    # Base reasoning levels have explicit routes; only combos reach here.
     if model_id in _VIRTUAL_MODELS:
         candidates = _get_virtual_candidates(model_id)
         return jsonify({
@@ -646,11 +648,12 @@ def _proxy_cycling_non_streaming(
     timeout: int,
 ) -> Response:
     """Try each candidate in order, returning the first success."""
+    candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
     last: Optional[Response] = None
     for provider_name, provider_cfg, upstream_model in candidates:
         upstream_payload = {**payload, "model": upstream_model}
         logger.info("  [%s] trying %s/%s", label, provider_name, upstream_model)
-        resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, timeout)
+        resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, candidate_timeout)
         if resp.status_code < 400:
             return resp
         logger.warning(
@@ -673,6 +676,7 @@ def _proxy_cycling_streaming(
     When all candidates fail the last upstream error body is returned so
     clients receive the same diagnostic information as the non-streaming path.
     """
+    candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
     last_error: Optional[tuple[bytes, int, str]] = None
 
     for provider_name, provider_cfg, upstream_model in candidates:
@@ -682,7 +686,7 @@ def _proxy_cycling_streaming(
         headers = _upstream_headers(provider_cfg)
         logger.info("  [%s] trying %s/%s  [streaming]", label, provider_name, upstream_model)
         try:
-            resp = requests.post(url, headers=headers, json=upstream_payload, stream=True, timeout=timeout)
+            resp = requests.post(url, headers=headers, json=upstream_payload, stream=True, timeout=candidate_timeout)
             if resp.status_code >= 400:
                 last_error = (
                     resp.content,
