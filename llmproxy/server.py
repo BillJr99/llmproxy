@@ -215,6 +215,10 @@ def list_models() -> Response:
     Each provider is queried concurrently with a thread pool.  Providers that
     fail (network error, auth failure, etc.) are logged as warnings and
     omitted from the response rather than causing an overall failure.
+
+    A synthetic "free" model is always included when at least one real model
+    with "free" in its ID exists — it cycles through all such models until one
+    succeeds.
     """
     config = load_config()
     providers: dict = config.get("providers", {})
@@ -245,9 +249,34 @@ def list_models() -> Response:
                     provider_name, e,
                 )
 
+    # Prepend the synthetic "free" cycling model when there are real free models.
+    if _get_free_model_candidates():
+        free_entry = {
+            "id": "free",
+            "object": "model",
+            "owned_by": "llmproxy",
+            "name": "free",
+            "_note": "Virtual model: cycles through all models whose ID contains 'free' until one succeeds.",
+        }
+        all_models = [free_entry] + all_models
+
     return jsonify({
         "object": "list",
         "data": all_models,
+    })
+
+
+@app.route("/v1/models/free", methods=["GET"])
+def get_free_model() -> Response:
+    """Return metadata for the synthetic 'free' cycling model."""
+    candidates = _get_free_model_candidates()
+    return jsonify({
+        "id": "free",
+        "object": "model",
+        "owned_by": "llmproxy",
+        "name": "free",
+        "_note": "Virtual model: cycles through all models whose ID contains 'free' until one succeeds.",
+        "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
     })
 
 
@@ -418,6 +447,107 @@ def _proxy_streaming(
 
 
 # ---------------------------------------------------------------------------
+# "free" virtual model — cycles through all models with "free" in their ID
+# ---------------------------------------------------------------------------
+
+def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
+    """
+    Return (provider_name, provider_cfg, upstream_model) for every cached model
+    whose upstream ID contains the word 'free' (case-insensitive).
+    """
+    config = load_config()
+    candidates = []
+    for proxy_id, (provider_name, upstream_id) in list(_model_route_cache.items()):
+        if "free" in upstream_id.lower():
+            provider_cfg = get_provider(config, provider_name)
+            if provider_cfg:
+                candidates.append((provider_name, provider_cfg, upstream_id))
+    return candidates
+
+
+def _proxy_free_non_streaming(
+    endpoint: str,
+    candidates: list[tuple[str, dict, str]],
+    payload: dict,
+    timeout: int,
+) -> Response:
+    """Try each free-model candidate in order, returning the first success."""
+    last: Optional[Response] = None
+    for provider_name, provider_cfg, upstream_model in candidates:
+        upstream_payload = {**payload, "model": upstream_model}
+        logger.info("  [free] trying %s/%s", provider_name, upstream_model)
+        resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, timeout)
+        if resp.status_code < 400:
+            return resp
+        logger.warning(
+            "  [free] %s/%s returned %d, trying next", provider_name, upstream_model, resp.status_code
+        )
+        last = resp
+    return last or _error("No free models available.", status=503)
+
+
+def _proxy_free_streaming(
+    endpoint: str,
+    candidates: list[tuple[str, dict, str]],
+    payload: dict,
+    timeout: int,
+) -> Response:
+    """
+    Try each free-model candidate in order.  Checks the HTTP status code
+    before committing to stream the response, so failed upstreams are skipped
+    transparently before any bytes reach the client.
+    """
+    for provider_name, provider_cfg, upstream_model in candidates:
+        upstream_payload = {**payload, "model": upstream_model}
+        base_url = provider_cfg.get("base_url", "").rstrip("/")
+        url = f"{base_url}/{endpoint}"
+        headers = _upstream_headers(provider_cfg)
+        logger.info("  [free] trying %s/%s  [streaming]", provider_name, upstream_model)
+        try:
+            resp = requests.post(url, headers=headers, json=upstream_payload, stream=True, timeout=timeout)
+            if resp.status_code >= 400:
+                resp.close()
+                logger.warning(
+                    "  [free] %s/%s -> %d, trying next", provider_name, upstream_model, resp.status_code
+                )
+                continue
+
+            # We have a good response — stream it.
+            captured_resp = resp
+            captured_provider = provider_name
+
+            @stream_with_context
+            def generate(r=captured_resp, pn=captured_provider):
+                try:
+                    with r:
+                        first = True
+                        for chunk in r.iter_content(chunk_size=None):
+                            if chunk:
+                                if first:
+                                    logger.info("  upstream %d  first chunk: %s", r.status_code, chunk[:200])
+                                    first = False
+                                yield chunk
+                except requests.exceptions.Timeout:
+                    logger.error("[free] provider=%s timed out mid-stream", pn)
+                    yield b'data: {"error":{"message":"Upstream stream timed out."}}\n\n'
+                except Exception as e:
+                    logger.error("[free] provider=%s mid-stream error: %s", pn, e)
+                    msg = str(e).replace('"', "'")
+                    yield f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
+
+            return Response(generate(), content_type="text/event-stream")
+
+        except requests.exceptions.Timeout:
+            logger.warning("  [free] %s/%s timed out, trying next", provider_name, upstream_model)
+            continue
+        except Exception as e:
+            logger.warning("  [free] %s/%s error: %s, trying next", provider_name, upstream_model, e)
+            continue
+
+    return _error("All free model candidates failed or are unavailable.", status=503)
+
+
+# ---------------------------------------------------------------------------
 # Shared routing logic for all proxied endpoints
 # ---------------------------------------------------------------------------
 
@@ -471,6 +601,9 @@ def _proxy_endpoint(endpoint: str) -> Response:
     Reads the 'model' field from the JSON body, resolves the provider, strips
     the provider prefix from the model ID, and delegates to either the
     streaming or non-streaming proxy helper.
+
+    The special model name "free" cycles through all cached models whose
+    upstream ID contains "free" until one returns a successful response.
     """
     payload = request.get_json(force=True, silent=True)
     if payload is None:
@@ -480,19 +613,34 @@ def _proxy_endpoint(endpoint: str) -> Response:
     if not model_full:
         return _error("Request body must include a 'model' field.", status=400)
 
+    config = load_config()
+    server_cfg = config.get("server", {})
+    is_streaming: bool = payload.get("stream", False)
+
+    if model_full == "free":
+        candidates = _get_free_model_candidates()
+        if not candidates:
+            return _error(
+                "No models with 'free' in their ID are currently available. "
+                "Check that at least one provider exposes a free-tier model.",
+                status=503,
+            )
+        logger.info("  [free] cycling through %d candidate(s)", len(candidates))
+        if is_streaming:
+            timeout = server_cfg.get("stream_timeout", 300)
+            return _proxy_free_streaming(endpoint, candidates, payload, timeout)
+        else:
+            timeout = server_cfg.get("request_timeout", 120)
+            return _proxy_free_non_streaming(endpoint, candidates, payload, timeout)
+
     provider_name, provider_cfg, upstream_model, err = _resolve_provider(model_full)
     if err is not None:
         return err
 
     logger.info("  provider=%s  model=%s", provider_name, upstream_model)
 
-    config = load_config()
-    server_cfg = config.get("server", {})
-
     # Substitute the upstream (non-prefixed) model ID into the payload.
     upstream_payload = {**payload, "model": upstream_model}
-
-    is_streaming: bool = payload.get("stream", False)
 
     if is_streaming:
         timeout = server_cfg.get("stream_timeout", 300)
