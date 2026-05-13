@@ -13,6 +13,9 @@ Schema:
       "model_filter": ["model-a", "model-b"]   // null or absent = allow all
     }
   },
+  "known_free": ["model-a", "provider/model-b"],  // models the 'free' virtual
+                                                  // model should include even
+                                                  // when their ID lacks 'free'
   "server": {
     "host": "0.0.0.0",
     "port": 8080,
@@ -68,6 +71,7 @@ DEFAULT_SERVER_CONFIG = {
 
 DEFAULT_CONFIG: dict = {
     "providers": {},
+    "known_free": [],
     "server": dict(DEFAULT_SERVER_CONFIG),
 }
 
