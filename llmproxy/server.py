@@ -25,6 +25,7 @@ import logging
 import random
 import time
 import traceback
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 
@@ -250,20 +251,28 @@ def list_models() -> Response:
                     provider_name, e,
                 )
 
-    # Prepend the synthetic "free" cycling model when there are real free models.
+    # Prepend synthetic virtual models when their backing candidates exist.
+    synthetic: list[dict] = []
     if _get_free_model_candidates():
-        free_entry = {
+        synthetic.append({
             "id": "free",
             "object": "model",
             "owned_by": "llmproxy",
             "name": "free",
             "_note": "Virtual model: cycles through all models whose ID contains 'free' until one succeeds.",
-        }
-        all_models = [free_entry] + all_models
+        })
+    if _get_local_model_candidates():
+        synthetic.append({
+            "id": "local",
+            "object": "model",
+            "owned_by": "llmproxy",
+            "name": "local",
+            "_note": "Virtual model: cycles through all models served on localhost until one succeeds.",
+        })
 
     return jsonify({
         "object": "list",
-        "data": all_models,
+        "data": synthetic + all_models,
     })
 
 
@@ -277,6 +286,20 @@ def get_free_model() -> Response:
         "owned_by": "llmproxy",
         "name": "free",
         "_note": "Virtual model: cycles through all models whose ID contains 'free' until one succeeds.",
+        "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
+    })
+
+
+@app.route("/v1/models/local", methods=["GET"])
+def get_local_model() -> Response:
+    """Return metadata for the synthetic 'local' cycling model."""
+    candidates = _get_local_model_candidates()
+    return jsonify({
+        "id": "local",
+        "object": "model",
+        "owned_by": "llmproxy",
+        "name": "local",
+        "_note": "Virtual model: cycles through all models served on localhost until one succeeds.",
         "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
     })
 
@@ -448,72 +471,57 @@ def _proxy_streaming(
 
 
 # ---------------------------------------------------------------------------
-# "free" virtual model — cycles through all models with "free" in their ID
+# Virtual models — shared cycling logic + per-model candidate selectors
 # ---------------------------------------------------------------------------
 
-def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
-    """
-    Return (provider_name, provider_cfg, upstream_model) for every cached model
-    whose upstream ID contains the word 'free' (case-insensitive).
-    """
-    config = load_config()
-    candidates = []
-    for proxy_id, (provider_name, upstream_id) in list(_model_route_cache.items()):
-        if "free" in upstream_id.lower():
-            provider_cfg = get_provider(config, provider_name)
-            if provider_cfg:
-                candidates.append((provider_name, provider_cfg, upstream_id))
-    return candidates
-
-
-def _proxy_free_non_streaming(
+def _proxy_cycling_non_streaming(
     endpoint: str,
+    label: str,
     candidates: list[tuple[str, dict, str]],
     payload: dict,
     timeout: int,
 ) -> Response:
-    """Try each free-model candidate in order, returning the first success."""
+    """Try each candidate in order, returning the first success."""
     last: Optional[Response] = None
     for provider_name, provider_cfg, upstream_model in candidates:
         upstream_payload = {**payload, "model": upstream_model}
-        logger.info("  [free] trying %s/%s", provider_name, upstream_model)
+        logger.info("  [%s] trying %s/%s", label, provider_name, upstream_model)
         resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, timeout)
         if resp.status_code < 400:
             return resp
         logger.warning(
-            "  [free] %s/%s returned %d, trying next", provider_name, upstream_model, resp.status_code
+            "  [%s] %s/%s returned %d, trying next", label, provider_name, upstream_model, resp.status_code
         )
         last = resp
-    return last or _error("No free models available.", status=503)
+    return last or _error(f"No '{label}' models available.", status=503)
 
 
-def _proxy_free_streaming(
+def _proxy_cycling_streaming(
     endpoint: str,
+    label: str,
     candidates: list[tuple[str, dict, str]],
     payload: dict,
     timeout: int,
 ) -> Response:
     """
-    Try each free-model candidate in order.  Checks the HTTP status code
-    before committing to stream the response, so failed upstreams are skipped
-    transparently before any bytes reach the client.
+    Try each candidate in order.  Checks the HTTP status code before committing
+    to stream the response so failed upstreams are skipped transparently.
     """
     for provider_name, provider_cfg, upstream_model in candidates:
         upstream_payload = {**payload, "model": upstream_model}
         base_url = provider_cfg.get("base_url", "").rstrip("/")
         url = f"{base_url}/{endpoint}"
         headers = _upstream_headers(provider_cfg)
-        logger.info("  [free] trying %s/%s  [streaming]", provider_name, upstream_model)
+        logger.info("  [%s] trying %s/%s  [streaming]", label, provider_name, upstream_model)
         try:
             resp = requests.post(url, headers=headers, json=upstream_payload, stream=True, timeout=timeout)
             if resp.status_code >= 400:
                 resp.close()
                 logger.warning(
-                    "  [free] %s/%s -> %d, trying next", provider_name, upstream_model, resp.status_code
+                    "  [%s] %s/%s -> %d, trying next", label, provider_name, upstream_model, resp.status_code
                 )
                 continue
 
-            # We have a good response — stream it.
             captured_resp = resp
             captured_provider = provider_name
 
@@ -529,23 +537,70 @@ def _proxy_free_streaming(
                                     first = False
                                 yield chunk
                 except requests.exceptions.Timeout:
-                    logger.error("[free] provider=%s timed out mid-stream", pn)
+                    logger.error("[%s] provider=%s timed out mid-stream", label, pn)
                     yield b'data: {"error":{"message":"Upstream stream timed out."}}\n\n'
                 except Exception as e:
-                    logger.error("[free] provider=%s mid-stream error: %s", pn, e)
+                    logger.error("[%s] provider=%s mid-stream error: %s", label, pn, e)
                     msg = str(e).replace('"', "'")
                     yield f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
 
             return Response(generate(), content_type="text/event-stream")
 
         except requests.exceptions.Timeout:
-            logger.warning("  [free] %s/%s timed out, trying next", provider_name, upstream_model)
+            logger.warning("  [%s] %s/%s timed out, trying next", label, provider_name, upstream_model)
             continue
         except Exception as e:
-            logger.warning("  [free] %s/%s error: %s, trying next", provider_name, upstream_model, e)
+            logger.warning("  [%s] %s/%s error: %s, trying next", label, provider_name, upstream_model, e)
             continue
 
-    return _error("All free model candidates failed or are unavailable.", status=503)
+    return _error(f"All '{label}' model candidates failed or are unavailable.", status=503)
+
+
+def _cycling_candidates(
+    candidates: list[tuple[str, dict, str]],
+) -> list[tuple[str, dict, str]]:
+    """Rotate candidates to a random starting position for load spreading."""
+    if not candidates:
+        return candidates
+    start = random.randrange(len(candidates))
+    return candidates[start:] + candidates[:start]
+
+
+# — "free" candidate selector —
+
+def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
+    """(provider_name, provider_cfg, upstream_model) for every model whose upstream ID contains 'free'."""
+    config = load_config()
+    candidates = []
+    for _proxy_id, (provider_name, upstream_id) in list(_model_route_cache.items()):
+        if "free" in upstream_id.lower():
+            provider_cfg = get_provider(config, provider_name)
+            if provider_cfg:
+                candidates.append((provider_name, provider_cfg, upstream_id))
+    return candidates
+
+
+# — "local" candidate selector —
+
+def _is_local_url(base_url: str) -> bool:
+    """Return True when *base_url* points at a loopback address."""
+    try:
+        hostname = urllib.parse.urlparse(base_url).hostname or ""
+    except Exception:
+        return False
+    hostname = hostname.strip("[]").lower()
+    return hostname in ("localhost", "127.0.0.1", "::1") or hostname.startswith("127.")
+
+
+def _get_local_model_candidates() -> list[tuple[str, dict, str]]:
+    """(provider_name, provider_cfg, upstream_model) for every model whose provider base_url is localhost."""
+    config = load_config()
+    candidates = []
+    for _proxy_id, (provider_name, upstream_id) in list(_model_route_cache.items()):
+        provider_cfg = get_provider(config, provider_name)
+        if provider_cfg and _is_local_url(provider_cfg.get("base_url", "")):
+            candidates.append((provider_name, provider_cfg, upstream_id))
+    return candidates
 
 
 # ---------------------------------------------------------------------------
@@ -618,25 +673,29 @@ def _proxy_endpoint(endpoint: str) -> Response:
     server_cfg = config.get("server", {})
     is_streaming: bool = payload.get("stream", False)
 
-    if model_full == "free":
-        candidates = _get_free_model_candidates()
+    if model_full in ("free", "local"):
+        candidates = (
+            _get_free_model_candidates() if model_full == "free"
+            else _get_local_model_candidates()
+        )
         if not candidates:
+            hint = (
+                "Check that at least one provider exposes a free-tier model."
+                if model_full == "free"
+                else "Check that at least one provider has a localhost base_url."
+            )
             return _error(
-                "No models with 'free' in their ID are currently available. "
-                "Check that at least one provider exposes a free-tier model.",
+                f"No '{model_full}' models are currently available. {hint}",
                 status=503,
             )
-        # Start at a random index so successive requests spread load across all
-        # free-tier candidates rather than always hammering the first one.
-        start = random.randrange(len(candidates))
-        candidates = candidates[start:] + candidates[:start]
-        logger.info("  [free] cycling through %d candidate(s) starting at index %d", len(candidates), start)
+        candidates = _cycling_candidates(candidates)
+        logger.info("  [%s] cycling through %d candidate(s)", model_full, len(candidates))
         if is_streaming:
             timeout = server_cfg.get("stream_timeout", 300)
-            return _proxy_free_streaming(endpoint, candidates, payload, timeout)
+            return _proxy_cycling_streaming(endpoint, model_full, candidates, payload, timeout)
         else:
             timeout = server_cfg.get("request_timeout", 120)
-            return _proxy_free_non_streaming(endpoint, candidates, payload, timeout)
+            return _proxy_cycling_non_streaming(endpoint, model_full, candidates, payload, timeout)
 
     provider_name, provider_cfg, upstream_model, err = _resolve_provider(model_full)
     if err is not None:

@@ -28,7 +28,7 @@ Usage
   python llmproxy_test_client.py --all-models
   python llmproxy_test_client.py --all-models --model-timeout 30
 
-Available suites: health, models, chat, streaming, completions, embeddings, errors, free, all-models
+Available suites: health, models, chat, streaming, completions, embeddings, errors, free, local, all-models
 """
 
 import argparse
@@ -213,7 +213,7 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
 
         # Verify naming convention: every non-synthetic ID should contain at least one slash.
         # "free" is the one built-in synthetic model that intentionally has no slash.
-        SYNTHETIC_IDS = {"free"}
+        SYNTHETIC_IDS = {"free", "local"}
         bad = [m.get("id", "") for m in models
                if "/" not in m.get("id", "") and m.get("id", "") not in SYNTHETIC_IDS]
         if bad:
@@ -225,6 +225,11 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
             results.ok("Synthetic 'free' cycling model is advertised")
         else:
             results.skip("Synthetic 'free' model", "no free-tier models found across providers")
+
+        if any(m.get("id") == "local" for m in models):
+            results.ok("Synthetic 'local' cycling model is advertised")
+        else:
+            results.skip("Synthetic 'local' model", "no providers with a localhost base_url found")
 
         return [m.get("id", "") for m in models]
 
@@ -771,6 +776,126 @@ def test_free_model(base_url: str, **_) -> None:
 
 
 # ---------------------------------------------------------------------------
+# "local" virtual model test suite
+# ---------------------------------------------------------------------------
+
+_LOCAL_PROMPTS = [
+    ("one-word reply",    "Reply with exactly one word: PONG"),
+    ("capital of Germany","What is the capital of Germany? Answer in one word."),
+    ("simple arithmetic",  "What is 6 times 7? Answer with the number only."),
+]
+
+
+def test_local_model(base_url: str, **_) -> None:
+    """
+    Send several short prompts to the synthetic 'local' model and verify that
+    each receives a non-empty response.  Both non-streaming and streaming
+    paths are exercised.  The suite is skipped gracefully when no localhost
+    provider is configured.
+    """
+    print(_head("Local Model Cycling"))
+
+    # Confirm the model is advertised (or skip if no local providers).
+    try:
+        resp = _get(base_url, "/models/local")
+        if resp.status_code == 200:
+            data = resp.json()
+            candidates = data.get("_candidates", [])
+            if not candidates:
+                results.skip("local model cycling", "no providers with a localhost base_url configured")
+                return
+            results.ok("GET /v1/models/local returns 200",
+                       f"{len(candidates)} candidate(s): {', '.join(candidates[:4])}"
+                       + (" ..." if len(candidates) > 4 else ""))
+        else:
+            results.fail("GET /v1/models/local", f"status={resp.status_code}")
+            return
+    except Exception as e:
+        results.fail("GET /v1/models/local", str(e))
+        return
+
+    # Non-streaming prompts.
+    print()
+    print(f"  {BOLD}Non-streaming prompts:{RESET}")
+    for label, prompt in _LOCAL_PROMPTS:
+        payload = {
+            "model": "local",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 32,
+            "temperature": 0,
+        }
+        try:
+            t0 = time.monotonic()
+            resp = _post(base_url, "/chat/completions", payload, timeout=90)
+            elapsed = time.monotonic() - t0
+            if resp.status_code == 200:
+                data = resp.json()
+                choices = data.get("choices", [])
+                content = (choices[0].get("message", {}).get("content") or "") if choices else ""
+                used_model = data.get("model", "?")
+                results.ok(
+                    f"local → {label}",
+                    f"via {used_model}  reply={repr(content[:60])}  {elapsed:.2f}s",
+                )
+            else:
+                results.fail(f"local → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
+        except requests.exceptions.Timeout:
+            results.fail(f"local → {label}", "timed out after 90s")
+        except Exception as e:
+            results.fail(f"local → {label}", str(e))
+
+    # Streaming prompt.
+    print()
+    print(f"  {BOLD}Streaming prompt:{RESET}")
+    stream_payload = {
+        "model": "local",
+        "messages": [{"role": "user", "content": "Count from 1 to 3, one number per line."}],
+        "max_tokens": 32,
+        "temperature": 0,
+        "stream": True,
+    }
+    try:
+        t0 = time.monotonic()
+        chunks = 0
+        parts: list[str] = []
+        print(_info("Streaming tokens: "), end="", flush=True)
+        with _post_stream(base_url, "/chat/completions", stream_payload, timeout=90) as resp:
+            if resp.status_code != 200:
+                results.fail("local (streaming)", f"status={resp.status_code}  body={resp.text[:200]}")
+            else:
+                for raw_line in resp.iter_lines():
+                    if not raw_line:
+                        continue
+                    line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    token = delta.get("content") or delta.get("reasoning_content") or ""
+                    if token:
+                        parts.append(token)
+                        print(token, end="", flush=True)
+                    chunks += 1
+        print()
+        elapsed = time.monotonic() - t0
+        if chunks > 0:
+            results.ok("local (streaming)", f"{chunks} chunks  content={repr(''.join(parts)[:60])}  {elapsed:.2f}s")
+        else:
+            results.fail("local (streaming)", "received 0 chunks")
+    except requests.exceptions.Timeout:
+        results.fail("local (streaming)", "timed out after 90s")
+    except Exception as e:
+        results.fail("local (streaming)", str(e))
+        traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
 # Auto-select a test model from the available list
 # ---------------------------------------------------------------------------
 
@@ -816,7 +941,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--suite",
         action="append",
-        choices=["health", "models", "chat", "streaming", "completions", "embeddings", "errors", "free", "sdk", "all-models"],
+        choices=["health", "models", "chat", "streaming", "completions", "embeddings", "errors", "free", "local", "sdk", "all-models"],
         metavar="SUITE",
         dest="suites",
         help="Run only the named suite(s). Repeatable. Default: all suites.",
@@ -912,6 +1037,10 @@ def main() -> None:
     # ── Free model cycling ───────────────────────────────────────
     if run_all or "free" in (args.suites or []):
         test_free_model(base_url)
+
+    # ── Local model cycling ──────────────────────────────────────
+    if run_all or "local" in (args.suites or []):
+        test_local_model(base_url)
 
     # ── OpenAI SDK ───────────────────────────────────────────────
     if args.use_sdk or "sdk" in (args.suites or []):
