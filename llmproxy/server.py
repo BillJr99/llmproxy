@@ -372,7 +372,7 @@ def list_models() -> Response:
     with _model_route_cache_lock:
         snapshot = dict(_model_route_cache)
     synthetic: list[dict] = []
-    known_free = {m.lower() for m in config.get("known_free", []) or []}
+    known_free = _normalized_known_free(config)
     has_free = any(
         "free" in uid.lower()
         or uid.lower() in known_free
@@ -722,10 +722,43 @@ def _cycling_candidates(
 
 # — "free" candidate selector —
 
+def _normalized_known_free(config: dict) -> set[str]:
+    """
+    Return a lowercased set of valid `known_free` entries from *config*.
+
+    Defensive against user-edited config.json: a missing field, ``None``,
+    a non-list value, or non-string entries never raise — invalid shapes
+    are logged once per call and silently dropped so a typo in config.json
+    cannot turn /v1/models or /v1/chat/completions into a 500.
+    """
+    raw = config.get("known_free")
+    if raw is None:
+        return set()
+    if not isinstance(raw, list):
+        logger.warning(
+            "config['known_free'] must be a list of strings; got %s — ignoring.",
+            type(raw).__name__,
+        )
+        return set()
+    valid: set[str] = set()
+    bad: list = []
+    for entry in raw:
+        if isinstance(entry, str):
+            valid.add(entry.lower())
+        else:
+            bad.append(entry)
+    if bad:
+        logger.warning(
+            "config['known_free'] contains non-string entries (ignored): %r",
+            bad,
+        )
+    return valid
+
+
 def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
     """(provider_name, provider_cfg, upstream_model) for every model whose upstream ID contains 'free' or appears in config['known_free']."""
     config = load_config()
-    known_free = {m.lower() for m in config.get("known_free", []) or []}
+    known_free = _normalized_known_free(config)
     candidates = []
     for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
         is_free = (
