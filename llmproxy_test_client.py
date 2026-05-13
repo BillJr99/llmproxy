@@ -211,7 +211,8 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
         for prov, ids in by_provider.items():
             print(_info(f"  {prov}: {len(ids)} model{'s' if len(ids) != 1 else ''}"))
 
-        # Verify naming convention: every non-synthetic ID should contain at least one slash.
+        # Verify naming convention: every non-synthetic ID should use either the
+        # slash format ("provider/model") or the display format ("model (provider)").
         # Virtual cycling models intentionally have no slash (or a slash only within their name).
         SYNTHETIC_IDS = {
             "free", "local",
@@ -220,12 +221,20 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
             "standard/free", "standard/local",
             "deep/free", "deep/local",
         }
-        bad = [m.get("id", "") for m in models
-               if "/" not in m.get("id", "") and m.get("id", "") not in SYNTHETIC_IDS]
+        def _valid_id(mid: str) -> bool:
+            if mid in SYNTHETIC_IDS:
+                return True
+            if "/" in mid:                          # slash format: provider/model
+                return True
+            if mid.endswith(")") and " (" in mid:  # display format: model (provider)
+                return True
+            return False
+
+        bad = [m.get("id", "") for m in models if not _valid_id(m.get("id", ""))]
         if bad:
-            results.fail("Model IDs follow provider/name convention", f"violating IDs: {bad[:5]}")
+            results.fail("Model IDs follow proxy naming convention", f"violating IDs: {bad[:5]}")
         else:
-            results.ok("All model IDs follow provider/name convention")
+            results.ok("All model IDs follow proxy naming convention")
 
         if any(m.get("id") == "free" for m in models):
             results.ok("Synthetic 'free' cycling model is advertised")
