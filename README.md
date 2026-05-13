@@ -50,8 +50,8 @@ the upstream provider's base URL.
 
 ### The `free` virtual model
 
-llmproxy advertises a special synthetic model named `free`.  When a request
-arrives with `"model": "free"`, the proxy:
+llmproxy advertises a special synthetic model named `llmproxy/free`.  When a request
+arrives with `"model": "llmproxy/free"`, the proxy:
 
 1. Collects every model across all providers whose upstream ID contains the
    word `free` (case-insensitive) **or** whose upstream ID (or full
@@ -70,20 +70,19 @@ useful when any individual free model is rate-limited.
 # Use the free virtual model
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "free", "messages": [{"role": "user", "content": "Hello!"}]}'
+  -d '{"model": "llmproxy/free", "messages": [{"role": "user", "content": "Hello!"}]}'
 
 # Inspect which backends are currently eligible
-curl http://localhost:8080/v1/models/free | jq '._candidates'
+curl http://localhost:8080/v1/models/llmproxy/free | jq '._candidates'
 ```
 
-The `free` model appears at the top of `GET /v1/models` whenever at least one
-eligible backend is available.  It is always named exactly `"free"` — no
-provider prefix.
+The `llmproxy/free` model appears at the top of `GET /v1/models` whenever at least one
+eligible backend is available.
 
 ### The `local` virtual model
 
-llmproxy also advertises a synthetic model named `local`.  When a request
-arrives with `"model": "local"`, the proxy:
+llmproxy also advertises a synthetic model named `llmproxy/local`.  When a request
+arrives with `"model": "llmproxy/local"`, the proxy:
 
 1. Collects every model across all providers whose `base_url` hostname matches
    a loopback address (`localhost`, `127.x.x.x`, `::1`).
@@ -99,17 +98,16 @@ specific model name.
 # Use the local virtual model
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "local", "messages": [{"role": "user", "content": "Hello!"}]}'
+  -d '{"model": "llmproxy/local", "messages": [{"role": "user", "content": "Hello!"}]}'
 
 # Inspect which backends are currently eligible
-curl http://localhost:8080/v1/models/local | jq '._candidates'
+curl http://localhost:8080/v1/models/llmproxy/local | jq '._candidates'
 ```
 
-The `local` model appears in `GET /v1/models` only when at least one model
+The `llmproxy/local` model appears in `GET /v1/models` only when at least one model
 from a localhost-backed provider is present in the route cache — meaning the
 provider must be reachable and its `/models` listing must have been fetched
-successfully.  Like `free`, it carries no provider prefix — the model name is
-simply `"local"`.
+successfully.
 
 ### Reasoning-level virtual models
 
@@ -118,29 +116,29 @@ level** — `exploratory`, `standard`, or `deep` — to group them by how much
 thinking effort they are expected to apply.  When at least one model is tagged
 with a given level, llmproxy exposes corresponding virtual endpoints:
 
-| Virtual model name   | Selects                                                       |
-|----------------------|---------------------------------------------------------------|
-| `exploratory`        | All models tagged `exploratory`                               |
-| `standard`           | All models tagged `standard`                                  |
-| `deep`               | All models tagged `deep`                                      |
-| `exploratory/free`   | Models tagged `exploratory` **and** qualifying as free-tier   |
-| `exploratory/local`  | Models tagged `exploratory` **and** served on localhost       |
-| `standard/free`      | Models tagged `standard` **and** qualifying as free-tier      |
-| `standard/local`     | Models tagged `standard` **and** served on localhost          |
-| `deep/free`          | Models tagged `deep` **and** qualifying as free-tier          |
-| `deep/local`         | Models tagged `deep` **and** served on localhost              |
+| Virtual model name          | Selects                                                       |
+|-----------------------------|---------------------------------------------------------------|
+| `llmproxy/exploratory`      | All models tagged `exploratory`                               |
+| `llmproxy/standard`         | All models tagged `standard`                                  |
+| `llmproxy/deep`             | All models tagged `deep`                                      |
+| `llmproxy/exploratory/free` | Models tagged `exploratory` **and** qualifying as free-tier   |
+| `llmproxy/exploratory/local`| Models tagged `exploratory` **and** served on localhost       |
+| `llmproxy/standard/free`    | Models tagged `standard` **and** qualifying as free-tier      |
+| `llmproxy/standard/local`   | Models tagged `standard` **and** served on localhost          |
+| `llmproxy/deep/free`        | Models tagged `deep` **and** qualifying as free-tier          |
+| `llmproxy/deep/local`       | Models tagged `deep` **and** served on localhost              |
 
 Each virtual endpoint uses the same random-start round-robin with automatic
-failover as `free` and `local`.
+failover as `llmproxy/free` and `llmproxy/local`.
 
 ```bash
 # Use the deep reasoning virtual model
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "deep", "messages": [{"role": "user", "content": "Prove P≠NP"}]}'
+  -d '{"model": "llmproxy/deep", "messages": [{"role": "user", "content": "Prove P≠NP"}]}'
 
-# Inspect which backends are eligible for standard/free
-curl http://localhost:8080/v1/models/standard%2Ffree | jq '._candidates'
+# Inspect which backends are eligible for llmproxy/standard/free
+curl http://localhost:8080/v1/models/llmproxy/standard%2Ffree | jq '._candidates'
 ```
 
 Tags are configured via the `model_reasoning` field — see

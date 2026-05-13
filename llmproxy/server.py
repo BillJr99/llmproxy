@@ -445,76 +445,6 @@ def list_models() -> Response:
     })
 
 
-@app.route("/v1/models/free", methods=["GET"])
-def get_free_model() -> Response:
-    """Return metadata for the synthetic 'free' cycling model."""
-    candidates = _get_free_model_candidates()
-    return jsonify({
-        "id": "free",
-        "object": "model",
-        "owned_by": "llmproxy",
-        "name": "free",
-        "_note": "Virtual model: cycles through all models whose ID contains 'free' (or appears in config['known_free']) until one succeeds.",
-        "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
-    })
-
-
-@app.route("/v1/models/local", methods=["GET"])
-def get_local_model() -> Response:
-    """Return metadata for the synthetic 'local' cycling model."""
-    candidates = _get_local_model_candidates()
-    return jsonify({
-        "id": "local",
-        "object": "model",
-        "owned_by": "llmproxy",
-        "name": "local",
-        "_note": "Virtual model: cycles through all models served on localhost until one succeeds.",
-        "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
-    })
-
-
-@app.route("/v1/models/exploratory", methods=["GET"])
-def get_exploratory_model() -> Response:
-    """Return metadata for the synthetic 'exploratory' reasoning virtual model."""
-    candidates = _get_reasoning_model_candidates("exploratory")
-    return jsonify({
-        "id": "exploratory",
-        "object": "model",
-        "owned_by": "llmproxy",
-        "name": "exploratory",
-        "_note": "Virtual model: cycles through all models tagged 'exploratory' reasoning until one succeeds.",
-        "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
-    })
-
-
-@app.route("/v1/models/standard", methods=["GET"])
-def get_standard_model() -> Response:
-    """Return metadata for the synthetic 'standard' reasoning virtual model."""
-    candidates = _get_reasoning_model_candidates("standard")
-    return jsonify({
-        "id": "standard",
-        "object": "model",
-        "owned_by": "llmproxy",
-        "name": "standard",
-        "_note": "Virtual model: cycles through all models tagged 'standard' reasoning until one succeeds.",
-        "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
-    })
-
-
-@app.route("/v1/models/deep", methods=["GET"])
-def get_deep_model() -> Response:
-    """Return metadata for the synthetic 'deep' reasoning virtual model."""
-    candidates = _get_reasoning_model_candidates("deep")
-    return jsonify({
-        "id": "deep",
-        "object": "model",
-        "owned_by": "llmproxy",
-        "name": "deep",
-        "_note": "Virtual model: cycles through all models tagged 'deep' reasoning until one succeeds.",
-        "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
-    })
-
-
 @app.route("/v1/models/<path:model_id>", methods=["GET"])
 def get_model(model_id: str) -> Response:
     """
@@ -524,8 +454,8 @@ def get_model(model_id: str) -> Response:
     and the slash format ("provider/upstream_model").  The route cache is
     checked first so display-format IDs resolve correctly without parsing.
 
-    Combo virtual models (e.g. "exploratory/free", "standard/local") are
-    handled here because they look like a provider/model path but are not.
+    All virtual models (e.g. "llmproxy/free", "llmproxy/standard/local") are
+    handled here via the _VIRTUAL_MODELS membership check.
     """
     # Handle combo virtual models that contain a slash (e.g. "standard/free").
     # Base reasoning levels have explicit routes; only combos reach here.

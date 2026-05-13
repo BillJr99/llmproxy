@@ -58,11 +58,11 @@ RED     = "\033[31m"
 _W = 72   # display width
 
 _VIRTUAL_IDS = frozenset({
-    "free", "local",
-    "exploratory", "standard", "deep",
-    "exploratory/free", "exploratory/local",
-    "standard/free", "standard/local",
-    "deep/free", "deep/local",
+    "llmproxy/free", "llmproxy/local",
+    "llmproxy/exploratory", "llmproxy/standard", "llmproxy/deep",
+    "llmproxy/exploratory/free", "llmproxy/exploratory/local",
+    "llmproxy/standard/free", "llmproxy/standard/local",
+    "llmproxy/deep/free", "llmproxy/deep/local",
 })
 
 
@@ -101,7 +101,7 @@ def _fetch_models(base_url: str) -> Optional[list[dict]]:
 def _auto_pick(models: list[dict]) -> Optional[str]:
     """Pick a sensible default model from the list."""
     ids = {m["id"] for m in models}
-    for pref in ("standard", "free", "local", "exploratory", "deep"):
+    for pref in ("llmproxy/standard", "llmproxy/free", "llmproxy/local", "llmproxy/exploratory", "llmproxy/deep"):
         if pref in ids:
             return pref
     if models:

@@ -215,18 +215,18 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
         # slash format ("provider/model") or the display format ("model (provider)").
         # Virtual cycling models intentionally have no slash (or a slash only within their name).
         SYNTHETIC_IDS = {
-            "free", "local",
-            "exploratory", "standard", "deep",
-            "exploratory/free", "exploratory/local",
-            "standard/free", "standard/local",
-            "deep/free", "deep/local",
+            "llmproxy/free", "llmproxy/local",
+            "llmproxy/exploratory", "llmproxy/standard", "llmproxy/deep",
+            "llmproxy/exploratory/free", "llmproxy/exploratory/local",
+            "llmproxy/standard/free", "llmproxy/standard/local",
+            "llmproxy/deep/free", "llmproxy/deep/local",
         }
         def _valid_id(mid: str) -> bool:
             if mid in SYNTHETIC_IDS:
                 return True
-            if "/" in mid:                          # slash format: provider/model
-                return True
             if mid.endswith(")") and " (" in mid:  # display format: model (provider)
+                return True
+            if "/" in mid:                          # slash format: provider/model
                 return True
             return False
 
@@ -236,26 +236,26 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
         else:
             results.ok("All model IDs follow proxy naming convention")
 
-        if any(m.get("id") == "free" for m in models):
-            results.ok("Synthetic 'free' cycling model is advertised")
+        if any(m.get("id") == "llmproxy/free" for m in models):
+            results.ok("Synthetic 'llmproxy/free' cycling model is advertised")
         else:
-            results.skip("Synthetic 'free' model", "no free-tier models found across providers")
+            results.skip("Synthetic 'llmproxy/free' model", "no free-tier models found across providers")
 
-        if any(m.get("id") == "local" for m in models):
-            results.ok("Synthetic 'local' cycling model is advertised")
+        if any(m.get("id") == "llmproxy/local" for m in models):
+            results.ok("Synthetic 'llmproxy/local' cycling model is advertised")
         else:
-            results.skip("Synthetic 'local' model", "no providers with a localhost base_url found")
+            results.skip("Synthetic 'llmproxy/local' model", "no providers with a localhost base_url found")
 
         for _level in ("exploratory", "standard", "deep"):
-            if any(m.get("id") == _level for m in models):
-                results.ok(f"Synthetic '{_level}' reasoning model is advertised")
+            if any(m.get("id") == f"llmproxy/{_level}" for m in models):
+                results.ok(f"Synthetic 'llmproxy/{_level}' reasoning model is advertised")
             else:
                 results.skip(
-                    f"Synthetic '{_level}' reasoning model",
+                    f"Synthetic 'llmproxy/{_level}' reasoning model",
                     f"no models tagged '{_level}' in config['model_reasoning']",
                 )
             for _suffix in ("free", "local"):
-                _combo = f"{_level}/{_suffix}"
+                _combo = f"llmproxy/{_level}/{_suffix}"
                 if any(m.get("id") == _combo for m in models):
                     results.ok(f"Synthetic '{_combo}' combo model is advertised")
 
@@ -342,7 +342,7 @@ def test_streaming(base_url: str, model: str, **_) -> None:
         t0 = time.monotonic()
         chunks_received = 0
         content_parts = []
-        sample_deltas: list[dict] = []
+        sample_chunks: list[dict] = []
 
         with _post_stream(base_url, "/chat/completions", payload) as resp:
             if resp.status_code != 200:
@@ -366,9 +366,9 @@ def test_streaming(base_url: str, model: str, **_) -> None:
                     chunk = json.loads(data_str)
                 except json.JSONDecodeError:
                     continue
+                if len(sample_chunks) < 3:
+                    sample_chunks.append(chunk)
                 delta = chunk.get("choices", [{}])[0].get("delta", {})
-                if delta and len(sample_deltas) < 3:
-                    sample_deltas.append(delta)
                 token = delta.get("content") or delta.get("reasoning_content") or ""
                 if token:
                     content_parts.append(token)
@@ -387,12 +387,12 @@ def test_streaming(base_url: str, model: str, **_) -> None:
             if full_content:
                 results.ok("Stream produced non-empty content", repr(full_content[:60]))
             else:
-                delta_info = f"  sample deltas: {sample_deltas}" if sample_deltas else ""
+                chunk_info = f"  sample chunks: {sample_chunks}" if sample_chunks else ""
                 results.skip(
                     "Stream content check",
                     "chunks received but all content tokens were empty "
                     "(model may use non-standard delta fields)"
-                    + delta_info,
+                    + chunk_info,
                 )
         else:
             results.fail("POST /v1/chat/completions (stream)", "received 0 chunks")
@@ -572,7 +572,7 @@ def _stream_response(base_url: str, model: str, prompt: str, timeout: int) -> tu
         "stream": True,
     }
     collected: list[str] = []
-    sample_deltas: list[dict] = []
+    sample_chunks: list[dict] = []
     error: str = ""
 
     try:
@@ -599,9 +599,9 @@ def _stream_response(base_url: str, model: str, prompt: str, timeout: int) -> tu
                     chunk = json.loads(data_str)
                 except json.JSONDecodeError:
                     continue
+                if len(sample_chunks) < 3:
+                    sample_chunks.append(chunk)
                 delta = chunk.get("choices", [{}])[0].get("delta", {})
-                if delta and len(sample_deltas) < 3:
-                    sample_deltas.append(delta)
                 token = delta.get("content") or delta.get("reasoning_content") or ""
                 if token:
                     collected.append(token)
@@ -616,8 +616,8 @@ def _stream_response(base_url: str, model: str, prompt: str, timeout: int) -> tu
     if not response_text and error:
         return False, "", error
     if not response_text:
-        delta_info = f" — sample deltas: {sample_deltas}" if sample_deltas else ""
-        return False, "", f"no content tokens received (model may use non-standard delta fields){delta_info}"
+        chunk_info = f" — sample chunks: {sample_chunks}" if sample_chunks else ""
+        return False, "", f"no content tokens received (model may use non-standard delta fields){chunk_info}"
     return True, response_text, error
 
 
@@ -720,18 +720,18 @@ def test_free_model(base_url: str, **_) -> None:
     # Confirm the model is advertised; skip suite if no free-tier candidates exist.
     candidates: list[str] = []
     try:
-        resp = _get(base_url, "/models/free")
+        resp = _get(base_url, "/models/llmproxy/free")
         if resp.status_code == 200:
             data = resp.json()
             candidates = data.get("_candidates", [])
-            results.ok("GET /v1/models/free returns 200",
+            results.ok("GET /v1/models/llmproxy/free returns 200",
                        f"{len(candidates)} candidate(s): {', '.join(candidates[:4])}"
                        + (" ..." if len(candidates) > 4 else ""))
         else:
-            results.fail("GET /v1/models/free", f"status={resp.status_code}")
+            results.fail("GET /v1/models/llmproxy/free", f"status={resp.status_code}")
             return
     except Exception as e:
-        results.fail("GET /v1/models/free", str(e))
+        results.fail("GET /v1/models/llmproxy/free", str(e))
         return
 
     if not candidates:
@@ -759,7 +759,7 @@ def test_free_model(base_url: str, **_) -> None:
     print(f"  {BOLD}Non-streaming prompts:{RESET}")
     for label, prompt in _FREE_PROMPTS:
         payload = {
-            "model": "free",
+            "model": "llmproxy/free",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 32,
             "temperature": 0,
@@ -775,26 +775,26 @@ def test_free_model(base_url: str, **_) -> None:
                 used_model = data.get("model", "?")
                 if content:
                     results.ok(
-                        f"free → {label}",
+                        f"llmproxy/free → {label}",
                         f"via {used_model}  reply={repr(content[:60])}  {elapsed:.2f}s",
                     )
                 else:
                     results.skip(
-                        f"free → {label}",
+                        f"llmproxy/free → {label}",
                         f"via {used_model}  no content in response (model may use non-standard fields)",
                     )
             else:
-                results.fail(f"free → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
+                results.fail(f"llmproxy/free → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
         except requests.exceptions.Timeout:
-            results.fail(f"free → {label}", "timed out after 90s")
+            results.fail(f"llmproxy/free → {label}", "timed out after 90s")
         except Exception as e:
-            results.fail(f"free → {label}", str(e))
+            results.fail(f"llmproxy/free → {label}", str(e))
 
     # Streaming prompt.
     print()
     print(f"  {BOLD}Streaming prompt:{RESET}")
     stream_payload = {
-        "model": "free",
+        "model": "llmproxy/free",
         "messages": [{"role": "user", "content": "Count from 1 to 3, one number per line."}],
         "max_tokens": 32,
         "temperature": 0,
@@ -804,11 +804,11 @@ def test_free_model(base_url: str, **_) -> None:
         t0 = time.monotonic()
         chunks = 0
         parts: list[str] = []
-        sample_deltas: list[dict] = []
+        sample_chunks: list[dict] = []
         print(_info("Streaming tokens: "), end="", flush=True)
         with _post_stream(base_url, "/chat/completions", stream_payload, timeout=90) as resp:
             if resp.status_code != 200:
-                results.fail("free (streaming)", f"status={resp.status_code}  body={resp.text[:200]}")
+                results.fail("llmproxy/free (streaming)", f"status={resp.status_code}  body={resp.text[:200]}")
             else:
                 for raw_line in resp.iter_lines():
                     if not raw_line:
@@ -823,9 +823,9 @@ def test_free_model(base_url: str, **_) -> None:
                         chunk = json.loads(data_str)
                     except json.JSONDecodeError:
                         continue
+                    if len(sample_chunks) < 3:
+                        sample_chunks.append(chunk)
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    if delta and len(sample_deltas) < 3:
-                        sample_deltas.append(delta)
                     token = delta.get("content") or delta.get("reasoning_content") or ""
                     chunks += 1
                     if token:
@@ -835,16 +835,16 @@ def test_free_model(base_url: str, **_) -> None:
         elapsed = time.monotonic() - t0
         full_content = "".join(parts)
         if full_content:
-            results.ok("free (streaming)", f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s")
+            results.ok("llmproxy/free (streaming)", f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s")
         elif chunks > 0:
-            delta_info = f"  sample deltas: {sample_deltas}" if sample_deltas else ""
-            results.skip("free (streaming)", f"{chunks} chunks received but no content tokens (model may use non-standard delta fields){delta_info}")
+            chunk_info = f"  sample chunks: {sample_chunks}" if sample_chunks else ""
+            results.skip("llmproxy/free (streaming)", f"{chunks} chunks received but no content tokens (model may use non-standard delta fields){chunk_info}")
         else:
-            results.fail("free (streaming)", "received 0 chunks")
+            results.fail("llmproxy/free (streaming)", "received 0 chunks")
     except requests.exceptions.Timeout:
-        results.fail("free (streaming)", "timed out after 90s")
+        results.fail("llmproxy/free (streaming)", "timed out after 90s")
     except Exception as e:
-        results.fail("free (streaming)", str(e))
+        results.fail("llmproxy/free (streaming)", str(e))
         traceback.print_exc()
 
 
@@ -870,21 +870,21 @@ def test_local_model(base_url: str, **_) -> None:
 
     # Confirm the model is advertised (or skip if no local providers).
     try:
-        resp = _get(base_url, "/models/local")
+        resp = _get(base_url, "/models/llmproxy/local")
         if resp.status_code == 200:
             data = resp.json()
             candidates = data.get("_candidates", [])
             if not candidates:
                 results.skip("local model cycling", "no providers with a localhost base_url configured")
                 return
-            results.ok("GET /v1/models/local returns 200",
+            results.ok("GET /v1/models/llmproxy/local returns 200",
                        f"{len(candidates)} candidate(s): {', '.join(candidates[:4])}"
                        + (" ..." if len(candidates) > 4 else ""))
         else:
-            results.fail("GET /v1/models/local", f"status={resp.status_code}")
+            results.fail("GET /v1/models/llmproxy/local", f"status={resp.status_code}")
             return
     except Exception as e:
-        results.fail("GET /v1/models/local", str(e))
+        results.fail("GET /v1/models/llmproxy/local", str(e))
         return
 
     # Non-streaming prompts.
@@ -892,7 +892,7 @@ def test_local_model(base_url: str, **_) -> None:
     print(f"  {BOLD}Non-streaming prompts:{RESET}")
     for label, prompt in _LOCAL_PROMPTS:
         payload = {
-            "model": "local",
+            "model": "llmproxy/local",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 32,
             "temperature": 0,
@@ -908,26 +908,26 @@ def test_local_model(base_url: str, **_) -> None:
                 used_model = data.get("model", "?")
                 if content:
                     results.ok(
-                        f"local → {label}",
+                        f"llmproxy/local → {label}",
                         f"via {used_model}  reply={repr(content[:60])}  {elapsed:.2f}s",
                     )
                 else:
                     results.skip(
-                        f"local → {label}",
+                        f"llmproxy/local → {label}",
                         f"via {used_model}  no content in response (model may use non-standard fields)",
                     )
             else:
-                results.fail(f"local → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
+                results.fail(f"llmproxy/local → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
         except requests.exceptions.Timeout:
-            results.fail(f"local → {label}", "timed out after 90s")
+            results.fail(f"llmproxy/local → {label}", "timed out after 90s")
         except Exception as e:
-            results.fail(f"local → {label}", str(e))
+            results.fail(f"llmproxy/local → {label}", str(e))
 
     # Streaming prompt.
     print()
     print(f"  {BOLD}Streaming prompt:{RESET}")
     stream_payload = {
-        "model": "local",
+        "model": "llmproxy/local",
         "messages": [{"role": "user", "content": "Count from 1 to 3, one number per line."}],
         "max_tokens": 32,
         "temperature": 0,
@@ -937,11 +937,11 @@ def test_local_model(base_url: str, **_) -> None:
         t0 = time.monotonic()
         chunks = 0
         parts: list[str] = []
-        sample_deltas: list[dict] = []
+        sample_chunks: list[dict] = []
         print(_info("Streaming tokens: "), end="", flush=True)
         with _post_stream(base_url, "/chat/completions", stream_payload, timeout=90) as resp:
             if resp.status_code != 200:
-                results.fail("local (streaming)", f"status={resp.status_code}  body={resp.text[:200]}")
+                results.fail("llmproxy/local (streaming)", f"status={resp.status_code}  body={resp.text[:200]}")
             else:
                 for raw_line in resp.iter_lines():
                     if not raw_line:
@@ -956,9 +956,9 @@ def test_local_model(base_url: str, **_) -> None:
                         chunk = json.loads(data_str)
                     except json.JSONDecodeError:
                         continue
+                    if len(sample_chunks) < 3:
+                        sample_chunks.append(chunk)
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    if delta and len(sample_deltas) < 3:
-                        sample_deltas.append(delta)
                     token = delta.get("content") or delta.get("reasoning_content") or ""
                     chunks += 1
                     if token:
@@ -968,16 +968,16 @@ def test_local_model(base_url: str, **_) -> None:
         elapsed = time.monotonic() - t0
         full_content = "".join(parts)
         if full_content:
-            results.ok("local (streaming)", f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s")
+            results.ok("llmproxy/local (streaming)", f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s")
         elif chunks > 0:
-            delta_info = f"  sample deltas: {sample_deltas}" if sample_deltas else ""
-            results.skip("local (streaming)", f"{chunks} chunks received but no content tokens (model may use non-standard delta fields){delta_info}")
+            chunk_info = f"  sample chunks: {sample_chunks}" if sample_chunks else ""
+            results.skip("llmproxy/local (streaming)", f"{chunks} chunks received but no content tokens (model may use non-standard delta fields){chunk_info}")
         else:
-            results.fail("local (streaming)", "received 0 chunks")
+            results.fail("llmproxy/local (streaming)", "received 0 chunks")
     except requests.exceptions.Timeout:
-        results.fail("local (streaming)", "timed out after 90s")
+        results.fail("llmproxy/local (streaming)", "timed out after 90s")
     except Exception as e:
-        results.fail("local (streaming)", str(e))
+        results.fail("llmproxy/local (streaming)", str(e))
         traceback.print_exc()
 
 
@@ -1002,30 +1002,30 @@ def test_reasoning_virtual_model(base_url: str, level: str, **_) -> None:
 
     candidates: list[str] = []
     try:
-        resp = _get(base_url, f"/models/{level}")
+        resp = _get(base_url, f"/models/llmproxy/{level}")
         if resp.status_code == 200:
             data = resp.json()
             candidates = data.get("_candidates", [])
-            assert data.get("id") == level, f"id mismatch: {data.get('id')!r}"
+            assert data.get("id") == f"llmproxy/{level}", f"id mismatch: {data.get('id')!r}"
             results.ok(
-                f"GET /v1/models/{level} returns 200",
+                f"GET /v1/models/llmproxy/{level} returns 200",
                 (f"{len(candidates)} candidate(s): {', '.join(candidates[:4])}"
                  + (" …" if len(candidates) > 4 else "")) if candidates
                 else "0 candidates",
             )
         else:
-            results.fail(f"GET /v1/models/{level}", f"status={resp.status_code}")
+            results.fail(f"GET /v1/models/llmproxy/{level}", f"status={resp.status_code}")
             return
     except AssertionError as e:
-        results.fail(f"GET /v1/models/{level} schema", str(e))
+        results.fail(f"GET /v1/models/llmproxy/{level} schema", str(e))
         return
     except Exception as e:
-        results.fail(f"GET /v1/models/{level}", str(e))
+        results.fail(f"GET /v1/models/llmproxy/{level}", str(e))
         return
 
     if not candidates:
         results.skip(
-            f"{level} model cycling",
+            f"llmproxy/{level} model cycling",
             f"no models tagged '{level}' in config['model_reasoning']",
         )
         return
@@ -1035,7 +1035,7 @@ def test_reasoning_virtual_model(base_url: str, level: str, **_) -> None:
     print(f"  {BOLD}Non-streaming prompts:{RESET}")
     for label, prompt in _REASONING_PROMPTS:
         payload = {
-            "model": level,
+            "model": f"llmproxy/{level}",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 32,
             "temperature": 0,
@@ -1051,26 +1051,26 @@ def test_reasoning_virtual_model(base_url: str, level: str, **_) -> None:
                 used_model = data.get("model", "?")
                 if content:
                     results.ok(
-                        f"{level} → {label}",
+                        f"llmproxy/{level} → {label}",
                         f"via {used_model}  reply={repr(content[:60])}  {elapsed:.2f}s",
                     )
                 else:
                     results.skip(
-                        f"{level} → {label}",
+                        f"llmproxy/{level} → {label}",
                         f"via {used_model}  no content (model may use non-standard fields)",
                     )
             else:
-                results.fail(f"{level} → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
+                results.fail(f"llmproxy/{level} → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
         except requests.exceptions.Timeout:
-            results.fail(f"{level} → {label}", "timed out after 90s")
+            results.fail(f"llmproxy/{level} → {label}", "timed out after 90s")
         except Exception as e:
-            results.fail(f"{level} → {label}", str(e))
+            results.fail(f"llmproxy/{level} → {label}", str(e))
 
     # Streaming prompt.
     print()
     print(f"  {BOLD}Streaming prompt:{RESET}")
     stream_payload = {
-        "model": level,
+        "model": f"llmproxy/{level}",
         "messages": [{"role": "user", "content": "Count from 1 to 3, one number per line."}],
         "max_tokens": 32,
         "temperature": 0,
@@ -1080,11 +1080,11 @@ def test_reasoning_virtual_model(base_url: str, level: str, **_) -> None:
         t0 = time.monotonic()
         chunks = 0
         parts: list[str] = []
-        sample_deltas: list[dict] = []
+        sample_chunks: list[dict] = []
         print(_info("Streaming tokens: "), end="", flush=True)
         with _post_stream(base_url, "/chat/completions", stream_payload, timeout=90) as resp:
             if resp.status_code != 200:
-                results.fail(f"{level} (streaming)", f"status={resp.status_code}  body={resp.text[:200]}")
+                results.fail(f"llmproxy/{level} (streaming)", f"status={resp.status_code}  body={resp.text[:200]}")
             else:
                 for raw_line in resp.iter_lines():
                     if not raw_line:
@@ -1099,9 +1099,9 @@ def test_reasoning_virtual_model(base_url: str, level: str, **_) -> None:
                         chunk = json.loads(data_str)
                     except json.JSONDecodeError:
                         continue
+                    if len(sample_chunks) < 3:
+                        sample_chunks.append(chunk)
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    if delta and len(sample_deltas) < 3:
-                        sample_deltas.append(delta)
                     token = delta.get("content") or delta.get("reasoning_content") or ""
                     chunks += 1
                     if token:
@@ -1112,21 +1112,21 @@ def test_reasoning_virtual_model(base_url: str, level: str, **_) -> None:
         full_content = "".join(parts)
         if full_content:
             results.ok(
-                f"{level} (streaming)",
+                f"llmproxy/{level} (streaming)",
                 f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s",
             )
         elif chunks > 0:
-            delta_info = f"  sample deltas: {sample_deltas}" if sample_deltas else ""
+            chunk_info = f"  sample chunks: {sample_chunks}" if sample_chunks else ""
             results.skip(
-                f"{level} (streaming)",
-                f"{chunks} chunks received but no content tokens (model may use non-standard delta fields){delta_info}",
+                f"llmproxy/{level} (streaming)",
+                f"{chunks} chunks received but no content tokens (model may use non-standard delta fields){chunk_info}",
             )
         else:
-            results.fail(f"{level} (streaming)", "received 0 chunks")
+            results.fail(f"llmproxy/{level} (streaming)", "received 0 chunks")
     except requests.exceptions.Timeout:
-        results.fail(f"{level} (streaming)", "timed out after 90s")
+        results.fail(f"llmproxy/{level} (streaming)", "timed out after 90s")
     except Exception as e:
-        results.fail(f"{level} (streaming)", str(e))
+        results.fail(f"llmproxy/{level} (streaming)", str(e))
         traceback.print_exc()
 
 
@@ -1144,9 +1144,10 @@ def test_reasoning_combos(base_url: str, **_) -> None:
 
     for level in _levels:
         for suffix in _suffixes:
-            combo = f"{level}/{suffix}"
+            combo = f"llmproxy/{level}/{suffix}"
+            url_path = f"/models/llmproxy/{level}/{suffix}"
             try:
-                resp = _get(base_url, f"/models/{level}/{suffix}")
+                resp = _get(base_url, url_path)
                 if resp.status_code == 200:
                     data = resp.json()
                     assert data.get("id") == combo, f"id mismatch: {data.get('id')!r} != {combo!r}"
@@ -1210,8 +1211,8 @@ def _pick_model(models: list[str], preferred: Optional[str]) -> Optional[str]:
         return None
     # Prefer the synthetic "free" cycling model when it's available — it
     # automatically routes to a working free-tier backend.
-    if "free" in models:
-        return "free"
+    if "llmproxy/free" in models:
+        return "llmproxy/free"
     # Fall back to other free or small models by name.
     for keyword in ("free", "mini", "flash", "haiku", "small", "tiny", "7b", "8b"):
         for m in models:
