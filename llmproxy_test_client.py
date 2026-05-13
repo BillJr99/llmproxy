@@ -713,10 +713,16 @@ def test_free_model(base_url: str, **_) -> None:
                 choices = data.get("choices", [])
                 content = (choices[0].get("message", {}).get("content") or "") if choices else ""
                 used_model = data.get("model", "?")
-                results.ok(
-                    f"free → {label}",
-                    f"via {used_model}  reply={repr(content[:60])}  {elapsed:.2f}s",
-                )
+                if content:
+                    results.ok(
+                        f"free → {label}",
+                        f"via {used_model}  reply={repr(content[:60])}  {elapsed:.2f}s",
+                    )
+                else:
+                    results.skip(
+                        f"free → {label}",
+                        f"via {used_model}  no content in response (model may use non-standard fields)",
+                    )
             else:
                 results.fail(f"free → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
         except requests.exceptions.Timeout:
@@ -758,14 +764,17 @@ def test_free_model(base_url: str, **_) -> None:
                         continue
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
                     token = delta.get("content") or delta.get("reasoning_content") or ""
+                    chunks += 1
                     if token:
                         parts.append(token)
                         print(token, end="", flush=True)
-                    chunks += 1
         print()  # newline after tokens
         elapsed = time.monotonic() - t0
-        if chunks > 0:
-            results.ok("free (streaming)", f"{chunks} chunks  content={repr(''.join(parts)[:60])}  {elapsed:.2f}s")
+        full_content = "".join(parts)
+        if full_content:
+            results.ok("free (streaming)", f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s")
+        elif chunks > 0:
+            results.skip("free (streaming)", f"{chunks} chunks received but no content tokens (model may use non-standard delta fields)")
         else:
             results.fail("free (streaming)", "received 0 chunks")
     except requests.exceptions.Timeout:
@@ -833,10 +842,16 @@ def test_local_model(base_url: str, **_) -> None:
                 choices = data.get("choices", [])
                 content = (choices[0].get("message", {}).get("content") or "") if choices else ""
                 used_model = data.get("model", "?")
-                results.ok(
-                    f"local → {label}",
-                    f"via {used_model}  reply={repr(content[:60])}  {elapsed:.2f}s",
-                )
+                if content:
+                    results.ok(
+                        f"local → {label}",
+                        f"via {used_model}  reply={repr(content[:60])}  {elapsed:.2f}s",
+                    )
+                else:
+                    results.skip(
+                        f"local → {label}",
+                        f"via {used_model}  no content in response (model may use non-standard fields)",
+                    )
             else:
                 results.fail(f"local → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
         except requests.exceptions.Timeout:
@@ -878,14 +893,17 @@ def test_local_model(base_url: str, **_) -> None:
                         continue
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
                     token = delta.get("content") or delta.get("reasoning_content") or ""
+                    chunks += 1
                     if token:
                         parts.append(token)
                         print(token, end="", flush=True)
-                    chunks += 1
         print()
         elapsed = time.monotonic() - t0
-        if chunks > 0:
-            results.ok("local (streaming)", f"{chunks} chunks  content={repr(''.join(parts)[:60])}  {elapsed:.2f}s")
+        full_content = "".join(parts)
+        if full_content:
+            results.ok("local (streaming)", f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s")
+        elif chunks > 0:
+            results.skip("local (streaming)", f"{chunks} chunks received but no content tokens (model may use non-standard delta fields)")
         else:
             results.fail("local (streaming)", "received 0 chunks")
     except requests.exceptions.Timeout:

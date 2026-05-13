@@ -104,8 +104,8 @@ curl http://localhost:8080/v1/models/local | jq '._candidates'
 ```
 
 The `local` model appears in `GET /v1/models` only when at least one provider
-with a localhost `base_url` is configured and reachable.  Like `free`, it
-carries no provider prefix — the model name is simply `"local"`.
+with a localhost `base_url` is configured.  Like `free`, it carries no
+provider prefix — the model name is simply `"local"`.
 
 ---
 
@@ -130,7 +130,8 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "port": 8080,
     "log_level": "INFO",
     "request_timeout": 120,
-    "stream_timeout": 300
+    "stream_timeout": 300,
+    "response_cache_ttl": 120
   }
 }
 ```
