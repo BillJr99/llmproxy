@@ -48,6 +48,36 @@ The `upstream_model_id` may itself contain slashes.  Examples:
 The proxy strips the leading `<provider_name>/` before forwarding the request to
 the upstream provider's base URL.
 
+### The `free` virtual model
+
+llmproxy advertises a special synthetic model named `free`.  When a request
+arrives with `"model": "free"`, the proxy:
+
+1. Collects every model across all providers whose upstream ID contains the
+   word `free` (case-insensitive).
+2. Picks a **random starting position** in that list, then tries each
+   candidate in order, wrapping around.
+3. Returns the first response with an HTTP status below 400.  If a candidate
+   is rate-limited, overloaded, or otherwise unhealthy, it is skipped silently
+   and the next one is tried.
+
+This spreads load across free-tier endpoints and provides automatic failover —
+useful when any individual free model is rate-limited.
+
+```bash
+# Use the free virtual model
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "free", "messages": [{"role": "user", "content": "Hello!"}]}'
+
+# Inspect which backends are currently eligible
+curl http://localhost:8080/v1/models/free | jq '._candidates'
+```
+
+The `free` model appears at the top of `GET /v1/models` whenever at least one
+eligible backend is available.  It is always named exactly `"free"` — no
+provider prefix.
+
 ---
 
 ## Configuration
@@ -177,15 +207,16 @@ python llmproxy_test_client.py --use-sdk
 
 ### Test suites
 
-| Suite       | What it checks                                                   | Needs provider? |
-|-------------|------------------------------------------------------------------|-----------------|
-| `health`    | `GET /health` returns 200 and lists active providers             | No              |
-| `errors`    | Missing model field, bad prefix, unknown provider, non-JSON body | No              |
-| `models`    | `GET /v1/models` aggregates all providers; naming convention     | Yes             |
-| `chat`      | Non-streaming chat completion; checks response content           | Yes             |
-| `streaming` | Streaming SSE chat; prints tokens live as they arrive            | Yes             |
-| `embeddings`| Embedding request; accepts graceful 400/404 if unsupported       | Yes             |
-| `sdk`       | Same chat + stream tests via the `openai` Python package         | Yes             |
+| Suite       | What it checks                                                        | Needs provider? |
+|-------------|-----------------------------------------------------------------------|-----------------|
+| `health`    | `GET /health` returns 200 and lists active providers                  | No              |
+| `errors`    | Missing model field, bad prefix, unknown provider, non-JSON body      | No              |
+| `models`    | `GET /v1/models` aggregates all providers; naming convention          | Yes             |
+| `free`      | Sends several prompts to `model="free"`; tests cycling + streaming    | Yes (free tier) |
+| `chat`      | Non-streaming chat completion; checks response content                | Yes             |
+| `streaming` | Streaming SSE chat; prints tokens live as they arrive                 | Yes             |
+| `embeddings`| Embedding request; accepts graceful 400/404 if unsupported            | Yes             |
+| `sdk`       | Same chat + stream tests via the `openai` Python package              | Yes             |
 
 When no `--model` flag is given, the client auto-selects a model from the
 proxy's `/v1/models` list, preferring names that suggest a free or small model

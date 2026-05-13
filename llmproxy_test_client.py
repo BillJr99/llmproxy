@@ -28,7 +28,7 @@ Usage
   python llmproxy_test_client.py --all-models
   python llmproxy_test_client.py --all-models --model-timeout 30
 
-Available suites: health, models, chat, streaming, completions, embeddings, errors, all-models
+Available suites: health, models, chat, streaming, completions, embeddings, errors, free, all-models
 """
 
 import argparse
@@ -211,12 +211,20 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
         for prov, ids in by_provider.items():
             print(_info(f"  {prov}: {len(ids)} model{'s' if len(ids) != 1 else ''}"))
 
-        # Verify naming convention: every ID should contain at least one slash.
-        bad = [m.get("id", "") for m in models if "/" not in m.get("id", "")]
+        # Verify naming convention: every non-synthetic ID should contain at least one slash.
+        # "free" is the one built-in synthetic model that intentionally has no slash.
+        SYNTHETIC_IDS = {"free"}
+        bad = [m.get("id", "") for m in models
+               if "/" not in m.get("id", "") and m.get("id", "") not in SYNTHETIC_IDS]
         if bad:
             results.fail("Model IDs follow provider/name convention", f"violating IDs: {bad[:5]}")
         else:
             results.ok("All model IDs follow provider/name convention")
+
+        if any(m.get("id") == "free" for m in models):
+            results.ok("Synthetic 'free' cycling model is advertised")
+        else:
+            results.skip("Synthetic 'free' model", "no free-tier models found across providers")
 
         return [m.get("id", "") for m in models]
 
@@ -598,8 +606,9 @@ def test_all_models(base_url: str, models: list[str], timeout: int = 60, **_) ->
 
     for provider, provider_models in by_provider.items():
         print()
+        plural = "s" if len(provider_models) != 1 else ""
         print(f"  {BOLD}{CYAN}Provider: {provider}{RESET}  "
-              f"{_dim(f'({len(provider_models)} model{"s" if len(provider_models) != 1 else ""})')}")
+              f"{_dim(f'({len(provider_models)} model{plural})')}")
         print(f"  {_dim('─' * 70)}")
 
         for model in provider_models:
@@ -646,6 +655,122 @@ def _wrap(text: str, width: int = 70) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# "free" virtual model test suite
+# ---------------------------------------------------------------------------
+
+_FREE_PROMPTS = [
+    ("one-word reply",    "Reply with exactly one word: PONG"),
+    ("capital of France", "What is the capital of France? Answer in one word."),
+    ("simple arithmetic",  "What is 3 plus 4? Answer with the number only."),
+    ("yes/no question",   "Is the sky blue? Answer Yes or No only."),
+    ("short greeting",    "Say hello in exactly three words."),
+]
+
+
+def test_free_model(base_url: str, **_) -> None:
+    """
+    Send several short prompts to the synthetic 'free' model and verify that
+    each receives a non-empty response.  Both non-streaming and streaming
+    paths are exercised.
+    """
+    print(_head("Free Model Cycling"))
+
+    # Confirm the model is advertised.
+    try:
+        resp = _get(base_url, "/models/free")
+        if resp.status_code == 200:
+            data = resp.json()
+            candidates = data.get("_candidates", [])
+            results.ok("GET /v1/models/free returns 200",
+                       f"{len(candidates)} candidate(s): {', '.join(candidates[:4])}"
+                       + (" ..." if len(candidates) > 4 else ""))
+        else:
+            results.fail("GET /v1/models/free", f"status={resp.status_code}")
+    except Exception as e:
+        results.fail("GET /v1/models/free", str(e))
+
+    # Non-streaming prompts.
+    print()
+    print(f"  {BOLD}Non-streaming prompts:{RESET}")
+    for label, prompt in _FREE_PROMPTS:
+        payload = {
+            "model": "free",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 32,
+            "temperature": 0,
+        }
+        try:
+            t0 = time.monotonic()
+            resp = _post(base_url, "/chat/completions", payload, timeout=90)
+            elapsed = time.monotonic() - t0
+            if resp.status_code == 200:
+                data = resp.json()
+                choices = data.get("choices", [])
+                content = (choices[0].get("message", {}).get("content") or "") if choices else ""
+                used_model = data.get("model", "?")
+                results.ok(
+                    f"free → {label}",
+                    f"via {used_model}  reply={repr(content[:60])}  {elapsed:.2f}s",
+                )
+            else:
+                results.fail(f"free → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
+        except requests.exceptions.Timeout:
+            results.fail(f"free → {label}", "timed out after 90s")
+        except Exception as e:
+            results.fail(f"free → {label}", str(e))
+
+    # Streaming prompt.
+    print()
+    print(f"  {BOLD}Streaming prompt:{RESET}")
+    stream_payload = {
+        "model": "free",
+        "messages": [{"role": "user", "content": "Count from 1 to 3, one number per line."}],
+        "max_tokens": 32,
+        "temperature": 0,
+        "stream": True,
+    }
+    try:
+        t0 = time.monotonic()
+        chunks = 0
+        parts: list[str] = []
+        print(_info("Streaming tokens: "), end="", flush=True)
+        with _post_stream(base_url, "/chat/completions", stream_payload, timeout=90) as resp:
+            if resp.status_code != 200:
+                results.fail("free (streaming)", f"status={resp.status_code}  body={resp.text[:200]}")
+            else:
+                for raw_line in resp.iter_lines():
+                    if not raw_line:
+                        continue
+                    line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    token = delta.get("content") or delta.get("reasoning_content") or ""
+                    if token:
+                        parts.append(token)
+                        print(token, end="", flush=True)
+                    chunks += 1
+        print()  # newline after tokens
+        elapsed = time.monotonic() - t0
+        if chunks > 0:
+            results.ok("free (streaming)", f"{chunks} chunks  content={repr(''.join(parts)[:60])}  {elapsed:.2f}s")
+        else:
+            results.fail("free (streaming)", "received 0 chunks")
+    except requests.exceptions.Timeout:
+        results.fail("free (streaming)", "timed out after 90s")
+    except Exception as e:
+        results.fail("free (streaming)", str(e))
+        traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
 # Auto-select a test model from the available list
 # ---------------------------------------------------------------------------
 
@@ -654,7 +779,11 @@ def _pick_model(models: list[str], preferred: Optional[str]) -> Optional[str]:
         return preferred
     if not models:
         return None
-    # Prefer free or small models if recognizable names are present.
+    # Prefer the synthetic "free" cycling model when it's available — it
+    # automatically routes to a working free-tier backend.
+    if "free" in models:
+        return "free"
+    # Fall back to other free or small models by name.
     for keyword in ("free", "mini", "flash", "haiku", "small", "tiny", "7b", "8b"):
         for m in models:
             if keyword in m.lower():
@@ -687,7 +816,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--suite",
         action="append",
-        choices=["health", "models", "chat", "streaming", "completions", "embeddings", "errors", "sdk", "all-models"],
+        choices=["health", "models", "chat", "streaming", "completions", "embeddings", "errors", "free", "sdk", "all-models"],
         metavar="SUITE",
         dest="suites",
         help="Run only the named suite(s). Repeatable. Default: all suites.",
@@ -779,6 +908,10 @@ def main() -> None:
     # ── Error handling ───────────────────────────────────────────
     if run_all or "errors" in args.suites:
         test_error_handling(base_url)
+
+    # ── Free model cycling ───────────────────────────────────────
+    if run_all or "free" in (args.suites or []):
+        test_free_model(base_url)
 
     # ── OpenAI SDK ───────────────────────────────────────────────
     if args.use_sdk or "sdk" in (args.suites or []):

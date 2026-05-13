@@ -22,6 +22,7 @@ each request to the appropriate upstream base URL.
 """
 
 import logging
+import random
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -625,7 +626,11 @@ def _proxy_endpoint(endpoint: str) -> Response:
                 "Check that at least one provider exposes a free-tier model.",
                 status=503,
             )
-        logger.info("  [free] cycling through %d candidate(s)", len(candidates))
+        # Start at a random index so successive requests spread load across all
+        # free-tier candidates rather than always hammering the first one.
+        start = random.randrange(len(candidates))
+        candidates = candidates[start:] + candidates[:start]
+        logger.info("  [free] cycling through %d candidate(s) starting at index %d", len(candidates), start)
         if is_streaming:
             timeout = server_cfg.get("stream_timeout", 300)
             return _proxy_free_streaming(endpoint, candidates, payload, timeout)
