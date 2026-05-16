@@ -98,6 +98,11 @@ PROVIDER_TEMPLATES: list[dict] = [
         "key": "openrouter",
         "base_url": "https://openrouter.ai/api/v1",
     },
+    {
+        "display": "Ollama Cloud",
+        "key": "ollama-cloud",
+        "base_url": "https://ollama.com/v1",
+    },
 ]
 
 # ---------------------------------------------------------------------------
