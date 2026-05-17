@@ -6,10 +6,65 @@
       "api_key": "sk-...",
       "model_filter": null
     },
+    "google": {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "api_key": "AIza...",
+      "model_filter": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+    },
     "groq": {
       "base_url": "https://api.groq.com/openai/v1",
       "api_key": "gsk_...",
-      "model_filter": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
+      "model_filter": ["llama-3.3-70b-versatile", "llama-4-scout-17b-16e-instruct", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"]
+    },
+    "cerebras": {
+      "base_url": "https://api.cerebras.ai/v1",
+      "api_key": "csk-...",
+      "model_filter": ["qwen-3-coder-480b", "llama-4-maverick-17b-128e-instruct", "qwen3-235b", "gpt-oss-120b"]
+    },
+    "github": {
+      "base_url": "https://models.inference.ai.azure.com",
+      "api_key": "ghp_...",
+      "model_filter": ["openai/gpt-5"]
+    },
+    "sambanova": {
+      "base_url": "https://api.sambanova.ai/v1",
+      "api_key": "...",
+      "model_filter": ["Meta-Llama-3.3-70B-Instruct"]
+    },
+    "mistral": {
+      "base_url": "https://api.mistral.ai/v1",
+      "api_key": "...",
+      "model_filter": ["mistral-large-latest", "magistral-medium-latest", "codestral-latest"]
+    },
+    "cloudflare": {
+      "base_url": "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1",
+      "api_key": "...",
+      "model_filter": ["@cf/meta/llama-3.1-70b-instruct", "@cf/meta/llama-3.1-8b-instruct", "@cf/mistral/mistral-7b-instruct-v0.1"]
+    },
+    "cohere": {
+      "base_url": "https://api.cohere.com/compatibility/v1",
+      "api_key": "...",
+      "model_filter": ["command-r-plus-08-2024"]
+    },
+    "zhipu": {
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "api_key": "...",
+      "model_filter": ["glm-4.5-flash"]
+    },
+    "moonshot": {
+      "base_url": "https://api.moonshot.cn/v1",
+      "api_key": "...",
+      "model_filter": ["kimi-latest"]
+    },
+    "minimax": {
+      "base_url": "https://api.minimax.chat/v1",
+      "api_key": "...",
+      "model_filter": ["MiniMax-M1"]
+    },
+    "huggingface": {
+      "base_url": "https://router.huggingface.co/v1",
+      "api_key": "hf_...",
+      "model_filter": ["accounts/fireworks/models/llama-v3p3-70b-instruct"]
     },
     "openrouter": {
       "base_url": "https://openrouter.ai/api/v1",
@@ -19,7 +74,7 @@
     "ollama": {
       "base_url": "http://localhost:11434/v1",
       "api_key": "ollama",
-      "model_filter": ["llama3.2", "mistral"]
+      "model_filter": null
     },
     "deepseek": {
       "base_url": "https://api.deepseek.com/v1",
@@ -28,15 +83,99 @@
     }
   },
   "known_free": [
-    "openrouter/mistralai/mistral-7b-instruct:free",
-    "openrouter/meta-llama/llama-3.2-3b-instruct:free"
+    "google/gemini-2.5-pro",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite",
+    "cerebras/qwen-3-coder-480b",
+    "cerebras/llama-4-maverick-17b-128e-instruct",
+    "cerebras/qwen3-235b",
+    "cerebras/gpt-oss-120b",
+    "github/openai/gpt-5",
+    "sambanova/Meta-Llama-3.3-70B-Instruct",
+    "mistral/mistral-large-latest",
+    "mistral/magistral-medium-latest",
+    "mistral/codestral-latest",
+    "groq/llama-3.3-70b-versatile",
+    "groq/llama-4-scout-17b-16e-instruct",
+    "groq/llama-3.1-8b-instant",
+    "groq/mixtral-8x7b-32768",
+    "groq/gemma2-9b-it",
+    "cohere/command-r-plus-08-2024",
+    "cloudflare/@cf/meta/llama-3.1-70b-instruct",
+    "cloudflare/@cf/meta/llama-3.1-8b-instruct",
+    "cloudflare/@cf/mistral/mistral-7b-instruct-v0.1",
+    "zhipu/glm-4.5-flash",
+    "moonshot/kimi-latest",
+    "minimax/MiniMax-M1",
+    "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct",
+    "nvidia/meta/llama-3.1-70b-instruct"
   ],
   "model_reasoning": {
     "openai/gpt-4o-mini": "exploratory",
     "openai/gpt-4o": "standard",
     "openai/o1": "deep",
+    "google/gemini-2.5-pro": "deep",
+    "google/gemini-2.5-flash": "standard",
+    "google/gemini-2.5-flash-lite": "exploratory",
+    "cerebras/qwen-3-coder-480b": "deep",
+    "cerebras/llama-4-maverick-17b-128e-instruct": "standard",
+    "cerebras/qwen3-235b": "deep",
+    "cerebras/gpt-oss-120b": "deep",
+    "github/openai/gpt-5": "deep",
+    "sambanova/Meta-Llama-3.3-70B-Instruct": "standard",
+    "mistral/mistral-large-latest": "standard",
+    "mistral/magistral-medium-latest": "standard",
+    "mistral/codestral-latest": "exploratory",
+    "groq/llama-3.3-70b-versatile": "standard",
+    "groq/llama-4-scout-17b-16e-instruct": "standard",
     "groq/llama-3.1-8b-instant": "exploratory",
-    "groq/llama-3.3-70b-versatile": "standard"
+    "groq/mixtral-8x7b-32768": "standard",
+    "groq/gemma2-9b-it": "exploratory",
+    "cohere/command-r-plus-08-2024": "standard",
+    "cloudflare/@cf/meta/llama-3.1-70b-instruct": "standard",
+    "cloudflare/@cf/meta/llama-3.1-8b-instruct": "exploratory",
+    "cloudflare/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
+    "zhipu/glm-4.5-flash": "standard",
+    "moonshot/kimi-latest": "standard",
+    "minimax/MiniMax-M1": "standard",
+    "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": "standard",
+    "nvidia/meta/llama-3.1-70b-instruct": "standard",
+    "openrouter/deepseek/deepseek-v3.1:free": "deep",
+    "openrouter/moonshotai/kimi-k2:free": "deep",
+    "openrouter/qwen/qwen3-coder:free": "deep",
+    "openrouter/z-ai/glm-4.5-air:free": "standard",
+    "openrouter/mistralai/mistral-7b-instruct:free": "exploratory",
+    "openrouter/meta-llama/llama-3.2-3b-instruct:free": "exploratory",
+    "openrouter/meta-llama/llama-3.1-8b-instruct:free": "exploratory",
+    "openrouter/google/gemma-2-9b-it:free": "exploratory",
+    "openrouter/qwen/qwen-2.5-7b-instruct:free": "exploratory"
+  },
+  "free_limits": {
+    "_note": "Rate limits for capacity-aware load balancing on llmproxy/free and llmproxy/*/free endpoints. Tracked per-worker-process; resets on restart. Token limits (tpm/tpd) are stored for reference but not yet enforced. Check provider docs — limits change frequently.",
+    "google/gemini-2.5-pro":              {"requests_per_minute": 5,  "requests_per_day": 100,   "tokens_per_minute": 250000, "tokens_per_day": null},
+    "google/gemini-2.5-flash":            {"requests_per_minute": 10, "requests_per_day": 20,    "tokens_per_minute": 250000, "tokens_per_day": null},
+    "google/gemini-2.5-flash-lite":       {"requests_per_minute": 15, "requests_per_day": 1000,  "tokens_per_minute": 250000, "tokens_per_day": null},
+    "groq/llama-3.3-70b-versatile":       {"requests_per_minute": 30, "requests_per_day": 1000,  "tokens_per_minute": 6000,   "tokens_per_day": 500000},
+    "groq/llama-4-scout-17b-16e-instruct":{"requests_per_minute": 30, "requests_per_day": 1000,  "tokens_per_minute": 6000,   "tokens_per_day": 1000000},
+    "groq/llama-3.1-8b-instant":          {"requests_per_minute": 30, "requests_per_day": 14400, "tokens_per_minute": null,   "tokens_per_day": null},
+    "groq/mixtral-8x7b-32768":            {"requests_per_minute": 30, "requests_per_day": 14400, "tokens_per_minute": null,   "tokens_per_day": null},
+    "groq/gemma2-9b-it":                  {"requests_per_minute": 30, "requests_per_day": 14400, "tokens_per_minute": null,   "tokens_per_day": null},
+    "cerebras/qwen-3-coder-480b":         {"requests_per_minute": 30, "requests_per_day": null,  "tokens_per_minute": 60000,  "tokens_per_day": 1000000},
+    "cerebras/llama-4-maverick-17b-128e-instruct":{"requests_per_minute": 30, "requests_per_day": null, "tokens_per_minute": 60000, "tokens_per_day": 1000000},
+    "cerebras/qwen3-235b":                {"requests_per_minute": 30, "requests_per_day": null,  "tokens_per_minute": 60000,  "tokens_per_day": 1000000},
+    "cerebras/gpt-oss-120b":              {"requests_per_minute": 30, "requests_per_day": null,  "tokens_per_minute": 60000,  "tokens_per_day": 1000000},
+    "github/openai/gpt-5":               {"requests_per_minute": 10, "requests_per_day": 50,    "tokens_per_minute": null,   "tokens_per_day": null},
+    "sambanova/Meta-Llama-3.3-70B-Instruct":{"requests_per_minute": 20, "requests_per_day": null, "tokens_per_minute": null, "tokens_per_day": 200000},
+    "mistral/mistral-large-latest":       {"requests_per_minute": 2,  "requests_per_day": null,  "tokens_per_minute": 500000, "tokens_per_day": null},
+    "mistral/magistral-medium-latest":    {"requests_per_minute": 2,  "requests_per_day": null,  "tokens_per_minute": 500000, "tokens_per_day": null},
+    "mistral/codestral-latest":           {"requests_per_minute": 2,  "requests_per_day": null,  "tokens_per_minute": 500000, "tokens_per_day": null},
+    "cohere/command-r-plus-08-2024":      {"requests_per_minute": 20, "requests_per_day": 33,    "tokens_per_minute": null,   "tokens_per_day": null},
+    "moonshot/kimi-latest":               {"requests_per_minute": 60, "requests_per_day": null,  "tokens_per_minute": null,   "tokens_per_day": 500000},
+    "minimax/MiniMax-M1":                 {"requests_per_minute": 20, "requests_per_day": null,  "tokens_per_minute": 1000000,"tokens_per_day": null},
+    "openrouter/deepseek/deepseek-v3.1:free":{"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": null,  "tokens_per_day": null},
+    "openrouter/moonshotai/kimi-k2:free": {"requests_per_minute": 20, "requests_per_day": 200,   "tokens_per_minute": null,   "tokens_per_day": null},
+    "openrouter/qwen/qwen3-coder:free":   {"requests_per_minute": 20, "requests_per_day": 200,   "tokens_per_minute": null,   "tokens_per_day": null},
+    "openrouter/z-ai/glm-4.5-air:free":  {"requests_per_minute": 20, "requests_per_day": 200,   "tokens_per_minute": null,   "tokens_per_day": null}
   },
   "server": {
     "host": "0.0.0.0",

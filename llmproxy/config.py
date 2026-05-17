@@ -21,6 +21,14 @@ Schema:
     "<provider>/<upstream_model_id>": "standard", // level so they appear under
     "another-model": "deep"                       // the exploratory/standard/deep
   },                                              // virtual endpoints
+  "free_limits": {                                // optional; per-model rate limits
+    "<provider>/<upstream_model_id>": {           // used for capacity-aware ordering
+      "requests_per_minute": 15,                  // on llmproxy/free and */free
+      "requests_per_day": 1500,                   // endpoints; null = not tracked
+      "tokens_per_minute": null,                  // token limits stored for reference
+      "tokens_per_day": null                      // but not yet enforced (no token
+    }                                             // counting without response parsing)
+  },
   "server": {
     "host": "0.0.0.0",
     "port": 8080,
@@ -83,6 +91,7 @@ DEFAULT_CONFIG: dict = {
     "providers": {},
     "known_free": [],
     "model_reasoning": {},
+    "free_limits": {},
     "server": dict(DEFAULT_SERVER_CONFIG),
 }
 
