@@ -644,6 +644,26 @@ def list_models() -> Response:
                 "_note": f"Virtual model: cycles through local models tagged '{level}' reasoning.",
             })
 
+    # Annotate real models with (known_free) and/or (local) suffixes in name.
+    for model in all_models:
+        route = snapshot.get(model["id"])
+        if not route:
+            continue
+        provider_name, upstream_id = route
+        suffixes: list[str] = []
+        uid_lower = upstream_id.lower()
+        if (
+            "free" in uid_lower
+            or uid_lower in known_free
+            or f"{provider_name}/{uid_lower}" in known_free
+        ):
+            suffixes.append("known_free")
+        provider_cfg = get_provider(config, provider_name)
+        if provider_cfg and _is_local_url(provider_cfg.get("base_url", "")):
+            suffixes.append("local")
+        if suffixes:
+            model["name"] = model["name"] + " (" + ", ".join(suffixes) + ")"
+
     full_list = synthetic + all_models
     if models_ttl > 0:
         with _models_list_cache_lock:
