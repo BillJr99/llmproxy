@@ -121,7 +121,7 @@ PROVIDER_TEMPLATES: list[dict] = [
     {
         "display": "Moonshot AI (Kimi)",
         "key": "moonshot",
-        "base_url": "https://api.moonshot.cn/v1",
+        "base_url": "https://api.moonshot.ai/v1",
     },
     {
         "display": "MiniMax",
