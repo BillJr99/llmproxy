@@ -241,6 +241,18 @@ following providers:
 Any OpenAI-compatible provider can also be added manually via the "Add / edit a
 provider (manual)" menu option.
 
+> **Providers that do not support `GET /v1/models` (as of May 2026)**
+> Some providers return an error or non-JSON response for the `/models` endpoint.
+> For these, llmproxy synthesizes model entries from the provider's `model_filter`
+> when the fetch fails.  The setup wizard ships a default `model_filter` for each
+> affected provider so the fallback works out of the box.
+>
+> | Provider | Reason |
+> |---|---|
+> | **Cloudflare Workers AI** | Returns HTTP 405 — method not supported |
+> | **Cloudflare AI Gateway** | Returns HTTP 401 — no anonymous model enumeration |
+> | **Hugging Face Inference** | Returns HTML rather than JSON for `/v1/models` |
+
 ---
 
 ## Quick start — local, no install

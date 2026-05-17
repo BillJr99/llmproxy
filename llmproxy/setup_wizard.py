@@ -779,12 +779,16 @@ def _fetch_provider_models_direct(providers: dict) -> list[tuple[str, str]]:
                 timeout=10,
             )
             resp.raise_for_status()
-            for m in resp.json().get("data", []):
+            body = resp.json()
+            for m in (body.get("data") or body.get("result", [])):
                 uid = m.get("id", "")
                 if uid and (model_filter is None or uid in model_filter):
                     results.append((provider_name, uid))
         except Exception as exc:
             print(_warn(f"  Could not reach '{provider_name}': {exc}"))
+            if model_filter:
+                print(_dim(f"  /models unavailable; using model_filter as fallback ({len(model_filter)} model(s))."))
+                results.extend((provider_name, uid) for uid in model_filter)
     return results
 
 
