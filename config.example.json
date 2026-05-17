@@ -36,7 +36,7 @@
       "api_key": "...",
       "model_filter": ["mistral-large-latest", "magistral-medium-latest", "codestral-latest"]
     },
-    "cloudflare": {
+    "cloudflare-workers": {
       "base_url": "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1",
       "api_key": "...",
       "model_filter": ["@cf/meta/llama-3.1-70b-instruct", "@cf/meta/llama-3.1-8b-instruct", "@cf/mistral/mistral-7b-instruct-v0.1"]
@@ -71,7 +71,7 @@
       "api_key": "xai-...",
       "model_filter": ["grok-3", "grok-3-mini"]
     },
-    "cf-gateway": {
+    "cloudflare-ai-gateway": {
       "base_url": "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/YOUR_GATEWAY_NAME/workers-ai/v1",
       "api_key": "...",
       "model_filter": ["@cf/meta/llama-3.1-70b-instruct", "@cf/meta/llama-3.1-8b-instruct", "@cf/mistral/mistral-7b-instruct-v0.1"]
@@ -111,9 +111,9 @@
     "groq/mixtral-8x7b-32768",
     "groq/gemma2-9b-it",
     "cohere/command-r-plus-08-2024",
-    "cloudflare/@cf/meta/llama-3.1-70b-instruct",
-    "cloudflare/@cf/meta/llama-3.1-8b-instruct",
-    "cloudflare/@cf/mistral/mistral-7b-instruct-v0.1",
+    "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct",
+    "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct",
+    "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1",
     "zhipu/glm-4.5-flash",
     "moonshot/kimi-latest",
     "minimax/MiniMax-M1",
@@ -144,9 +144,9 @@
     "groq/mixtral-8x7b-32768": "standard",
     "groq/gemma2-9b-it": "exploratory",
     "cohere/command-r-plus-08-2024": "standard",
-    "cloudflare/@cf/meta/llama-3.1-70b-instruct": "standard",
-    "cloudflare/@cf/meta/llama-3.1-8b-instruct": "exploratory",
-    "cloudflare/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
+    "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct": "standard",
+    "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct": "exploratory",
+    "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
     "zhipu/glm-4.5-flash": "standard",
     "moonshot/kimi-latest": "standard",
     "minimax/MiniMax-M1": "standard",

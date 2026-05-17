@@ -225,7 +225,7 @@ following providers:
 | SambaNova Cloud                   | `sambanova`      | `https://api.sambanova.ai/v1`                              |
 | Mistral AI                        | `mistral`        | `https://api.mistral.ai/v1`                                |
 | Groq                              | `groq`           | `https://api.groq.com/openai/v1`                           |
-| Cloudflare Workers AI             | `cloudflare`     | `https://api.cloudflare.com/client/v4/accounts/.../ai/v1`  |
+| Cloudflare Workers AI             | `cloudflare-workers` | `https://api.cloudflare.com/client/v4/accounts/.../ai/v1`  |
 | Zhipu AI (Z.ai / BigModel)        | `zhipu`          | `https://open.bigmodel.cn/api/paas/v4`                     |
 | Cohere                            | `cohere`         | `https://api.cohere.com/compatibility/v1`                  |
 | DeepSeek                          | `deepseek`       | `https://api.deepseek.com/v1`                              |
@@ -235,7 +235,7 @@ following providers:
 | MiniMax                           | `minimax`        | `https://api.minimax.chat/v1`                              |
 | Hugging Face Inference            | `huggingface`    | `https://router.huggingface.co/v1`                         |
 | xAI (Grok)                        | `xai`            | `https://api.x.ai/v1`                                      |
-| Cloudflare AI Gateway             | `cf-gateway`     | `https://gateway.ai.cloudflare.com/v1/{account}/{gw}/workers-ai/v1` |
+| Cloudflare AI Gateway             | `cloudflare-ai-gateway` | `https://gateway.ai.cloudflare.com/v1/{account}/{gw}/workers-ai/v1` |
 
 Any OpenAI-compatible provider can also be added manually via the "Add / edit a
 provider (manual)" menu option.

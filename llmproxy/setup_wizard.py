@@ -82,7 +82,7 @@ PROVIDER_TEMPLATES: list[dict] = [
     },
     {
         "display": "Cloudflare Workers AI",
-        "key": "cloudflare",
+        "key": "cloudflare-workers",
         "base_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
         "account_id_required": True,
         "account_id_label": "Cloudflare Account ID",
@@ -135,7 +135,7 @@ PROVIDER_TEMPLATES: list[dict] = [
     },
     {
         "display": "Cloudflare AI Gateway",
-        "key": "cf-gateway",
+        "key": "cloudflare-ai-gateway",
         "base_url": "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai/v1",
         "account_id_required": True,
         "account_id_label": "Cloudflare Account ID",
@@ -254,16 +254,16 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
             "mistral/codestral-latest":        {"requests_per_minute": 2, "requests_per_day": None, "tokens_per_minute": 500000, "tokens_per_day": None},
         },
     },
-    "cloudflare": {
+    "cloudflare-workers": {
         "known_free": [
-            "cloudflare/@cf/meta/llama-3.1-70b-instruct",
-            "cloudflare/@cf/meta/llama-3.1-8b-instruct",
-            "cloudflare/@cf/mistral/mistral-7b-instruct-v0.1",
+            "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct",
+            "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct",
+            "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1",
         ],
         "model_reasoning": {
-            "cloudflare/@cf/meta/llama-3.1-70b-instruct":        "standard",
-            "cloudflare/@cf/meta/llama-3.1-8b-instruct":         "exploratory",
-            "cloudflare/@cf/mistral/mistral-7b-instruct-v0.1":   "exploratory",
+            "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct":        "standard",
+            "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct":         "exploratory",
+            "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1":   "exploratory",
         },
         "free_limits": {},
     },
@@ -320,16 +320,16 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
         "free_limits": {},
     },
-    "cf-gateway": {
+    "cloudflare-ai-gateway": {
         "known_free": [
-            "cf-gateway/@cf/meta/llama-3.1-70b-instruct",
-            "cf-gateway/@cf/meta/llama-3.1-8b-instruct",
-            "cf-gateway/@cf/mistral/mistral-7b-instruct-v0.1",
+            "cloudflare-ai-gateway/@cf/meta/llama-3.1-70b-instruct",
+            "cloudflare-ai-gateway/@cf/meta/llama-3.1-8b-instruct",
+            "cloudflare-ai-gateway/@cf/mistral/mistral-7b-instruct-v0.1",
         ],
         "model_reasoning": {
-            "cf-gateway/@cf/meta/llama-3.1-70b-instruct":      "standard",
-            "cf-gateway/@cf/meta/llama-3.1-8b-instruct":       "exploratory",
-            "cf-gateway/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
+            "cloudflare-ai-gateway/@cf/meta/llama-3.1-70b-instruct":      "standard",
+            "cloudflare-ai-gateway/@cf/meta/llama-3.1-8b-instruct":       "exploratory",
+            "cloudflare-ai-gateway/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
         },
         "free_limits": {},
     },
