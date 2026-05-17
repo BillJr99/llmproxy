@@ -452,7 +452,8 @@ def _fetch_provider_models_direct(providers: dict) -> list[tuple[str, str]]:
                 timeout=10,
             )
             resp.raise_for_status()
-            for m in resp.json().get("data", []):
+            body = resp.json()
+            for m in (body.get("data") or body.get("result", [])):
                 uid = m.get("id", "")
                 if uid and (model_filter is None or uid in model_filter):
                     results.append((provider_name, uid))

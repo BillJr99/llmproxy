@@ -225,7 +225,7 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         )
         return []
 
-    raw_models: list[dict] = data.get("data", [])
+    raw_models: list[dict] = data.get("data") or data.get("result", [])
     model_filter = provider_cfg.get("model_filter")
 
     result = []
