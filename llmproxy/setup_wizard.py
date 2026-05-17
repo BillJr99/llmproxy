@@ -132,6 +132,12 @@ PROVIDER_TEMPLATES: list[dict] = [
         "display": "Hugging Face Inference",
         "key": "huggingface",
         "base_url": "https://router.huggingface.co/v1",
+        "model_filter": [
+            "meta-llama/Llama-3.3-70B-Instruct",
+            "meta-llama/Meta-Llama-3-8B-Instruct",
+            "mistralai/Mistral-7B-Instruct-v0.3",
+            "Qwen/Qwen2.5-72B-Instruct",
+        ],
     },
     {
         "display": "xAI (Grok)",
@@ -785,6 +791,9 @@ def _fetch_provider_models_direct(providers: dict) -> list[tuple[str, str]]:
                     results.append((provider_name, uid))
         except Exception as exc:
             print(_warn(f"  Could not reach '{provider_name}': {exc}"))
+            if model_filter:
+                print(_dim(f"  /models unavailable; using model_filter as fallback ({len(model_filter)} model(s))."))
+                results.extend((provider_name, uid) for uid in model_filter)
     return results
 
 
