@@ -89,9 +89,14 @@ PROVIDER_TEMPLATES: list[dict] = [
         "account_id_hint": "Find your account ID at dash.cloudflare.com (top-right corner)",
     },
     {
-        "display": "Zhipu AI (Z.ai / BigModel)",
+        "display": "Zhipu AI (BigModel)",
         "key": "zhipu",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    },
+    {
+        "display": "Z.AI",
+        "key": "z-ai",
+        "base_url": "https://api.z.ai/api/paas/v4",
     },
     {
         "display": "DeepSeek",
@@ -287,6 +292,21 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
         "free_limits": {
             "zhipu/glm-4.5-flash": {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": 1000000},
+        },
+    },
+    "z-ai": {
+        "known_free": [
+            "z-ai/glm-4.5-air",
+            "z-ai/glm-4.5-flash",
+        ],
+        "model_reasoning": {
+            "z-ai/glm-4.5-air":   "exploratory",
+            "z-ai/glm-4.5-flash": "standard",
+            "z-ai/glm-4.5":       "deep",
+        },
+        "free_limits": {
+            "z-ai/glm-4.5-air":   {"requests_per_minute": 15, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": 1000000},
+            "z-ai/glm-4.5-flash": {"requests_per_minute": 15, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": 1000000},
         },
     },
     "moonshot": {

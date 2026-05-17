@@ -51,6 +51,11 @@
       "api_key": "...",
       "model_filter": ["glm-4.5-flash"]
     },
+    "z-ai": {
+      "base_url": "https://api.z.ai/api/paas/v4",
+      "api_key": "...",
+      "model_filter": ["glm-4.5-air", "glm-4.5-flash", "glm-4.5"]
+    },
     "moonshot": {
       "base_url": "https://api.moonshot.cn/v1",
       "api_key": "...",
@@ -115,6 +120,8 @@
     "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct",
     "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1",
     "zhipu/glm-4.5-flash",
+    "z-ai/glm-4.5-air",
+    "z-ai/glm-4.5-flash",
     "moonshot/kimi-latest",
     "minimax/MiniMax-M1",
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct",
@@ -148,6 +155,9 @@
     "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct": "exploratory",
     "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
     "zhipu/glm-4.5-flash": "standard",
+    "z-ai/glm-4.5-air": "exploratory",
+    "z-ai/glm-4.5-flash": "standard",
+    "z-ai/glm-4.5": "deep",
     "moonshot/kimi-latest": "standard",
     "minimax/MiniMax-M1": "standard",
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": "standard",
@@ -184,6 +194,8 @@
     "mistral/magistral-medium-latest":    {"requests_per_minute": 2,  "requests_per_day": null,  "tokens_per_minute": 500000, "tokens_per_day": null},
     "mistral/codestral-latest":           {"requests_per_minute": 2,  "requests_per_day": null,  "tokens_per_minute": 500000, "tokens_per_day": null},
     "cohere/command-r-plus-08-2024":      {"requests_per_minute": 20, "requests_per_day": 33,    "tokens_per_minute": null,   "tokens_per_day": null},
+    "z-ai/glm-4.5-air":                   {"requests_per_minute": 15, "requests_per_day": null,  "tokens_per_minute": null,   "tokens_per_day": 1000000},
+    "z-ai/glm-4.5-flash":                 {"requests_per_minute": 15, "requests_per_day": null,  "tokens_per_minute": null,   "tokens_per_day": 1000000},
     "moonshot/kimi-latest":               {"requests_per_minute": 60, "requests_per_day": null,  "tokens_per_minute": null,   "tokens_per_day": 500000},
     "minimax/MiniMax-M1":                 {"requests_per_minute": 20, "requests_per_day": null,  "tokens_per_minute": 1000000,"tokens_per_day": null},
     "openrouter/deepseek/deepseek-v3.1:free":{"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": null,  "tokens_per_day": null},

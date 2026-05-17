@@ -226,7 +226,8 @@ following providers:
 | Mistral AI                        | `mistral`        | `https://api.mistral.ai/v1`                                |
 | Groq                              | `groq`           | `https://api.groq.com/openai/v1`                           |
 | Cloudflare Workers AI             | `cloudflare-workers` | `https://api.cloudflare.com/client/v4/accounts/.../ai/v1`  |
-| Zhipu AI (Z.ai / BigModel)        | `zhipu`          | `https://open.bigmodel.cn/api/paas/v4`                     |
+| Zhipu AI (BigModel)               | `zhipu`          | `https://open.bigmodel.cn/api/paas/v4`                     |
+| Z.AI                              | `z-ai`           | `https://api.z.ai/api/paas/v4`                             |
 | Cohere                            | `cohere`         | `https://api.cohere.com/compatibility/v1`                  |
 | DeepSeek                          | `deepseek`       | `https://api.deepseek.com/v1`                              |
 | OpenRouter                        | `openrouter`     | `https://openrouter.ai/api/v1`                             |
