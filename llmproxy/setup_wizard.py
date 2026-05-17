@@ -124,6 +124,11 @@ PROVIDER_TEMPLATES: list[dict] = [
         "key": "huggingface",
         "base_url": "https://router.huggingface.co/v1",
     },
+    {
+        "display": "xAI (Grok)",
+        "key": "xai",
+        "base_url": "https://api.x.ai/v1",
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -299,6 +304,20 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
             "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": "standard",
         },
         "free_limits": {},
+    },
+    "xai": {
+        "known_free": [
+            "xai/grok-3-mini",
+            "xai/grok-3",
+        ],
+        "model_reasoning": {
+            "xai/grok-3-mini": "standard",
+            "xai/grok-3":      "deep",
+        },
+        "free_limits": {
+            "xai/grok-3-mini": {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
+            "xai/grok-3":      {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
+        },
     },
     "nvidia": {
         "known_free": [

@@ -231,6 +231,10 @@ following providers:
 | DeepSeek                          | `deepseek`       | `https://api.deepseek.com/v1`                              |
 | OpenRouter                        | `openrouter`     | `https://openrouter.ai/api/v1`                             |
 | Ollama Cloud                      | `ollama-cloud`   | `https://ollama.com/v1`                                    |
+| Moonshot AI (Kimi)                | `moonshot`       | `https://api.moonshot.cn/v1`                               |
+| MiniMax                           | `minimax`        | `https://api.minimax.chat/v1`                              |
+| Hugging Face Inference            | `huggingface`    | `https://router.huggingface.co/v1`                         |
+| xAI (Grok)                        | `xai`            | `https://api.x.ai/v1`                                      |
 
 Any OpenAI-compatible provider can also be added manually via the "Add / edit a
 provider (manual)" menu option.

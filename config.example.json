@@ -66,6 +66,11 @@
       "api_key": "hf_...",
       "model_filter": ["accounts/fireworks/models/llama-v3p3-70b-instruct"]
     },
+    "xai": {
+      "base_url": "https://api.x.ai/v1",
+      "api_key": "xai-...",
+      "model_filter": ["grok-3", "grok-3-mini"]
+    },
     "openrouter": {
       "base_url": "https://openrouter.ai/api/v1",
       "api_key": "sk-or-...",
@@ -108,7 +113,9 @@
     "moonshot/kimi-latest",
     "minimax/MiniMax-M1",
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct",
-    "nvidia/meta/llama-3.1-70b-instruct"
+    "nvidia/meta/llama-3.1-70b-instruct",
+    "xai/grok-3-mini",
+    "xai/grok-3"
   ],
   "model_reasoning": {
     "openai/gpt-4o-mini": "exploratory",
@@ -140,6 +147,8 @@
     "minimax/MiniMax-M1": "standard",
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": "standard",
     "nvidia/meta/llama-3.1-70b-instruct": "standard",
+    "xai/grok-3-mini": "standard",
+    "xai/grok-3": "deep",
     "openrouter/deepseek/deepseek-v3.1:free": "deep",
     "openrouter/moonshotai/kimi-k2:free": "deep",
     "openrouter/qwen/qwen3-coder:free": "deep",
