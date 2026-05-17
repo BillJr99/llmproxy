@@ -9,6 +9,7 @@ In Docker:  docker run -it --rm -v llmproxy_config:/root/.config/llmproxy llmpro
 
 import getpass
 import json
+import re
 import sys
 import traceback
 from typing import Optional
@@ -30,10 +31,14 @@ from .config import (
 # Each entry is a dict with keys:
 #   display           – human-readable label shown in the menu
 #   key               – default provider name / model-ID prefix
-#   base_url          – upstream base URL; may contain "{account_id}" as a placeholder
+#   base_url          – upstream base URL; may contain "{account_id}" or
+#                       "{gateway_id}" as placeholders
 #   account_id_required – (optional) True when the URL contains "{account_id}"
 #   account_id_label  – (optional) prompt label for the account ID (default "Account ID")
 #   account_id_hint   – (optional) one-line hint for finding the account ID
+#   gateway_id_required – (optional) True when the URL contains "{gateway_id}"
+#   gateway_id_label  – (optional) prompt label for the gateway ID (default "Gateway ID")
+#   gateway_id_hint   – (optional) one-line hint for finding the gateway ID
 PROVIDER_TEMPLATES: list[dict] = [
     {
         "display": "Nous Research (Hermes)",
@@ -77,16 +82,21 @@ PROVIDER_TEMPLATES: list[dict] = [
     },
     {
         "display": "Cloudflare Workers AI",
-        "key": "cloudflare",
+        "key": "cloudflare-workers",
         "base_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
         "account_id_required": True,
         "account_id_label": "Cloudflare Account ID",
         "account_id_hint": "Find your account ID at dash.cloudflare.com (top-right corner)",
     },
     {
-        "display": "Zhipu AI (Z.ai / BigModel)",
+        "display": "Zhipu AI (BigModel)",
         "key": "zhipu",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    },
+    {
+        "display": "Z.AI",
+        "key": "z-ai",
+        "base_url": "https://api.z.ai/api/paas/v4",
     },
     {
         "display": "DeepSeek",
@@ -108,7 +118,309 @@ PROVIDER_TEMPLATES: list[dict] = [
         "key": "ollama-cloud",
         "base_url": "https://ollama.com/v1",
     },
+    {
+        "display": "Moonshot AI (Kimi)",
+        "key": "moonshot",
+        "base_url": "https://api.moonshot.cn/v1",
+    },
+    {
+        "display": "MiniMax",
+        "key": "minimax",
+        "base_url": "https://api.minimax.chat/v1",
+    },
+    {
+        "display": "Hugging Face Inference",
+        "key": "huggingface",
+        "base_url": "https://router.huggingface.co/v1",
+    },
+    {
+        "display": "xAI (Grok)",
+        "key": "xai",
+        "base_url": "https://api.x.ai/v1",
+    },
+    {
+        "display": "Cloudflare AI Gateway",
+        "key": "cloudflare-ai-gateway",
+        "base_url": "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai/v1",
+        "account_id_required": True,
+        "account_id_label": "Cloudflare Account ID",
+        "account_id_hint": "Find your account ID at dash.cloudflare.com (top-right corner)",
+        "gateway_id_required": True,
+        "gateway_id_label": "AI Gateway Name",
+        "gateway_id_hint": "The name you gave your AI Gateway in the Cloudflare dashboard",
+    },
 ]
+
+# ---------------------------------------------------------------------------
+# Per-provider free-tier metadata (auto-populated after quick setup)
+# ---------------------------------------------------------------------------
+# Source: https://github.com/tashfeenahmed/freellmapi and provider docs.
+# Each entry maps provider template key → config fragments to merge.
+# Keys use "provider_key/model_id" format matching model_reasoning convention.
+# Limits: rpm/rpd used for capacity-aware load balancing; tpm/tpd stored for
+# reference but not yet enforced (would require response token counting).
+PROVIDER_FREE_INFO: dict[str, dict] = {
+    "google": {
+        "known_free": [
+            "google/gemini-2.5-pro",
+            "google/gemini-2.5-flash",
+            "google/gemini-2.5-flash-lite",
+        ],
+        "model_reasoning": {
+            "google/gemini-2.5-pro": "deep",
+            "google/gemini-2.5-flash": "standard",
+            "google/gemini-2.5-flash-lite": "exploratory",
+        },
+        "free_limits": {
+            "google/gemini-2.5-pro":        {"requests_per_minute": 5,  "requests_per_day": 100,  "tokens_per_minute": 250000, "tokens_per_day": None},
+            "google/gemini-2.5-flash":      {"requests_per_minute": 10, "requests_per_day": 20,   "tokens_per_minute": 250000, "tokens_per_day": None},
+            "google/gemini-2.5-flash-lite": {"requests_per_minute": 15, "requests_per_day": 1000, "tokens_per_minute": 250000, "tokens_per_day": None},
+        },
+    },
+    "groq": {
+        "known_free": [
+            "groq/llama-3.3-70b-versatile",
+            "groq/llama-4-scout-17b-16e-instruct",
+            "groq/llama-3.1-8b-instant",
+            "groq/mixtral-8x7b-32768",
+            "groq/gemma2-9b-it",
+        ],
+        "model_reasoning": {
+            "groq/llama-3.3-70b-versatile":        "standard",
+            "groq/llama-4-scout-17b-16e-instruct": "standard",
+            "groq/llama-3.1-8b-instant":           "exploratory",
+            "groq/mixtral-8x7b-32768":             "standard",
+            "groq/gemma2-9b-it":                   "exploratory",
+        },
+        "free_limits": {
+            "groq/llama-3.3-70b-versatile":        {"requests_per_minute": 30, "requests_per_day": 1000,  "tokens_per_minute": 6000, "tokens_per_day": 500000},
+            "groq/llama-4-scout-17b-16e-instruct": {"requests_per_minute": 30, "requests_per_day": 1000,  "tokens_per_minute": 6000, "tokens_per_day": 1000000},
+            "groq/llama-3.1-8b-instant":           {"requests_per_minute": 30, "requests_per_day": 14400, "tokens_per_minute": None, "tokens_per_day": None},
+            "groq/mixtral-8x7b-32768":             {"requests_per_minute": 30, "requests_per_day": 14400, "tokens_per_minute": None, "tokens_per_day": None},
+            "groq/gemma2-9b-it":                   {"requests_per_minute": 30, "requests_per_day": 14400, "tokens_per_minute": None, "tokens_per_day": None},
+        },
+    },
+    "cerebras": {
+        "known_free": [
+            "cerebras/qwen-3-coder-480b",
+            "cerebras/llama-4-maverick-17b-128e-instruct",
+            "cerebras/qwen3-235b",
+            "cerebras/gpt-oss-120b",
+        ],
+        "model_reasoning": {
+            "cerebras/qwen-3-coder-480b":                  "deep",
+            "cerebras/llama-4-maverick-17b-128e-instruct": "standard",
+            "cerebras/qwen3-235b":                         "deep",
+            "cerebras/gpt-oss-120b":                       "deep",
+        },
+        "free_limits": {
+            "cerebras/qwen-3-coder-480b":                  {"requests_per_minute": 30, "requests_per_day": None, "tokens_per_minute": 60000, "tokens_per_day": 1000000},
+            "cerebras/llama-4-maverick-17b-128e-instruct": {"requests_per_minute": 30, "requests_per_day": None, "tokens_per_minute": 60000, "tokens_per_day": 1000000},
+            "cerebras/qwen3-235b":                         {"requests_per_minute": 30, "requests_per_day": None, "tokens_per_minute": 60000, "tokens_per_day": 1000000},
+            "cerebras/gpt-oss-120b":                       {"requests_per_minute": 30, "requests_per_day": None, "tokens_per_minute": 60000, "tokens_per_day": 1000000},
+        },
+    },
+    "github": {
+        "known_free": [
+            "github/openai/gpt-5",
+        ],
+        "model_reasoning": {
+            "github/openai/gpt-5": "deep",
+        },
+        "free_limits": {
+            "github/openai/gpt-5": {"requests_per_minute": 10, "requests_per_day": 50, "tokens_per_minute": None, "tokens_per_day": None},
+        },
+    },
+    "sambanova": {
+        "known_free": [
+            "sambanova/Meta-Llama-3.3-70B-Instruct",
+        ],
+        "model_reasoning": {
+            "sambanova/Meta-Llama-3.3-70B-Instruct": "standard",
+        },
+        "free_limits": {
+            "sambanova/Meta-Llama-3.3-70B-Instruct": {"requests_per_minute": 20, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": 200000},
+        },
+    },
+    "mistral": {
+        "known_free": [
+            "mistral/mistral-large-latest",
+            "mistral/magistral-medium-latest",
+            "mistral/codestral-latest",
+        ],
+        "model_reasoning": {
+            "mistral/mistral-large-latest":    "standard",
+            "mistral/magistral-medium-latest": "standard",
+            "mistral/codestral-latest":        "exploratory",
+        },
+        "free_limits": {
+            "mistral/mistral-large-latest":    {"requests_per_minute": 2, "requests_per_day": None, "tokens_per_minute": 500000, "tokens_per_day": None},
+            "mistral/magistral-medium-latest": {"requests_per_minute": 2, "requests_per_day": None, "tokens_per_minute": 500000, "tokens_per_day": None},
+            "mistral/codestral-latest":        {"requests_per_minute": 2, "requests_per_day": None, "tokens_per_minute": 500000, "tokens_per_day": None},
+        },
+    },
+    "cloudflare-workers": {
+        "known_free": [
+            "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct",
+            "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct",
+            "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1",
+        ],
+        "model_reasoning": {
+            "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct":        "standard",
+            "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct":         "exploratory",
+            "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1":   "exploratory",
+        },
+        "free_limits": {},
+    },
+    "cohere": {
+        "known_free": [
+            "cohere/command-r-plus-08-2024",
+        ],
+        "model_reasoning": {
+            "cohere/command-r-plus-08-2024": "standard",
+        },
+        "free_limits": {
+            "cohere/command-r-plus-08-2024": {"requests_per_minute": 20, "requests_per_day": 33, "tokens_per_minute": None, "tokens_per_day": None},
+        },
+    },
+    "zhipu": {
+        "known_free": [
+            "zhipu/glm-4.5-flash",
+        ],
+        "model_reasoning": {
+            "zhipu/glm-4.5-flash": "standard",
+        },
+        "free_limits": {
+            "zhipu/glm-4.5-flash": {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": 1000000},
+        },
+    },
+    "z-ai": {
+        "known_free": [
+            "z-ai/glm-4.5-air",
+            "z-ai/glm-4.5-flash",
+        ],
+        "model_reasoning": {
+            "z-ai/glm-4.5-air":   "exploratory",
+            "z-ai/glm-4.5-flash": "standard",
+            "z-ai/glm-4.5":       "deep",
+        },
+        "free_limits": {
+            "z-ai/glm-4.5-air":   {"requests_per_minute": 15, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": 1000000},
+            "z-ai/glm-4.5-flash": {"requests_per_minute": 15, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": 1000000},
+        },
+    },
+    "moonshot": {
+        "known_free": [
+            "moonshot/kimi-latest",
+        ],
+        "model_reasoning": {
+            "moonshot/kimi-latest": "standard",
+        },
+        "free_limits": {
+            "moonshot/kimi-latest": {"requests_per_minute": 60, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": 500000},
+        },
+    },
+    "minimax": {
+        "known_free": [
+            "minimax/MiniMax-M1",
+        ],
+        "model_reasoning": {
+            "minimax/MiniMax-M1": "standard",
+        },
+        "free_limits": {
+            "minimax/MiniMax-M1": {"requests_per_minute": 20, "requests_per_day": None, "tokens_per_minute": 1000000, "tokens_per_day": None},
+        },
+    },
+    "huggingface": {
+        "known_free": [
+            "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct",
+        ],
+        "model_reasoning": {
+            "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": "standard",
+        },
+        "free_limits": {},
+    },
+    "cloudflare-ai-gateway": {
+        "known_free": [
+            "cloudflare-ai-gateway/@cf/meta/llama-3.1-70b-instruct",
+            "cloudflare-ai-gateway/@cf/meta/llama-3.1-8b-instruct",
+            "cloudflare-ai-gateway/@cf/mistral/mistral-7b-instruct-v0.1",
+        ],
+        "model_reasoning": {
+            "cloudflare-ai-gateway/@cf/meta/llama-3.1-70b-instruct":      "standard",
+            "cloudflare-ai-gateway/@cf/meta/llama-3.1-8b-instruct":       "exploratory",
+            "cloudflare-ai-gateway/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
+        },
+        "free_limits": {},
+    },
+    "xai": {
+        "known_free": [
+            "xai/grok-3-mini",
+            "xai/grok-3",
+        ],
+        "model_reasoning": {
+            "xai/grok-3-mini": "standard",
+            "xai/grok-3":      "deep",
+        },
+        "free_limits": {
+            "xai/grok-3-mini": {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
+            "xai/grok-3":      {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
+        },
+    },
+    "nvidia": {
+        "known_free": [
+            "nvidia/meta/llama-3.1-70b-instruct",
+        ],
+        "model_reasoning": {
+            "nvidia/meta/llama-3.1-70b-instruct": "standard",
+        },
+        "free_limits": {
+            "nvidia/meta/llama-3.1-70b-instruct": {"requests_per_minute": 40, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
+        },
+    },
+    "openrouter": {
+        "known_free": [],
+        "model_reasoning": {
+            "openrouter/deepseek/deepseek-v3.1:free": "deep",
+            "openrouter/moonshotai/kimi-k2:free":     "deep",
+            "openrouter/qwen/qwen3-coder:free":       "deep",
+            "openrouter/z-ai/glm-4.5-air:free":       "standard",
+            "openrouter/mistralai/mistral-7b-instruct:free":      "exploratory",
+            "openrouter/meta-llama/llama-3.2-3b-instruct:free":   "exploratory",
+            "openrouter/meta-llama/llama-3.1-8b-instruct:free":   "exploratory",
+            "openrouter/google/gemma-2-9b-it:free":               "exploratory",
+            "openrouter/qwen/qwen-2.5-7b-instruct:free":          "exploratory",
+        },
+        "free_limits": {
+            "openrouter/deepseek/deepseek-v3.1:free": {"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": None, "tokens_per_day": None},
+            "openrouter/moonshotai/kimi-k2:free":     {"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": None, "tokens_per_day": None},
+            "openrouter/qwen/qwen3-coder:free":       {"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": None, "tokens_per_day": None},
+            "openrouter/z-ai/glm-4.5-air:free":       {"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": None, "tokens_per_day": None},
+        },
+    },
+}
+
+
+def _is_local_url(base_url: str) -> bool:
+    """Return True when base_url resolves to a local host or local-network domain.
+
+    Matches:
+      - loopback: localhost, 127.x.x.x, ::1, 0.0.0.0
+      - mDNS / Bonjour: *.local
+      - Docker host routing: host.docker.internal, gateway.docker.internal
+    """
+    import urllib.parse
+    try:
+        hostname = urllib.parse.urlparse(base_url).hostname or ""
+    except Exception:
+        return False
+    hostname = hostname.strip("[]").lower()
+    return (
+        hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0",
+                     "host.docker.internal", "gateway.docker.internal")
+        or hostname.startswith("127.")
+        or hostname.endswith(".local")
+    )
 
 # ---------------------------------------------------------------------------
 # Terminal helpers
@@ -399,6 +711,21 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
             print(_dim(f"  {acct_hint}"))
         account_id = _prompt(acct_label)
         base_url = base_url.replace("{account_id}", account_id)
+        if not tmpl.get("gateway_id_required"):
+            print(_dim(f"  Resolved URL: {base_url}"))
+            print()
+
+    # Some templates also require a gateway / workspace ID.
+    if tmpl.get("gateway_id_required"):
+        gw_hint = tmpl.get("gateway_id_hint", "")
+        gw_label = tmpl.get("gateway_id_label", "Gateway ID")
+        if not tmpl.get("account_id_required"):
+            print()
+            print(_dim("  The base URL contains a placeholder for a gateway ID."))
+        if gw_hint:
+            print(_dim(f"  {gw_hint}"))
+        gateway_id = _prompt(gw_label)
+        base_url = base_url.replace("{gateway_id}", gateway_id)
         print(_dim(f"  Resolved URL: {base_url}"))
         print()
 
@@ -714,6 +1041,146 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Free-tier auto-population helpers
+# ---------------------------------------------------------------------------
+
+def _offer_free_tier_auto_populate(provider_key: str, config: dict) -> bool:
+    """
+    After quick setup, offer to merge PROVIDER_FREE_INFO data into the config.
+    Returns True if the config was modified.
+    """
+    info = PROVIDER_FREE_INFO.get(provider_key)
+    if not info:
+        return False
+
+    has_data = bool(info.get("known_free") or info.get("model_reasoning"))
+    if not has_data:
+        return False
+
+    n_free = len(info.get("known_free", []))
+    n_reasoning = len(info.get("model_reasoning", {}))
+    n_limits = len(info.get("free_limits", {}))
+    print()
+    print(_dim(f"  Known free-tier data for {provider_key}: "
+               f"{n_free} known_free, {n_reasoning} reasoning tag(s), {n_limits} limit(s)."))
+    if not _confirm(
+        f"Auto-populate known_free / model_reasoning / free_limits for {provider_key}?",
+        default=True,
+    ):
+        return False
+
+    modified = False
+
+    existing_kf: list = config.setdefault("known_free", [])
+    to_add_kf = [e for e in info.get("known_free", []) if e not in existing_kf]
+    if to_add_kf:
+        existing_kf.extend(to_add_kf)
+        print(_ok(f"  Added {len(to_add_kf)} entr{'y' if len(to_add_kf)==1 else 'ies'} to known_free."))
+        modified = True
+
+    existing_mr: dict = config.setdefault("model_reasoning", {})
+    to_add_mr = {k: v for k, v in info.get("model_reasoning", {}).items() if k not in existing_mr}
+    if to_add_mr:
+        existing_mr.update(to_add_mr)
+        print(_ok(f"  Added {len(to_add_mr)} entr{'y' if len(to_add_mr)==1 else 'ies'} to model_reasoning."))
+        modified = True
+
+    existing_fl: dict = config.setdefault("free_limits", {})
+    to_add_fl = {k: v for k, v in info.get("free_limits", {}).items()
+                 if k not in existing_fl and any(v.values())}
+    if to_add_fl:
+        existing_fl.update(to_add_fl)
+        print(_ok(f"  Added {len(to_add_fl)} entr{'y' if len(to_add_fl)==1 else 'ies'} to free_limits."))
+        modified = True
+
+    if not modified:
+        print(_dim("  All entries already present — nothing to add."))
+
+    return modified
+
+
+def _infer_reasoning_level(model_id: str) -> str:
+    """
+    Infer exploratory / standard / deep from a local model name.
+    Applied to Ollama and OpenWebUI models that lack explicit reasoning tags.
+    """
+    s = model_id.lower()
+
+    # Explicit deep-reasoning model families
+    if any(p in s for p in [
+        "qwq", "deepseek-r1", "deepseek-r2", "magistral",
+        ":r1", "-r1", "o1-", "o3-", "reasoning",
+    ]):
+        return "deep"
+
+    # Size-based inference: look for NNb pattern (e.g. "70b", "235b", "3.5b")
+    m = re.search(r'(\d+(?:\.\d+)?)\s*b\b', s)
+    if m:
+        params = float(m.group(1))
+        if params >= 100:
+            return "deep"
+        if params >= 15:
+            return "standard"
+        return "exploratory"
+
+    # Keyword hints when no explicit size found
+    if any(p in s for p in ["large", "medium", "mixtral", "70", "72", "32"]):
+        return "standard"
+
+    return "exploratory"
+
+
+def _auto_register_local_models(provider_key: str, provider_cfg: dict, config: dict) -> bool:
+    """
+    Fetch models from a localhost provider and register unprefixed ones into
+    known_free and model_reasoning.  Called automatically — no user prompt.
+
+    Only models whose ID contains no '/' are considered locally-native.
+    Models with '/' (e.g. openai/gpt-4o piped through OpenWebUI) are skipped.
+    Returns True if the config was modified.
+    """
+    base_url = provider_cfg.get("base_url", "").rstrip("/")
+    api_key = provider_cfg.get("api_key", "")
+    try:
+        resp = _requests.get(
+            f"{base_url}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=8,
+        )
+        resp.raise_for_status()
+        raw_models = [m.get("id", "") for m in resp.json().get("data", [])]
+    except Exception as exc:
+        print(_warn(f"  Could not reach '{provider_key}' to fetch models: {exc}"))
+        return False
+
+    existing_kf: list = config.setdefault("known_free", [])
+    existing_mr: dict = config.setdefault("model_reasoning", {})
+
+    added_free = 0
+    added_reasoning = 0
+    for model_id in raw_models:
+        if not model_id or "/" in model_id:
+            continue
+        qualified = f"{provider_key}/{model_id}"
+        if qualified not in existing_kf:
+            existing_kf.append(qualified)
+            added_free += 1
+        if qualified not in existing_mr:
+            existing_mr[qualified] = _infer_reasoning_level(model_id)
+            added_reasoning += 1
+
+    if added_free or added_reasoning:
+        print(_ok(
+            f"  Auto-registered {added_free} local model(s) from {provider_key} "
+            f"({added_free} to known_free, {added_reasoning} to model_reasoning)."
+        ))
+        return True
+
+    print(_dim(f"  No new local models found from {provider_key}."))
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Main wizard entry point
 # ---------------------------------------------------------------------------
 
@@ -773,6 +1240,10 @@ def run_setup(config_path: Optional[str] = None) -> None:
                 providers[name] = cfg
                 print()
                 print(_ok(f"  Provider '{name}' configured from template."))
+                if _offer_free_tier_auto_populate(name, config):
+                    pass  # modified flag set below
+                if _is_local_url(cfg.get("base_url", "")):
+                    _auto_register_local_models(name, cfg, config)
                 modified = True
 
         elif choice == 1:
@@ -793,9 +1264,14 @@ def run_setup(config_path: Optional[str] = None) -> None:
             existing = providers.get(name)
             if existing:
                 print(_warn(f"\n  Provider '{name}' already exists. Editing."))
-            providers[name] = _edit_provider(name, existing)
+            cfg = _edit_provider(name, existing)
+            providers[name] = cfg
             print()
             print(_ok(f"  Provider '{name}' configured."))
+            if _offer_free_tier_auto_populate(name, config):
+                pass  # modified flag set below
+            if _is_local_url(cfg.get("base_url", "")):
+                _auto_register_local_models(name, cfg, config)
             modified = True
 
         elif choice == 2:

@@ -21,16 +21,19 @@ The server strips the leading <provider_name>/ prefix before forwarding
 each request to the appropriate upstream base URL.
 """
 
+import collections
+import datetime
 import hashlib
 import json
 import logging
 import random
+import re
 import threading
 import time
 import traceback
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import requests
 from flask import Flask, Response, g, jsonify, make_response, request, stream_with_context
@@ -41,6 +44,7 @@ from .config import (
     load_config,
     model_is_allowed,
     parse_model_string,
+    save_config,
 )
 
 # ---------------------------------------------------------------------------
@@ -59,6 +63,11 @@ _VIRTUAL_MODELS: frozenset[str] = frozenset({
     *(f"llmproxy/{lvl}/free" for lvl in _REASONING_LEVELS),
     *(f"llmproxy/{lvl}/local" for lvl in _REASONING_LEVELS),
 })
+# Virtual models that use capacity-aware free-tier load balancing.
+_FREE_VIRTUAL_MODELS: frozenset[str] = frozenset({
+    "llmproxy/free",
+    *(f"llmproxy/{lvl}/free" for lvl in _REASONING_LEVELS),
+})
 
 # Maps proxy display ID -> (provider_name, upstream_id).
 # Always access under _model_route_cache_lock.
@@ -70,6 +79,81 @@ _model_route_cache_lock = threading.Lock()
 _models_list_cache: Optional[tuple[list[dict], float]] = None
 _models_list_cache_lock = threading.Lock()
 _DEFAULT_MODELS_CACHE_TTL = 60
+
+# ---------------------------------------------------------------------------
+# Per-model usage tracking (free-tier capacity-aware load balancing)
+# ---------------------------------------------------------------------------
+# In-memory only; resets on server restart.  Each gunicorn worker process
+# maintains its own counters — usage tracking is per-worker, not cross-process.
+# For cross-process accuracy, configure a single worker or use a shared store.
+
+
+def _today_start_ts() -> float:
+    """Unix timestamp for the start of today (local midnight)."""
+    return time.mktime(datetime.date.today().timetuple())
+
+
+class _ModelUsage:
+    """Thread-safe sliding-window request counter for one upstream model."""
+
+    __slots__ = ("_lock", "_minute_ts", "_day_count", "_day_start")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._minute_ts: collections.deque = collections.deque()
+        self._day_count: int = 0
+        self._day_start: float = _today_start_ts()
+
+    def record(self) -> None:
+        now_mono = time.monotonic()
+        now_wall = time.time()
+        with self._lock:
+            if now_wall >= self._day_start + 86400:
+                self._day_start = _today_start_ts()
+                self._day_count = 0
+            self._day_count += 1
+            self._minute_ts.append(now_mono)
+
+    def snapshot(self) -> tuple[int, int]:
+        """Return (used_last_60s, used_today), pruning stale minute entries."""
+        now_mono = time.monotonic()
+        now_wall = time.time()
+        with self._lock:
+            if now_wall >= self._day_start + 86400:
+                return 0, 0
+            cutoff = now_mono - 60.0
+            while self._minute_ts and self._minute_ts[0] < cutoff:
+                self._minute_ts.popleft()
+            return len(self._minute_ts), self._day_count
+
+
+_usage_registry: dict[str, _ModelUsage] = {}
+_usage_registry_lock = threading.Lock()
+
+
+def _record_usage(provider_name: str, upstream_model: str) -> None:
+    """Record one successful request for a free-tier model."""
+    key = f"{provider_name}/{upstream_model}".lower()
+    with _usage_registry_lock:
+        if key not in _usage_registry:
+            _usage_registry[key] = _ModelUsage()
+        tracker = _usage_registry[key]
+    tracker.record()
+
+
+def _get_usage_snapshot(key: str) -> tuple[int, int]:
+    """Return (used_last_60s, used_today) for the given provider/model key."""
+    with _usage_registry_lock:
+        tracker = _usage_registry.get(key)
+    return tracker.snapshot() if tracker else (0, 0)
+
+
+# ---------------------------------------------------------------------------
+# Local provider startup sync
+# ---------------------------------------------------------------------------
+# Tracks whether the one-time local model sync has run since startup.
+_local_sync_done: bool = False
+_local_sync_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Short-lived response cache (non-streaming only)
@@ -349,6 +433,111 @@ def _get_route_cache_snapshot() -> dict[str, tuple[str, str]]:
         return dict(_model_route_cache)
 
 
+def _sync_local_provider_models_once() -> None:
+    """
+    On first call after startup, poll every localhost provider's /models endpoint
+    and sync unprefixed model IDs into config['known_free'] and config['model_reasoning'].
+
+    - Models with "/" in their ID are skipped (they are externally namespaced).
+    - Models no longer returned by a local provider are pruned from both lists.
+    - If the config changes it is persisted to disk so the sync survives server restart.
+    - Runs in a background thread so it never blocks the first /v1/models response.
+    """
+    global _local_sync_done
+    with _local_sync_lock:
+        if _local_sync_done:
+            return
+        _local_sync_done = True
+
+    def _run() -> None:
+        config = load_config(force_reload=True)
+        providers: dict = config.get("providers", {})
+
+        local_providers = {
+            name: cfg for name, cfg in providers.items()
+            if _is_local_url(cfg.get("base_url", ""))
+        }
+        if not local_providers:
+            return
+
+        existing_kf: list = config.setdefault("known_free", [])
+        existing_mr: dict = config.setdefault("model_reasoning", {})
+        modified = False
+
+        for provider_key, provider_cfg in local_providers.items():
+            base_url = provider_cfg.get("base_url", "").rstrip("/")
+            api_key = provider_cfg.get("api_key", "")
+            try:
+                resp = requests.get(
+                    f"{base_url}/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=8,
+                )
+                resp.raise_for_status()
+                live_ids = {m.get("id", "") for m in resp.json().get("data", []) if m.get("id")}
+            except Exception as exc:
+                logger.warning("[local-sync] Could not reach '%s': %s", provider_key, exc)
+                continue
+
+            # Compute expected set for this provider (unprefixed only)
+            prefix = f"{provider_key}/"
+            expected = {f"{prefix}{mid}" for mid in live_ids if mid and "/" not in mid}
+
+            # Remove stale entries that this provider previously contributed
+            stale_kf = [e for e in existing_kf if e.startswith(prefix) and e not in expected]
+            for e in stale_kf:
+                existing_kf.remove(e)
+                modified = True
+                logger.info("[local-sync] Pruned stale known_free: %s", e)
+
+            stale_mr = [k for k in existing_mr if k.startswith(prefix) and k not in expected]
+            for k in stale_mr:
+                del existing_mr[k]
+                modified = True
+                logger.info("[local-sync] Pruned stale model_reasoning: %s", k)
+
+            # Add new entries
+            for qualified in expected:
+                if qualified not in existing_kf:
+                    existing_kf.append(qualified)
+                    modified = True
+                    logger.info("[local-sync] Added known_free: %s", qualified)
+                if qualified not in existing_mr:
+                    model_id = qualified[len(prefix):]
+                    existing_mr[qualified] = _infer_local_reasoning_level(model_id)
+                    modified = True
+                    logger.info("[local-sync] Added model_reasoning: %s -> %s", qualified, existing_mr[qualified])
+
+        if modified:
+            save_config(config)
+
+    import threading as _t
+    _t.Thread(target=_run, daemon=True, name="local-model-sync").start()
+
+
+def _infer_local_reasoning_level(model_id: str) -> str:
+    """
+    Infer exploratory / standard / deep for a locally-served model.
+    Applied during startup sync for Ollama / OpenWebUI models.
+    """
+    import re as _re
+    s = model_id.lower()
+    if any(p in s for p in ["qwq", "deepseek-r1", "deepseek-r2", "magistral",
+                              ":r1", "-r1", "o1-", "o3-", "reasoning"]):
+        return "deep"
+    m = _re.search(r'(\d+(?:\.\d+)?)\s*b\b', s)
+    if m:
+        params = float(m.group(1))
+        if params >= 100:
+            return "deep"
+        if params >= 15:
+            return "standard"
+        return "exploratory"
+    if any(p in s for p in ["large", "medium", "mixtral", "70", "72", "32"]):
+        return "standard"
+    return "exploratory"
+
+
 @app.route("/v1/models", methods=["GET"])
 def list_models() -> Response:
     """
@@ -367,6 +556,7 @@ def list_models() -> Response:
     redundant upstream fetches when clients issue multiple requests in quick
     succession (e.g. at startup).
     """
+    _sync_local_provider_models_once()
     config = load_config()
     providers: dict = config.get("providers", {})
     # Strip reserved names before presence check so a config that contains only
@@ -453,6 +643,26 @@ def list_models() -> Response:
                 "name": f"llmproxy/{level}/local",
                 "_note": f"Virtual model: cycles through local models tagged '{level}' reasoning.",
             })
+
+    # Annotate real models with (known_free) and/or (local) suffixes in name.
+    for model in all_models:
+        route = snapshot.get(model["id"])
+        if not route:
+            continue
+        provider_name, upstream_id = route
+        suffixes: list[str] = []
+        uid_lower = upstream_id.lower()
+        if (
+            "free" in uid_lower
+            or uid_lower in known_free
+            or f"{provider_name}/{uid_lower}" in known_free
+        ):
+            suffixes.append("known_free")
+        provider_cfg = get_provider(config, provider_name)
+        if provider_cfg and _is_local_url(provider_cfg.get("base_url", "")):
+            suffixes.append("local")
+        if suffixes:
+            model["name"] = model["name"] + " (" + ", ".join(suffixes) + ")"
 
     full_list = synthetic + all_models
     if models_ttl > 0:
@@ -662,6 +872,7 @@ def _proxy_cycling_non_streaming(
     candidates: list[tuple[str, dict, str]],
     payload: dict,
     timeout: int,
+    on_success: Optional[Callable[[str, str], None]] = None,
 ) -> Response:
     """Try each candidate in order, returning the first success."""
     candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
@@ -671,6 +882,8 @@ def _proxy_cycling_non_streaming(
         logger.info("  [%s] trying %s/%s", label, provider_name, upstream_model)
         resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, candidate_timeout)
         if resp.status_code < 400:
+            if on_success is not None:
+                on_success(provider_name, upstream_model)
             return resp
         logger.warning(
             "  [%s] %s/%s returned %d, trying next", label, provider_name, upstream_model, resp.status_code
@@ -685,6 +898,7 @@ def _proxy_cycling_streaming(
     candidates: list[tuple[str, dict, str]],
     payload: dict,
     timeout: int,
+    on_success: Optional[Callable[[str, str], None]] = None,
 ) -> Response:
     """
     Try each candidate in order.  Checks the HTTP status code before committing
@@ -714,6 +928,9 @@ def _proxy_cycling_streaming(
                     "  [%s] %s/%s -> %d, trying next", label, provider_name, upstream_model, resp.status_code
                 )
                 continue
+
+            if on_success is not None:
+                on_success(provider_name, upstream_model)
 
             captured_resp = resp
             captured_provider = provider_name
@@ -760,6 +977,72 @@ def _cycling_candidates(
         return candidates
     start = random.randrange(len(candidates))
     return candidates[start:] + candidates[:start]
+
+
+def _capacity_ordered_candidates(
+    candidates: list[tuple[str, dict, str]],
+    free_limits: dict[str, dict],
+) -> list[tuple[str, dict, str]]:
+    """
+    Order candidates by remaining free-tier capacity using weighted sampling.
+
+    Algorithm:
+    - Each candidate is scored via _capacity_score() using its RPM/RPD usage.
+    - Candidates with no configured limits score 1.0 (treated as unlimited).
+    - Candidates with score > 0 are drawn via weighted reservoir sampling so
+      higher-capacity models are preferred while load is still distributed.
+    - Candidates with score == 0 (at limit) are appended as last-resort fallbacks;
+      they still get tried so a saturated model doesn't cause an avoidable 503.
+    - Falls back to random rotation when no candidate has any configured limits.
+
+    Note: tracking is per-worker-process; gunicorn multi-worker deployments
+    may undercount usage relative to the provider's actual view.
+    """
+    if not candidates:
+        return candidates
+
+    any_limits = any(
+        f"{pn}/{um}".lower() in free_limits for pn, _, um in candidates
+    )
+    if not any_limits:
+        start = random.randrange(len(candidates))
+        return candidates[start:] + candidates[:start]
+
+    scored: list[tuple[tuple[str, dict, str], float]] = []
+    for pn, pc, um in candidates:
+        key = f"{pn}/{um}".lower()
+        limits = free_limits.get(key, {})
+        used_min, used_day = _get_usage_snapshot(key)
+        score = _capacity_score(used_min, used_day, limits)
+        logger.debug(
+            "[capacity] %s/%s  score=%.3f  used_min=%d  used_day=%d",
+            pn, um, score, used_min, used_day,
+        )
+        scored.append(((pn, pc, um), score))
+
+    viable = [(c, s) for c, s in scored if s > 0.0]
+    exhausted = [c for c, s in scored if s == 0.0]
+
+    result: list[tuple[str, dict, str]] = []
+    remaining = list(viable)
+    while remaining:
+        total = sum(s for _, s in remaining)
+        if total == 0.0:
+            result.extend(c for c, _ in remaining)
+            break
+        r = random.uniform(0.0, total)
+        cumulative = 0.0
+        picked = len(remaining) - 1
+        for i, (c, s) in enumerate(remaining):
+            cumulative += s
+            if r <= cumulative:
+                picked = i
+                break
+        result.append(remaining[picked][0])
+        remaining.pop(picked)
+
+    result.extend(exhausted)
+    return result
 
 
 # — "free" candidate selector —
@@ -817,16 +1100,68 @@ def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
     return candidates
 
 
+# — free-limits config parsing —
+
+def _get_normalized_free_limits(config: dict) -> dict[str, dict]:
+    """
+    Return config['free_limits'] with all string keys lowercased.
+    Ignores missing, non-dict, or malformed top-level values without raising.
+    """
+    raw = config.get("free_limits")
+    if not isinstance(raw, dict):
+        if raw is not None:
+            logger.warning(
+                "config['free_limits'] must be a dict; got %s — ignoring.",
+                type(raw).__name__,
+            )
+        return {}
+    result: dict[str, dict] = {}
+    for key, val in raw.items():
+        if isinstance(key, str) and isinstance(val, dict) and not key.startswith("_"):
+            result[key.lower()] = val
+    return result
+
+
+def _capacity_score(used_minute: int, used_day: int, limits: dict) -> float:
+    """
+    Return a capacity score in [0.0, 1.0]: higher = more remaining headroom.
+    Returns 1.0 (neutral) when neither rpm nor rpd is configured.
+    Returns 0.0 when any configured limit is at or exceeded.
+    Token limits (tpm/tpd) are stored for reference but not enforced here.
+    """
+    rpm = limits.get("requests_per_minute")
+    rpd = limits.get("requests_per_day")
+    if not rpm and not rpd:
+        return 1.0
+    scores: list[float] = []
+    if rpm and rpm > 0:
+        scores.append(max(0.0, (rpm - used_minute) / rpm))
+    if rpd and rpd > 0:
+        scores.append(max(0.0, (rpd - used_day) / rpd))
+    return min(scores) if scores else 1.0
+
+
 # — "local" candidate selector —
 
 def _is_local_url(base_url: str) -> bool:
-    """Return True when *base_url* points at a loopback address."""
+    """Return True when *base_url* resolves to a local host or local-network domain.
+
+    Matches:
+      - loopback: localhost, 127.x.x.x, ::1, 0.0.0.0
+      - mDNS / Bonjour: *.local
+      - Docker host routing: host.docker.internal, gateway.docker.internal
+    """
     try:
         hostname = urllib.parse.urlparse(base_url).hostname or ""
     except Exception:
         return False
     hostname = hostname.strip("[]").lower()
-    return hostname in ("localhost", "127.0.0.1", "::1") or hostname.startswith("127.")
+    return (
+        hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0",
+                     "host.docker.internal", "gateway.docker.internal")
+        or hostname.startswith("127.")
+        or hostname.endswith(".local")
+    )
 
 
 def _get_local_model_candidates() -> list[tuple[str, dict, str]]:
@@ -1032,13 +1367,19 @@ def _proxy_endpoint(endpoint: str) -> Response:
                 + _virtual_model_hint(model_full),
                 status=503,
             )
-        candidates = _cycling_candidates(candidates)
-        logger.info("  [%s] cycling through %d candidate(s)", model_full, len(candidates))
+        if model_full in _FREE_VIRTUAL_MODELS:
+            free_limits = _get_normalized_free_limits(config)
+            ordered = _capacity_ordered_candidates(candidates, free_limits)
+            on_success: Optional[Callable[[str, str], None]] = _record_usage
+        else:
+            ordered = _cycling_candidates(candidates)
+            on_success = None
+        logger.info("  [%s] cycling through %d candidate(s)", model_full, len(ordered))
         if is_streaming:
             timeout = server_cfg.get("stream_timeout", 300)
-            return _proxy_cycling_streaming(endpoint, model_full, candidates, payload, timeout)
+            return _proxy_cycling_streaming(endpoint, model_full, ordered, payload, timeout, on_success=on_success)
         timeout = server_cfg.get("request_timeout", 120)
-        resp = _proxy_cycling_non_streaming(endpoint, model_full, candidates, payload, timeout)
+        resp = _proxy_cycling_non_streaming(endpoint, model_full, ordered, payload, timeout, on_success=on_success)
     else:
         provider_name, provider_cfg, upstream_model, err = _resolve_provider(model_full)
         if err is not None:
