@@ -235,6 +235,7 @@ following providers:
 | MiniMax                           | `minimax`        | `https://api.minimax.chat/v1`                              |
 | Hugging Face Inference            | `huggingface`    | `https://router.huggingface.co/v1`                         |
 | xAI (Grok)                        | `xai`            | `https://api.x.ai/v1`                                      |
+| Cloudflare AI Gateway             | `cf-gateway`     | `https://gateway.ai.cloudflare.com/v1/{account}/{gw}/workers-ai/v1` |
 
 Any OpenAI-compatible provider can also be added manually via the "Add / edit a
 provider (manual)" menu option.

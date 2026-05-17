@@ -71,6 +71,11 @@
       "api_key": "xai-...",
       "model_filter": ["grok-3", "grok-3-mini"]
     },
+    "cf-gateway": {
+      "base_url": "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/YOUR_GATEWAY_NAME/workers-ai/v1",
+      "api_key": "...",
+      "model_filter": ["@cf/meta/llama-3.1-70b-instruct", "@cf/meta/llama-3.1-8b-instruct", "@cf/mistral/mistral-7b-instruct-v0.1"]
+    },
     "openrouter": {
       "base_url": "https://openrouter.ai/api/v1",
       "api_key": "sk-or-...",

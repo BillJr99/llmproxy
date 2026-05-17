@@ -31,10 +31,14 @@ from .config import (
 # Each entry is a dict with keys:
 #   display           – human-readable label shown in the menu
 #   key               – default provider name / model-ID prefix
-#   base_url          – upstream base URL; may contain "{account_id}" as a placeholder
+#   base_url          – upstream base URL; may contain "{account_id}" or
+#                       "{gateway_id}" as placeholders
 #   account_id_required – (optional) True when the URL contains "{account_id}"
 #   account_id_label  – (optional) prompt label for the account ID (default "Account ID")
 #   account_id_hint   – (optional) one-line hint for finding the account ID
+#   gateway_id_required – (optional) True when the URL contains "{gateway_id}"
+#   gateway_id_label  – (optional) prompt label for the gateway ID (default "Gateway ID")
+#   gateway_id_hint   – (optional) one-line hint for finding the gateway ID
 PROVIDER_TEMPLATES: list[dict] = [
     {
         "display": "Nous Research (Hermes)",
@@ -128,6 +132,17 @@ PROVIDER_TEMPLATES: list[dict] = [
         "display": "xAI (Grok)",
         "key": "xai",
         "base_url": "https://api.x.ai/v1",
+    },
+    {
+        "display": "Cloudflare AI Gateway",
+        "key": "cf-gateway",
+        "base_url": "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai/v1",
+        "account_id_required": True,
+        "account_id_label": "Cloudflare Account ID",
+        "account_id_hint": "Find your account ID at dash.cloudflare.com (top-right corner)",
+        "gateway_id_required": True,
+        "gateway_id_label": "AI Gateway Name",
+        "gateway_id_hint": "The name you gave your AI Gateway in the Cloudflare dashboard",
     },
 ]
 
@@ -302,6 +317,19 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         ],
         "model_reasoning": {
             "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": "standard",
+        },
+        "free_limits": {},
+    },
+    "cf-gateway": {
+        "known_free": [
+            "cf-gateway/@cf/meta/llama-3.1-70b-instruct",
+            "cf-gateway/@cf/meta/llama-3.1-8b-instruct",
+            "cf-gateway/@cf/mistral/mistral-7b-instruct-v0.1",
+        ],
+        "model_reasoning": {
+            "cf-gateway/@cf/meta/llama-3.1-70b-instruct":      "standard",
+            "cf-gateway/@cf/meta/llama-3.1-8b-instruct":       "exploratory",
+            "cf-gateway/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
         },
         "free_limits": {},
     },
@@ -652,6 +680,21 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
             print(_dim(f"  {acct_hint}"))
         account_id = _prompt(acct_label)
         base_url = base_url.replace("{account_id}", account_id)
+        if not tmpl.get("gateway_id_required"):
+            print(_dim(f"  Resolved URL: {base_url}"))
+            print()
+
+    # Some templates also require a gateway / workspace ID.
+    if tmpl.get("gateway_id_required"):
+        gw_hint = tmpl.get("gateway_id_hint", "")
+        gw_label = tmpl.get("gateway_id_label", "Gateway ID")
+        if not tmpl.get("account_id_required"):
+            print()
+            print(_dim("  The base URL contains a placeholder for a gateway ID."))
+        if gw_hint:
+            print(_dim(f"  {gw_hint}"))
+        gateway_id = _prompt(gw_label)
+        base_url = base_url.replace("{gateway_id}", gateway_id)
         print(_dim(f"  Resolved URL: {base_url}"))
         print()
 
