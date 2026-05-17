@@ -459,6 +459,9 @@ def _fetch_provider_models_direct(providers: dict) -> list[tuple[str, str]]:
                     results.append((provider_name, uid))
         except Exception as exc:
             print(_warn(f"  Could not reach '{provider_name}': {exc}"))
+            if model_filter:
+                print(_dim(f"  /models unavailable; using model_filter as fallback ({len(model_filter)} model(s))."))
+                results.extend((provider_name, uid) for uid in model_filter)
     return results
 
 

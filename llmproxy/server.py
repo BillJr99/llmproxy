@@ -218,14 +218,21 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         resp = requests.get(url, headers=headers, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
+        raw_models: list[dict] = data.get("data") or data.get("result", [])
     except Exception as e:
         logger.warning(
             "[server:_fetch_provider_models] provider=%s fetch failed: %s",
             provider_name, e,
         )
-        return []
-
-    raw_models: list[dict] = data.get("data") or data.get("result", [])
+        model_filter = provider_cfg.get("model_filter")
+        if not model_filter:
+            return []
+        logger.info(
+            "[server:_fetch_provider_models] provider=%s: /models unavailable; "
+            "synthesizing %d model(s) from model_filter",
+            provider_name, len(model_filter),
+        )
+        raw_models = [{"id": uid, "object": "model"} for uid in model_filter]
     model_filter = provider_cfg.get("model_filter")
 
     result = []
