@@ -89,6 +89,11 @@ PROVIDER_TEMPLATES: list[dict] = [
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
     },
     {
+        "display": "DeepSeek",
+        "key": "deepseek",
+        "base_url": "https://api.deepseek.com/v1",
+    },
+    {
         "display": "Cohere",
         "key": "cohere",
         "base_url": "https://api.cohere.com/compatibility/v1",
