@@ -43,6 +43,7 @@ The `upstream_model_id` may itself contain slashes.  Examples:
 | `openrouter/openrouter/free`               | openrouter | `openrouter/free`             |
 | `openrouter/anthropic/claude-3.5-sonnet`   | openrouter | `anthropic/claude-3.5-sonnet` |
 | `openai/gpt-4o`                            | openai     | `gpt-4o`                      |
+| `deepseek/deepseek-chat`                   | deepseek   | `deepseek-chat`               |
 | `ollama/llama3`                            | ollama     | `llama3`                      |
 
 The proxy strips the leading `<provider_name>/` before forwarding the request to
@@ -208,6 +209,31 @@ reasoning-level routing.  The setup wizard does not edit this field — add it
 by hand to the config file.
 
 See `config.example.json` for a complete annotated example.
+
+### Provider templates
+
+The interactive setup wizard (`--setup`) includes ready-made templates for the
+following providers:
+
+| Provider                          | Default key      | Base URL                                                   |
+|-----------------------------------|------------------|------------------------------------------------------------|
+| Nous Research (Hermes)            | `nous`           | `https://inference-api.nousresearch.com/v1`                |
+| Nvidia NIM                        | `nvidia`         | `https://integrate.api.nvidia.com/v1`                      |
+| Google Gemini (OpenAI-compat)     | `google`         | `https://generativelanguage.googleapis.com/v1beta/openai`  |
+| Cerebras                          | `cerebras`       | `https://api.cerebras.ai/v1`                               |
+| GitHub Models                     | `github`         | `https://models.inference.ai.azure.com`                    |
+| SambaNova Cloud                   | `sambanova`      | `https://api.sambanova.ai/v1`                              |
+| Mistral AI                        | `mistral`        | `https://api.mistral.ai/v1`                                |
+| Groq                              | `groq`           | `https://api.groq.com/openai/v1`                           |
+| Cloudflare Workers AI             | `cloudflare`     | `https://api.cloudflare.com/client/v4/accounts/.../ai/v1`  |
+| Zhipu AI (Z.ai / BigModel)        | `zhipu`          | `https://open.bigmodel.cn/api/paas/v4`                     |
+| Cohere                            | `cohere`         | `https://api.cohere.com/compatibility/v1`                  |
+| DeepSeek                          | `deepseek`       | `https://api.deepseek.com/v1`                              |
+| OpenRouter                        | `openrouter`     | `https://openrouter.ai/api/v1`                             |
+| Ollama Cloud                      | `ollama-cloud`   | `https://ollama.com/v1`                                    |
+
+Any OpenAI-compatible provider can also be added manually via the "Add / edit a
+provider (manual)" menu option.
 
 ---
 

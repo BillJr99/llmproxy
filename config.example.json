@@ -20,6 +20,11 @@
       "base_url": "http://localhost:11434/v1",
       "api_key": "ollama",
       "model_filter": ["llama3.2", "mistral"]
+    },
+    "deepseek": {
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "sk-...",
+      "model_filter": null
     }
   },
   "known_free": [
