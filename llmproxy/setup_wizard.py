@@ -382,14 +382,25 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
 
 
 def _is_local_url(base_url: str) -> bool:
-    """Return True when base_url points at a loopback address."""
+    """Return True when base_url resolves to a local host or local-network domain.
+
+    Matches:
+      - loopback: localhost, 127.x.x.x, ::1, 0.0.0.0
+      - mDNS / Bonjour: *.local
+      - Docker host routing: host.docker.internal, gateway.docker.internal
+    """
     import urllib.parse
     try:
         hostname = urllib.parse.urlparse(base_url).hostname or ""
     except Exception:
         return False
     hostname = hostname.strip("[]").lower()
-    return hostname in ("localhost", "127.0.0.1", "::1") or hostname.startswith("127.")
+    return (
+        hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0",
+                     "host.docker.internal", "gateway.docker.internal")
+        or hostname.startswith("127.")
+        or hostname.endswith(".local")
+    )
 
 # ---------------------------------------------------------------------------
 # Terminal helpers
