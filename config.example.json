@@ -62,7 +62,7 @@
       "model_filter": ["kimi-latest"]
     },
     "minimax": {
-      "base_url": "https://api.minimaxi.chat/v1",
+      "base_url": "https://api.minimax.io/v1",
       "api_key": "...",
       "model_filter": ["MiniMax-M1"]
     },

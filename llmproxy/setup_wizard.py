@@ -126,7 +126,7 @@ PROVIDER_TEMPLATES: list[dict] = [
     {
         "display": "MiniMax",
         "key": "minimax",
-        "base_url": "https://api.minimaxi.chat/v1",
+        "base_url": "https://api.minimax.io/v1",
     },
     {
         "display": "Hugging Face Inference",
