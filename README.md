@@ -218,7 +218,7 @@ The interactive setup wizard (`--setup`) includes ready-made templates for the
 following providers:
 
 | Provider                          | Default key      | Base URL                                                   |
-|-----------------------------------|------------------|---------------------------------------------------------|
+|-----------------------------------|------------------|-----------------------------------------------------------|
 | Nous Research (Hermes)            | `nous`           | `https://inference-api.nousresearch.com/v1`                |
 | Nvidia NIM                        | `nvidia`         | `https://integrate.api.nvidia.com/v1`                      |
 | Google Gemini (OpenAI-compat)     | `google`         | `https://generativelanguage.googleapis.com/v1beta/openai`  |
@@ -235,7 +235,7 @@ following providers:
 | OpenRouter                        | `openrouter`     | `https://openrouter.ai/api/v1`                             |
 | Ollama Cloud                      | `ollama-cloud`   | `https://ollama.com/v1`                                    |
 | Moonshot AI (Kimi)                | `moonshot`       | `https://api.moonshot.ai/v1`                               |
-| MiniMax                           | `minimax`        | `https://api.minimaxi.chat/v1`                             |
+| MiniMax                           | `minimax`        | `https://api.minimax.io/v1`                                |
 | Hugging Face Inference            | `huggingface`    | `https://router.huggingface.co/v1`                         |
 | xAI (Grok)                        | `xai`            | `https://api.x.ai/v1`                                      |
 | Cloudflare AI Gateway             | `cloudflare-ai-gateway` | `https://gateway.ai.cloudflare.com/v1/{account}/{gw}/workers-ai/v1` |
