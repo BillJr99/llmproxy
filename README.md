@@ -165,13 +165,15 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
   },
   "known_free": [
     "openrouter/qwen/qwen3-coder:free",
-    "gpt-oss-20b"
+    "gpt-oss-20b",
+    "nvidia/meta/llama-3.1-70b-instruct"
   ],
   "model_reasoning": {
     "anthropic/claude-3.5-haiku": "exploratory",
     "anthropic/claude-sonnet-4-5": "standard",
     "anthropic/claude-opus-4": "deep",
-    "openrouter/deepseek/deepseek-r1": "deep"
+    "openrouter/deepseek/deepseek-r1": "deep",
+    "nvidia/meta/llama-3.1-70b-instruct": "standard"
   },
   "server": {
     "host": "0.0.0.0",
@@ -216,7 +218,7 @@ The interactive setup wizard (`--setup`) includes ready-made templates for the
 following providers:
 
 | Provider                          | Default key      | Base URL                                                   |
-|-----------------------------------|------------------|------------------------------------------------------------|
+|-----------------------------------|------------------|---------------------------------------------------------|
 | Nous Research (Hermes)            | `nous`           | `https://inference-api.nousresearch.com/v1`                |
 | Nvidia NIM                        | `nvidia`         | `https://integrate.api.nvidia.com/v1`                      |
 | Google Gemini (OpenAI-compat)     | `google`         | `https://generativelanguage.googleapis.com/v1beta/openai`  |
