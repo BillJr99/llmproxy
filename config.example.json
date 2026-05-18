@@ -57,12 +57,12 @@
       "model_filter": ["glm-4.5-air", "glm-4.5-flash", "glm-4.5"]
     },
     "moonshot": {
-      "base_url": "https://api.moonshot.cn/v1",
+      "base_url": "https://api.moonshot.ai/v1",
       "api_key": "...",
       "model_filter": ["kimi-latest"]
     },
     "minimax": {
-      "base_url": "https://api.minimax.chat/v1",
+      "base_url": "https://api.minimaxi.chat/v1",
       "api_key": "...",
       "model_filter": ["MiniMax-M1"]
     },
