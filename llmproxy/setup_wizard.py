@@ -121,12 +121,12 @@ PROVIDER_TEMPLATES: list[dict] = [
     {
         "display": "Moonshot AI (Kimi)",
         "key": "moonshot",
-        "base_url": "https://api.moonshot.cn/v1",
+        "base_url": "https://api.moonshot.ai/v1",
     },
     {
         "display": "MiniMax",
         "key": "minimax",
-        "base_url": "https://api.minimax.chat/v1",
+        "base_url": "https://api.minimax.io/v1",
     },
     {
         "display": "Hugging Face Inference",
@@ -952,7 +952,7 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
         if choice is None or choice == 5:
             break
 
-        # ── Add to known_free ──────────────────────────────────────────────
+        # ── Add to known_free ───────────────────────────────────────────
         if choice == 0:
             if not providers:
                 print(_warn("  No providers configured — add a provider first."))
@@ -968,7 +968,7 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
                 print(_ok(f"  Added '{entry}' to known_free."))
                 modified = True
 
-        # ── Remove from known_free ─────────────────────────────────────────
+        # ── Remove from known_free ────────────────────────────────────────
         elif choice == 1:
             if not known_free:
                 print(_warn("  known_free is empty."))
@@ -983,7 +983,7 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
             print(_ok(f"  Removed '{removed}' from known_free."))
             modified = True
 
-        # ── Tag model with reasoning level ────────────────────────────────
+        # ── Tag model with reasoning level ───────────────────────────────
         elif choice == 2:
             if not providers:
                 print(_warn("  No providers configured — add a provider first."))
@@ -1023,7 +1023,7 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
             print(_ok(f"  Removed reasoning tag for '{key}'."))
             modified = True
 
-        # ── View current tags ─────────────────────────────────────────────
+        # ── View current tags ──────────────────────────────────────────────
         elif choice == 4:
             print()
             print(_h("  known_free:"))

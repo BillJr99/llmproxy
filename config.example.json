@@ -57,12 +57,12 @@
       "model_filter": ["glm-4.5-air", "glm-4.5-flash", "glm-4.5"]
     },
     "moonshot": {
-      "base_url": "https://api.moonshot.cn/v1",
+      "base_url": "https://api.moonshot.ai/v1",
       "api_key": "...",
       "model_filter": ["kimi-latest"]
     },
     "minimax": {
-      "base_url": "https://api.minimax.chat/v1",
+      "base_url": "https://api.minimax.io/v1",
       "api_key": "...",
       "model_filter": ["MiniMax-M1"]
     },
@@ -70,6 +70,16 @@
       "base_url": "https://router.huggingface.co/v1",
       "api_key": "hf_...",
       "model_filter": ["accounts/fireworks/models/llama-v3p3-70b-instruct"]
+    },
+    "nous": {
+      "base_url": "https://inference-api.nousresearch.com/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "nvidia": {
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key": "nvapi-...",
+      "model_filter": ["meta/llama-3.1-70b-instruct"]
     },
     "xai": {
       "base_url": "https://api.x.ai/v1",
@@ -89,6 +99,11 @@
     "ollama": {
       "base_url": "http://localhost:11434/v1",
       "api_key": "ollama",
+      "model_filter": null
+    },
+    "ollama-cloud": {
+      "base_url": "https://ollama.com/v1",
+      "api_key": "...",
       "model_filter": null
     },
     "deepseek": {
@@ -198,6 +213,7 @@
     "z-ai/glm-4.5-flash":                 {"requests_per_minute": 15, "requests_per_day": null,  "tokens_per_minute": null,   "tokens_per_day": 1000000},
     "moonshot/kimi-latest":               {"requests_per_minute": 60, "requests_per_day": null,  "tokens_per_minute": null,   "tokens_per_day": 500000},
     "minimax/MiniMax-M1":                 {"requests_per_minute": 20, "requests_per_day": null,  "tokens_per_minute": 1000000,"tokens_per_day": null},
+    "nvidia/meta/llama-3.1-70b-instruct": {"requests_per_minute": 40, "requests_per_day": null,  "tokens_per_minute": null,   "tokens_per_day": null},
     "openrouter/deepseek/deepseek-v3.1:free":{"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": null,  "tokens_per_day": null},
     "openrouter/moonshotai/kimi-k2:free": {"requests_per_minute": 20, "requests_per_day": 200,   "tokens_per_minute": null,   "tokens_per_day": null},
     "openrouter/qwen/qwen3-coder:free":   {"requests_per_minute": 20, "requests_per_day": 200,   "tokens_per_minute": null,   "tokens_per_day": null},

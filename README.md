@@ -165,13 +165,15 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
   },
   "known_free": [
     "openrouter/qwen/qwen3-coder:free",
-    "gpt-oss-20b"
+    "gpt-oss-20b",
+    "nvidia/meta/llama-3.1-70b-instruct"
   ],
   "model_reasoning": {
     "anthropic/claude-3.5-haiku": "exploratory",
     "anthropic/claude-sonnet-4-5": "standard",
     "anthropic/claude-opus-4": "deep",
-    "openrouter/deepseek/deepseek-r1": "deep"
+    "openrouter/deepseek/deepseek-r1": "deep",
+    "nvidia/meta/llama-3.1-70b-instruct": "standard"
   },
   "server": {
     "host": "0.0.0.0",
@@ -216,7 +218,7 @@ The interactive setup wizard (`--setup`) includes ready-made templates for the
 following providers:
 
 | Provider                          | Default key      | Base URL                                                   |
-|-----------------------------------|------------------|------------------------------------------------------------|
+|-----------------------------------|------------------|-----------------------------------------------------------|
 | Nous Research (Hermes)            | `nous`           | `https://inference-api.nousresearch.com/v1`                |
 | Nvidia NIM                        | `nvidia`         | `https://integrate.api.nvidia.com/v1`                      |
 | Google Gemini (OpenAI-compat)     | `google`         | `https://generativelanguage.googleapis.com/v1beta/openai`  |
@@ -232,8 +234,8 @@ following providers:
 | DeepSeek                          | `deepseek`       | `https://api.deepseek.com/v1`                              |
 | OpenRouter                        | `openrouter`     | `https://openrouter.ai/api/v1`                             |
 | Ollama Cloud                      | `ollama-cloud`   | `https://ollama.com/v1`                                    |
-| Moonshot AI (Kimi)                | `moonshot`       | `https://api.moonshot.cn/v1`                               |
-| MiniMax                           | `minimax`        | `https://api.minimax.chat/v1`                              |
+| Moonshot AI (Kimi)                | `moonshot`       | `https://api.moonshot.ai/v1`                               |
+| MiniMax                           | `minimax`        | `https://api.minimax.io/v1`                                |
 | Hugging Face Inference            | `huggingface`    | `https://router.huggingface.co/v1`                         |
 | xAI (Grok)                        | `xai`            | `https://api.x.ai/v1`                                      |
 | Cloudflare AI Gateway             | `cloudflare-ai-gateway` | `https://gateway.ai.cloudflare.com/v1/{account}/{gw}/workers-ai/v1` |
