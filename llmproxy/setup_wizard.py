@@ -1,4 +1,3 @@
-"""
 setup_wizard.py — Interactive terminal wizard for configuring llmproxy.
 
 Run via:  llmproxy --setup
@@ -148,6 +147,11 @@ PROVIDER_TEMPLATES: list[dict] = [
         "gateway_id_required": True,
         "gateway_id_label": "AI Gateway Name",
         "gateway_id_hint": "The name you gave your AI Gateway in the Cloudflare dashboard",
+    },
+    {
+        "display": "Vercel AI Gateway",
+        "key": "vercel",
+        "base_url": "https://ai-gateway.vercel.sh/v1",
     },
 ]
 
