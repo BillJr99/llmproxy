@@ -54,7 +54,7 @@ RUN pip install --upgrade pip && \
 
 # ── Copy the application package ──────────────────────────────────────────
 COPY llmproxy/ ./llmproxy/
-COPY setup.py .
+COPY llmproxy/setup.py .
 RUN pip install -e .
 
 # ── Expose the default listen port ────────────────────────────────────────
