@@ -1,3 +1,5 @@
+"""
+setup_wizard.py — Interactive terminal wizard for configuring llmproxy.
 
 Run via:  llmproxy --setup
 or:       python -m llmproxy --setup
