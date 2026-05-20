@@ -115,6 +115,12 @@
       "base_url": "https://api.deepseek.com/v1",
       "api_key": "sk-...",
       "model_filter": null
+    },
+    "opencode-zen": {
+      "base_url": "https://opencode.ai/zen/v1",
+      "api_key": "opencode-...",
+      "model_filter": ["big-pickle", "deepseek-v4-flash-free", "minimax-m2.5-free", "nemotron-3-super-free"],
+      "_note": "Verify model IDs via GET /v1/models — opencode.ai/zen may update its free model list."
     }
   },
   "known_free": [
@@ -147,7 +153,11 @@
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct",
     "nvidia/meta/llama-3.1-70b-instruct",
     "xai/grok-3-mini",
-    "xai/grok-3"
+    "xai/grok-3",
+    "opencode-zen/big-pickle",
+    "opencode-zen/deepseek-v4-flash-free",
+    "opencode-zen/minimax-m2.5-free",
+    "opencode-zen/nemotron-3-super-free"
   ],
   "model_reasoning": {
     "openai/gpt-4o-mini": "exploratory",
@@ -192,7 +202,11 @@
     "openrouter/meta-llama/llama-3.2-3b-instruct:free": "exploratory",
     "openrouter/meta-llama/llama-3.1-8b-instruct:free": "exploratory",
     "openrouter/google/gemma-2-9b-it:free": "exploratory",
-    "openrouter/qwen/qwen-2.5-7b-instruct:free": "exploratory"
+    "openrouter/qwen/qwen-2.5-7b-instruct:free": "exploratory",
+    "opencode-zen/big-pickle": "standard",
+    "opencode-zen/deepseek-v4-flash-free": "standard",
+    "opencode-zen/minimax-m2.5-free": "standard",
+    "opencode-zen/nemotron-3-super-free": "deep"
   },
   "free_limits": {
     "_note": "Rate limits for capacity-aware load balancing on llmproxy/free and llmproxy/*/free endpoints. Tracked per-worker-process; resets on restart. Token limits (tpm/tpd) are stored for reference but not yet enforced. Check provider docs — limits change frequently.",
@@ -222,7 +236,11 @@
     "openrouter/deepseek/deepseek-v3.1:free":{"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": null,  "tokens_per_day": null},
     "openrouter/moonshotai/kimi-k2:free": {"requests_per_minute": 20, "requests_per_day": 200,   "tokens_per_minute": null,   "tokens_per_day": null},
     "openrouter/qwen/qwen3-coder:free":   {"requests_per_minute": 20, "requests_per_day": 200,   "tokens_per_minute": null,   "tokens_per_day": null},
-    "openrouter/z-ai/glm-4.5-air:free":  {"requests_per_minute": 20, "requests_per_day": 200,   "tokens_per_minute": null,   "tokens_per_day": null}
+    "openrouter/z-ai/glm-4.5-air:free":  {"requests_per_minute": 20, "requests_per_day": 200,   "tokens_per_minute": null,   "tokens_per_day": null},
+    "opencode-zen/big-pickle":             {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null,  "tokens_per_day": null},
+    "opencode-zen/deepseek-v4-flash-free": {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null,  "tokens_per_day": null},
+    "opencode-zen/minimax-m2.5-free":      {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null,  "tokens_per_day": null},
+    "opencode-zen/nemotron-3-super-free":  {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null,  "tokens_per_day": null}
   },
   "server": {
     "host": "0.0.0.0",

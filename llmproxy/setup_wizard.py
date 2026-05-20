@@ -1,4 +1,3 @@
-"""
 setup_wizard.py — Interactive terminal wizard for configuring llmproxy.
 
 Run via:  llmproxy --setup
@@ -197,6 +196,13 @@ PROVIDER_TEMPLATES: list[dict] = [
         "base_url": "https://ai-gateway.vercel.sh/v1",
         "key_required": True,
         "key_hint": "Get your API key at vercel.com/account/tokens",
+    },
+    {
+        "display": "OpenCode Zen (free gateway)",
+        "key": "opencode-zen",
+        "base_url": "https://opencode.ai/zen/v1",
+        "key_required": True,
+        "key_hint": "Get your API key at opencode.ai",
     },
 ]
 
@@ -445,6 +451,26 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
             "openrouter/moonshotai/kimi-k2:free":     {"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": None, "tokens_per_day": None},
             "openrouter/qwen/qwen3-coder:free":       {"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": None, "tokens_per_day": None},
             "openrouter/z-ai/glm-4.5-air:free":       {"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": None, "tokens_per_day": None},
+        },
+    },
+    "opencode-zen": {
+        "known_free": [
+            "opencode-zen/big-pickle",
+            "opencode-zen/deepseek-v4-flash-free",
+            "opencode-zen/minimax-m2.5-free",
+            "opencode-zen/nemotron-3-super-free",
+        ],
+        "model_reasoning": {
+            "opencode-zen/big-pickle":             "standard",
+            "opencode-zen/deepseek-v4-flash-free": "standard",
+            "opencode-zen/minimax-m2.5-free":      "standard",
+            "opencode-zen/nemotron-3-super-free":  "deep",
+        },
+        "free_limits": {
+            "opencode-zen/big-pickle":             {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
+            "opencode-zen/deepseek-v4-flash-free": {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
+            "opencode-zen/minimax-m2.5-free":      {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
+            "opencode-zen/nemotron-3-super-free":  {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
         },
     },
 }
