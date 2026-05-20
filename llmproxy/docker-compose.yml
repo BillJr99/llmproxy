@@ -2,6 +2,12 @@
 # llmproxy — docker-compose.yml
 # ============================================================
 #
+# Before first use, generate a .env file with your UID/GID so that
+# files written inside the container are owned by your host user:
+#
+#   printf "UID=%s\nGID=%s\n" "$(id -u)" "$(id -g)" > .env
+#   mkdir -p ~/.config/llmproxy
+#
 # Quick start (runs the proxy server):
 #   docker-compose up -d
 #
@@ -14,12 +20,18 @@
 # View logs:
 #   docker-compose logs -f llmproxy
 #
-# Stop and remove containers (config volume is preserved):
+# Stop and remove containers (host config directory is preserved):
 #   docker-compose down
 #
-# Destroy everything including the config volume:
-#   docker-compose down -v
-#
+# Named-volume alternative:
+#   Replace the bind-mount volume entries below with:
+#     volumes:
+#       - llmproxy_config:/root/.config/llmproxy
+#   Remove the LLMPROXY_CONFIG environment entry.
+#   Add a top-level volumes: section:
+#     volumes:
+#       llmproxy_config:
+#         name: llmproxy_config
 # ============================================================
 
 services:
@@ -30,14 +42,13 @@ services:
     image: llmproxy:latest
     container_name: llmproxy
     restart: unless-stopped
+    user: "${UID:-1000}:${GID:-1000}"
     ports:
       - "${LLMPROXY_PORT:-8080}:8080"
     volumes:
-      - llmproxy_config:/root/.config/llmproxy
+      - "${HOME}/.config/llmproxy:/config"
     environment:
-      # Optional: override via shell env or a .env file.
-      # LLMPROXY_CONFIG: /root/.config/llmproxy/config.json  # default
-      - LLMPROXY_CONFIG=${LLMPROXY_CONFIG:-/root/.config/llmproxy/config.json}
+      - LLMPROXY_CONFIG=/config/config.json
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
@@ -50,22 +61,18 @@ services:
   # Usage:  docker-compose run --rm setup
   #
   # Runs the wizard in a temporary container that shares the same
-  # named config volume as the server.  The server container does
+  # host config directory as the server.  The server container does
   # NOT need to be stopped; restart it after setup to apply changes.
   setup:
     build: .
     image: llmproxy:latest
+    user: "${UID:-1000}:${GID:-1000}"
     volumes:
-      - llmproxy_config:/root/.config/llmproxy
+      - "${HOME}/.config/llmproxy:/config"
     environment:
-      - LLMPROXY_CONFIG=${LLMPROXY_CONFIG:-/root/.config/llmproxy/config.json}
+      - LLMPROXY_CONFIG=/config/config.json
     entrypoint: ["python", "-m", "llmproxy", "--setup"]
     stdin_open: true   # -i
     tty: true          # -t
     profiles:
       - setup          # only started when explicitly requested
-
-# ── Named volume for persistent configuration ────────────
-volumes:
-  llmproxy_config:
-    name: llmproxy_config

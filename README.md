@@ -419,22 +419,30 @@ llmproxy --version
 
 ## Docker
 
+Config is bind-mounted from `~/.config/llmproxy` on the host into the container at `/config`, and the container runs as your current user so all written files are owned by you.
+
 ### Build the image
 
 ```bash
 docker build -t llmproxy .
 ```
 
-### First-time setup
-
-The configuration lives in a named Docker volume (`llmproxy_config`) mounted at
-`/root/.config/llmproxy` inside the container.  You never need to map host
-filesystem paths into the container.
+Or pull the pre-built image from GHCR (no build needed):
 
 ```bash
-# Interactive setup wizard (creates/updates the config volume)
+docker pull ghcr.io/billjr99/llmproxy:latest
+# then substitute ghcr.io/billjr99/llmproxy:latest wherever llmproxy appears below
+```
+
+### First-time setup
+
+```bash
+mkdir -p ~/.config/llmproxy
+
 docker run -it --rm \
-  -v llmproxy_config:/root/.config/llmproxy \
+  --user $(id -u):$(id -g) \
+  -v ~/.config/llmproxy:/config \
+  -e LLMPROXY_CONFIG=/config/config.json \
   llmproxy --setup
 ```
 
@@ -443,7 +451,9 @@ docker run -it --rm \
 ```bash
 docker run -d \
   -p 8080:8080 \
-  -v llmproxy_config:/root/.config/llmproxy \
+  --user $(id -u):$(id -g) \
+  -v ~/.config/llmproxy:/config \
+  -e LLMPROXY_CONFIG=/config/config.json \
   --name llmproxy \
   llmproxy
 ```
@@ -451,18 +461,46 @@ docker run -d \
 ### Reconfigure without stopping the server
 
 ```bash
-# Run setup in a temporary container sharing the same volume
 docker run -it --rm \
-  -v llmproxy_config:/root/.config/llmproxy \
+  --user $(id -u):$(id -g) \
+  -v ~/.config/llmproxy:/config \
+  -e LLMPROXY_CONFIG=/config/config.json \
   llmproxy --setup
 
 # Restart only if host or port changed; otherwise hot-reload handles it
 docker restart llmproxy
 ```
 
+### Named volume (alternative)
+
+If you prefer to keep the config inside Docker rather than on the host filesystem (e.g. in CI or rootless environments), use a named volume instead and omit `--user`:
+
+```bash
+# Setup
+docker run -it --rm \
+  -v llmproxy_config:/root/.config/llmproxy \
+  llmproxy --setup
+
+# Server
+docker run -d \
+  -p 8080:8080 \
+  -v llmproxy_config:/root/.config/llmproxy \
+  --name llmproxy \
+  llmproxy
+```
+
 ---
 
 ## docker-compose
+
+First, generate a `.env` file so the container runs as your current user:
+
+```bash
+printf "UID=%s\nGID=%s\n" "$(id -u)" "$(id -g)" > .env
+mkdir -p ~/.config/llmproxy
+```
+
+Then:
 
 ```bash
 # Build and start the server (detached)
@@ -477,16 +515,65 @@ docker-compose restart llmproxy
 # View logs
 docker-compose logs -f llmproxy
 
-# Tear down containers (config volume is preserved)
+# Stop and remove containers (host config directory is preserved)
 docker-compose down
-
-# Tear down everything including the config volume
-docker-compose down -v
 ```
 
-The `setup` service shares the `llmproxy_config` named volume with the server
-service.  It is declared with `profiles: [setup]` so it is never started by a
-plain `docker-compose up`.
+The `setup` service is declared with `profiles: [setup]` so it is never started by a plain `docker-compose up`.
+
+To use a named volume instead of the bind mount, see the comment at the top of `docker-compose.yml`.
+
+---
+
+## GHCR — hosting and pulling
+
+The included GitHub Actions workflow (`.github/workflows/docker-publish.yml`) automatically builds and pushes the image to the GitHub Container Registry on every push to `main` and on version tags.
+
+### How it works
+
+- Uses `GITHUB_TOKEN` — no Personal Access Token required.
+- Tags produced: `latest` (on `main`), `v1.2.3`, `v1.2` (on semver tags), `main` (branch name).
+- Image is published to `ghcr.io/billjr99/llmproxy`.
+
+### Make the package public
+
+After the first push the package is private by default. To make it public:
+
+1. Go to **github.com/billjr99** → **Packages** → `llmproxy`.
+2. Click **Package settings** → **Change visibility** → **Public**.
+
+### Pull and run
+
+```bash
+docker pull ghcr.io/billjr99/llmproxy:latest
+
+mkdir -p ~/.config/llmproxy
+
+# Setup
+docker run -it --rm \
+  --user $(id -u):$(id -g) \
+  -v ~/.config/llmproxy:/config \
+  -e LLMPROXY_CONFIG=/config/config.json \
+  ghcr.io/billjr99/llmproxy:latest --setup
+
+# Server
+docker run -d \
+  -p 8080:8080 \
+  --user $(id -u):$(id -g) \
+  -v ~/.config/llmproxy:/config \
+  -e LLMPROXY_CONFIG=/config/config.json \
+  --name llmproxy \
+  ghcr.io/billjr99/llmproxy:latest
+```
+
+### Trigger a release
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow runs automatically and pushes `ghcr.io/billjr99/llmproxy:1.0.0`, `:1.0`, and `:latest`.
 
 ---
 
