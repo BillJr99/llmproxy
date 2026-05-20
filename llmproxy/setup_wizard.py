@@ -152,6 +152,8 @@ PROVIDER_TEMPLATES: list[dict] = [
         "display": "Vercel AI Gateway",
         "key": "vercel",
         "base_url": "https://ai-gateway.vercel.sh/v1",
+        "key_required": True,
+        "key_hint": "Get your API key at vercel.com/account/tokens",
     },
 ]
 
@@ -735,9 +737,13 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
 
     # API key — preserve the existing key if the user submits an empty value.
     existing_key = (existing or {}).get("api_key", "")
+    if tmpl.get("key_hint") and not existing_key:
+        print(_dim(f"  {tmpl['key_hint']}"))
     if existing_key:
         masked = _mask_api_key(existing_key)
         print(f"  API Key [{_dim(masked)}] (press Enter to keep): ", end="", flush=True)
+    elif tmpl.get("key_required"):
+        print(f"  API Key (required): ", end="", flush=True)
     else:
         print(f"  API Key (optional): ", end="", flush=True)
     try:

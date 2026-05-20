@@ -93,7 +93,7 @@
     },
     "vercel": {
       "base_url": "https://ai-gateway.vercel.sh/v1",
-      "api_key": "...",
+      "api_key": "vercel-...",
       "model_filter": null
     },
     "openrouter": {
