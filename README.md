@@ -239,6 +239,9 @@ following providers:
 | Hugging Face Inference            | `huggingface`    | `https://router.huggingface.co/v1`                         |
 | xAI (Grok)                        | `xai`            | `https://api.x.ai/v1`                                      |
 | Cloudflare AI Gateway             | `cloudflare-ai-gateway` | `https://gateway.ai.cloudflare.com/v1/{account}/{gw}/workers-ai/v1` |
+| Vercel AI Gateway                 | `vercel`         | `https://ai-gateway.vercel.sh/v1`                          |
+
+> **API key required.** Every provider in this table requires an API key. The setup wizard displays a hint showing where to obtain each key. For keyless local access (e.g. a local Ollama instance), use the manual "Add / edit a provider" option in the wizard.
 
 Any OpenAI-compatible provider can also be added manually via the "Add / edit a
 provider (manual)" menu option.
@@ -422,16 +425,25 @@ llmproxy --version
 docker build -t llmproxy .
 ```
 
-### First-time setup
-
-The configuration lives in a named Docker volume (`llmproxy_config`) mounted at
-`/root/.config/llmproxy` inside the container.  You never need to map host
-filesystem paths into the container.
+Or pull from GHCR (see [GHCR — hosting and pulling](#ghcr--hosting-and-pulling)):
 
 ```bash
-# Interactive setup wizard (creates/updates the config volume)
+docker pull ghcr.io/billjr99/llmproxy:latest
+```
+
+### First-time setup
+
+Config is bind-mounted from `~/.config/llmproxy` on the host.  The container
+runs as your current user so all files created inside the container are owned
+by you on the host.
+
+```bash
+mkdir -p ~/.config/llmproxy
+
 docker run -it --rm \
-  -v llmproxy_config:/root/.config/llmproxy \
+  --user $(id -u):$(id -g) \
+  -v ~/.config/llmproxy:/config \
+  -e LLMPROXY_CONFIG=/config/config.json \
   llmproxy --setup
 ```
 
@@ -440,7 +452,9 @@ docker run -it --rm \
 ```bash
 docker run -d \
   -p 8080:8080 \
-  -v llmproxy_config:/root/.config/llmproxy \
+  --user $(id -u):$(id -g) \
+  -v ~/.config/llmproxy:/config \
+  -e LLMPROXY_CONFIG=/config/config.json \
   --name llmproxy \
   llmproxy
 ```
@@ -448,18 +462,47 @@ docker run -d \
 ### Reconfigure without stopping the server
 
 ```bash
-# Run setup in a temporary container sharing the same volume
+docker run -it --rm \
+  --user $(id -u):$(id -g) \
+  -v ~/.config/llmproxy:/config \
+  -e LLMPROXY_CONFIG=/config/config.json \
+  llmproxy --setup
+
+# Restart only if host or port changed; hot-reload handles everything else
+docker restart llmproxy
+```
+
+### Named-volume alternative
+
+If you prefer to keep the config entirely inside Docker (useful for CI or
+rootless environments where a host-path mount is inconvenient):
+
+```bash
+# Setup
 docker run -it --rm \
   -v llmproxy_config:/root/.config/llmproxy \
   llmproxy --setup
 
-# Restart only if host or port changed; otherwise hot-reload handles it
-docker restart llmproxy
+# Server
+docker run -d \
+  -p 8080:8080 \
+  -v llmproxy_config:/root/.config/llmproxy \
+  --name llmproxy \
+  llmproxy
 ```
 
 ---
 
 ## docker-compose
+
+The `docker-compose.yml` uses a bind mount from `~/.config/llmproxy` on the
+host and runs containers as the current user.  Create a `.env` file first so
+Compose picks up your UID/GID:
+
+```bash
+printf "UID=%s\nGID=%s\n" "$(id -u)" "$(id -g)" > .env
+mkdir -p ~/.config/llmproxy
+```
 
 ```bash
 # Build and start the server (detached)
@@ -474,16 +517,70 @@ docker-compose restart llmproxy
 # View logs
 docker-compose logs -f llmproxy
 
-# Tear down containers (config volume is preserved)
+# Stop and remove containers (host config directory is preserved)
 docker-compose down
-
-# Tear down everything including the config volume
-docker-compose down -v
 ```
 
-The `setup` service shares the `llmproxy_config` named volume with the server
-service.  It is declared with `profiles: [setup]` so it is never started by a
-plain `docker-compose up`.
+---
+
+## GHCR — hosting and pulling
+
+### Publish your own image
+
+The included GitHub Actions workflow (`.github/workflows/docker-publish.yml`)
+automatically builds and pushes the image to
+[GitHub Container Registry (GHCR)](https://ghcr.io) on every push to `main`
+and on every version tag (`v*`).  It uses `GITHUB_TOKEN`, so no extra secrets
+or personal access tokens are needed.
+
+To enable it, fork or push the repo to GitHub — the workflow runs automatically.
+Images are published to:
+
+```
+ghcr.io/<your-github-username>/llmproxy
+```
+
+For this repository: `ghcr.io/billjr99/llmproxy`.
+
+**Tags produced:**
+
+| Event | Tags |
+|-------|------|
+| Push to `main` | `main`, `latest` |
+| Push tag `v1.2.3` | `1.2.3`, `1.2`, `latest` |
+
+### Pull and run
+
+```bash
+docker pull ghcr.io/billjr99/llmproxy:latest
+
+mkdir -p ~/.config/llmproxy
+
+# First-time setup
+docker run -it --rm \
+  --user $(id -u):$(id -g) \
+  -v ~/.config/llmproxy:/config \
+  -e LLMPROXY_CONFIG=/config/config.json \
+  ghcr.io/billjr99/llmproxy:latest --setup
+
+# Start the server
+docker run -d \
+  -p 8080:8080 \
+  --user $(id -u):$(id -g) \
+  -v ~/.config/llmproxy:/config \
+  -e LLMPROXY_CONFIG=/config/config.json \
+  --name llmproxy \
+  ghcr.io/billjr99/llmproxy:latest
+```
+
+### Use in docker-compose
+
+To use the GHCR image instead of building locally, replace `build: .` in
+`docker-compose.yml` with:
+
+```yaml
+image: ghcr.io/billjr99/llmproxy:latest
+```
 
 ---
 
