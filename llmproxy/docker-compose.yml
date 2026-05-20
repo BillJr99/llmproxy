@@ -2,11 +2,10 @@
 # llmproxy — docker-compose.yml
 # ============================================================
 #
-# Before first use, generate a .env file with your UID/GID so that
-# files written inside the container are owned by your host user:
+# Prerequisites — create a .env file with your UID/GID so that
+# bind-mounted config files are owned by you on the host:
 #
 #   printf "UID=%s\nGID=%s\n" "$(id -u)" "$(id -g)" > .env
-#   mkdir -p ~/.config/llmproxy
 #
 # Quick start (runs the proxy server):
 #   docker-compose up -d
@@ -23,15 +22,6 @@
 # Stop and remove containers (host config directory is preserved):
 #   docker-compose down
 #
-# Named-volume alternative:
-#   Replace the bind-mount volume entries below with:
-#     volumes:
-#       - llmproxy_config:/root/.config/llmproxy
-#   Remove the LLMPROXY_CONFIG environment entry.
-#   Add a top-level volumes: section:
-#     volumes:
-#       llmproxy_config:
-#         name: llmproxy_config
 # ============================================================
 
 services:
@@ -60,9 +50,9 @@ services:
   # ── Interactive setup service ────────────────────────────
   # Usage:  docker-compose run --rm setup
   #
-  # Runs the wizard in a temporary container that shares the same
-  # host config directory as the server.  The server container does
-  # NOT need to be stopped; restart it after setup to apply changes.
+  # Runs the wizard in a temporary container that bind-mounts the same
+  # host config directory as the server.  The server container does NOT
+  # need to be stopped; restart it after setup to apply host/port changes.
   setup:
     build: .
     image: llmproxy:latest
