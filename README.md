@@ -239,7 +239,9 @@ following providers:
 | Hugging Face Inference            | `huggingface`    | `https://router.huggingface.co/v1`                         |
 | xAI (Grok)                        | `xai`            | `https://api.x.ai/v1`                                      |
 | Cloudflare AI Gateway             | `cloudflare-ai-gateway` | `https://gateway.ai.cloudflare.com/v1/{account}/{gw}/workers-ai/v1` |
-| Vercel AI Gateway                 | `vercel`         | `https://ai-gateway.vercel.sh/v1` *(API key required)*     |
+| Vercel AI Gateway                 | `vercel`         | `https://ai-gateway.vercel.sh/v1`                          |
+
+> **API key required.** Every provider in this table requires an API key. The setup wizard displays a hint showing where to obtain each key. For keyless local access (e.g. a local Ollama instance), use the manual "Add / edit a provider" option in the wizard.
 
 Any OpenAI-compatible provider can also be added manually via the "Add / edit a
 provider (manual)" menu option.
