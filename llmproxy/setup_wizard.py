@@ -1,4 +1,4 @@
-setup_wizard.py — Interactive terminal wizard for configuring llmproxy.
+"""setup_wizard.py — Interactive terminal wizard for configuring llmproxy.
 
 Run via:  llmproxy --setup
 or:       python -m llmproxy --setup
@@ -196,6 +196,13 @@ PROVIDER_TEMPLATES: list[dict] = [
         "base_url": "https://ai-gateway.vercel.sh/v1",
         "key_required": True,
         "key_hint": "Get your API key at vercel.com/account/tokens",
+    },
+    {
+        "display": "Venice AI",
+        "key": "venice",
+        "base_url": "https://api.venice.ai/api/v1",
+        "key_required": True,
+        "key_hint": "Get your API key at venice.ai/settings/api",
     },
     {
         "display": "OpenCode Zen (free gateway)",
@@ -1031,7 +1038,7 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
         if choice is None or choice == 5:
             break
 
-        # ── Add to known_free ───────────────────────────────────────────
+        # ── Add to known_free ───────────────────────────────────
         if choice == 0:
             if not providers:
                 print(_warn("  No providers configured — add a provider first."))
@@ -1047,7 +1054,7 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
                 print(_ok(f"  Added '{entry}' to known_free."))
                 modified = True
 
-        # ── Remove from known_free ────────────────────────────────────────
+        # ── Remove from known_free ──────────────────────────────────
         elif choice == 1:
             if not known_free:
                 print(_warn("  known_free is empty."))
@@ -1062,7 +1069,7 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
             print(_ok(f"  Removed '{removed}' from known_free."))
             modified = True
 
-        # ── Tag model with reasoning level ───────────────────────────────
+        # ── Tag model with reasoning level ───────────────────────────
         elif choice == 2:
             if not providers:
                 print(_warn("  No providers configured — add a provider first."))
@@ -1085,7 +1092,7 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
             print(_ok(f"  Tagged '{entry}' as '{level}'."))
             modified = True
 
-        # ── Remove reasoning tag ──────────────────────────────────────────
+        # ── Remove reasoning tag ────────────────────────────────────
         elif choice == 3:
             if not reasoning:
                 print(_warn("  model_reasoning is empty."))
@@ -1102,7 +1109,7 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
             print(_ok(f"  Removed reasoning tag for '{key}'."))
             modified = True
 
-        # ── View current tags ──────────────────────────────────────────────
+        # ── View current tags ──────────────────────────────────────
         elif choice == 4:
             print()
             print(_h("  known_free:"))
