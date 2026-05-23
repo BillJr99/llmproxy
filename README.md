@@ -243,6 +243,11 @@ following providers:
 | Venice AI                         | `venice`         | `https://api.venice.ai/api/v1`                             |
 | OpenCode Zen (free gateway)       | `opencode-zen`   | `https://opencode.ai/zen/v1`                               |
 
+> **OpenCode Zen free model filter (as of May 2026)**
+> The example config and setup wizard ship a curated `model_filter` for OpenCode Zen's free tier.
+> Current list: `big-pickle`, `deepseek-3.5-flash-free`, `minimax-m2.5-free`, `nemotron-3-super-free`.
+> Verify current IDs by running `GET https://opencode.ai/zen/v1/models`.
+
 > **API key required.** Every provider in this table requires an API key. The setup wizard displays a hint showing where to obtain each key. For keyless local access (e.g. a local Ollama instance), use the manual "Add / edit a provider" option in the wizard.
 
 Any OpenAI-compatible provider can also be added manually via the "Add / edit a

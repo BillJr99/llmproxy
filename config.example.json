@@ -124,7 +124,7 @@
     "opencode-zen": {
       "base_url": "https://opencode.ai/zen/v1",
       "api_key": "opencode-...",
-      "model_filter": ["big-pickle", "deepseek-v4-flash-free", "minimax-m2.5-free", "nemotron-3-super-free"],
+      "model_filter": ["big-pickle", "deepseek-3.5-flash-free", "minimax-m2.5-free", "nemotron-3-super-free"],
       "_note": "Verify model IDs via GET /v1/models — opencode.ai/zen may update its free model list."
     }
   },
@@ -160,7 +160,7 @@
     "xai/grok-3-mini",
     "xai/grok-3",
     "opencode-zen/big-pickle",
-    "opencode-zen/deepseek-v4-flash-free",
+    "opencode-zen/deepseek-3.5-flash-free",
     "opencode-zen/minimax-m2.5-free",
     "opencode-zen/nemotron-3-super-free"
   ],
@@ -209,7 +209,7 @@
     "openrouter/google/gemma-2-9b-it:free": "exploratory",
     "openrouter/qwen/qwen-2.5-7b-instruct:free": "exploratory",
     "opencode-zen/big-pickle": "standard",
-    "opencode-zen/deepseek-v4-flash-free": "standard",
+    "opencode-zen/deepseek-3.5-flash-free": "standard",
     "opencode-zen/minimax-m2.5-free": "standard",
     "opencode-zen/nemotron-3-super-free": "deep"
   },
@@ -243,7 +243,7 @@
     "openrouter/qwen/qwen3-coder:free":   {"requests_per_minute": 20, "requests_per_day": 200,   "tokens_per_minute": null,   "tokens_per_day": null},
     "openrouter/z-ai/glm-4.5-air:free":  {"requests_per_minute": 20, "requests_per_day": 200,   "tokens_per_minute": null,   "tokens_per_day": null},
     "opencode-zen/big-pickle":             {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null,  "tokens_per_day": null},
-    "opencode-zen/deepseek-v4-flash-free": {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null,  "tokens_per_day": null},
+    "opencode-zen/deepseek-3.5-flash-free": {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null,  "tokens_per_day": null},
     "opencode-zen/minimax-m2.5-free":      {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null,  "tokens_per_day": null},
     "opencode-zen/nemotron-3-super-free":  {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null,  "tokens_per_day": null}
   },

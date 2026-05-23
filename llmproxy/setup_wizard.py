@@ -463,19 +463,19 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
     "opencode-zen": {
         "known_free": [
             "opencode-zen/big-pickle",
-            "opencode-zen/deepseek-v4-flash-free",
+            "opencode-zen/deepseek-3.5-flash-free",
             "opencode-zen/minimax-m2.5-free",
             "opencode-zen/nemotron-3-super-free",
         ],
         "model_reasoning": {
             "opencode-zen/big-pickle":             "standard",
-            "opencode-zen/deepseek-v4-flash-free": "standard",
+            "opencode-zen/deepseek-3.5-flash-free": "standard",
             "opencode-zen/minimax-m2.5-free":      "standard",
             "opencode-zen/nemotron-3-super-free":  "deep",
         },
         "free_limits": {
             "opencode-zen/big-pickle":             {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
-            "opencode-zen/deepseek-v4-flash-free": {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
+            "opencode-zen/deepseek-3.5-flash-free": {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
             "opencode-zen/minimax-m2.5-free":      {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
             "opencode-zen/nemotron-3-super-free":  {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
         },
