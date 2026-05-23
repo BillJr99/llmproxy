@@ -9,67 +9,67 @@
     "google": {
       "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
       "api_key": "AIza...",
-      "model_filter": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+      "model_filter": null
     },
     "groq": {
       "base_url": "https://api.groq.com/openai/v1",
       "api_key": "gsk_...",
-      "model_filter": ["llama-3.3-70b-versatile", "llama-4-scout-17b-16e-instruct", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"]
+      "model_filter": null
     },
     "cerebras": {
       "base_url": "https://api.cerebras.ai/v1",
       "api_key": "csk-...",
-      "model_filter": ["qwen-3-coder-480b", "llama-4-maverick-17b-128e-instruct", "qwen3-235b", "gpt-oss-120b"]
+      "model_filter": null
     },
     "github": {
       "base_url": "https://models.inference.ai.azure.com",
       "api_key": "ghp_...",
-      "model_filter": ["openai/gpt-5"]
+      "model_filter": null
     },
     "sambanova": {
       "base_url": "https://api.sambanova.ai/v1",
       "api_key": "...",
-      "model_filter": ["Meta-Llama-3.3-70B-Instruct"]
+      "model_filter": null
     },
     "mistral": {
       "base_url": "https://api.mistral.ai/v1",
       "api_key": "...",
-      "model_filter": ["mistral-large-latest", "magistral-medium-latest", "codestral-latest"]
+      "model_filter": null
     },
     "cloudflare-workers": {
       "base_url": "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1",
       "api_key": "...",
-      "model_filter": ["@cf/meta/llama-3.1-70b-instruct", "@cf/meta/llama-3.1-8b-instruct", "@cf/mistral/mistral-7b-instruct-v0.1"]
+      "model_filter": null
     },
     "cohere": {
       "base_url": "https://api.cohere.com/compatibility/v1",
       "api_key": "...",
-      "model_filter": ["command-r-plus-08-2024"]
+      "model_filter": null
     },
     "zhipu": {
       "base_url": "https://open.bigmodel.cn/api/paas/v4",
       "api_key": "...",
-      "model_filter": ["glm-4.5-flash"]
+      "model_filter": null
     },
     "z-ai": {
       "base_url": "https://api.z.ai/api/paas/v4",
       "api_key": "...",
-      "model_filter": ["glm-4.5-air", "glm-4.5-flash", "glm-4.5"]
+      "model_filter": null
     },
     "moonshot": {
       "base_url": "https://api.moonshot.ai/v1",
       "api_key": "...",
-      "model_filter": ["kimi-latest"]
+      "model_filter": null
     },
     "minimax": {
       "base_url": "https://api.minimax.io/v1",
       "api_key": "...",
-      "model_filter": ["MiniMax-M1"]
+      "model_filter": null
     },
     "huggingface": {
       "base_url": "https://router.huggingface.co/v1",
       "api_key": "hf_...",
-      "model_filter": ["accounts/fireworks/models/llama-v3p3-70b-instruct"]
+      "model_filter": null
     },
     "nous": {
       "base_url": "https://inference-api.nousresearch.com/v1",
@@ -79,17 +79,17 @@
     "nvidia": {
       "base_url": "https://integrate.api.nvidia.com/v1",
       "api_key": "nvapi-...",
-      "model_filter": ["meta/llama-3.1-70b-instruct"]
+      "model_filter": null
     },
     "xai": {
       "base_url": "https://api.x.ai/v1",
       "api_key": "xai-...",
-      "model_filter": ["grok-3", "grok-3-mini"]
+      "model_filter": null
     },
     "cloudflare-ai-gateway": {
       "base_url": "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/YOUR_GATEWAY_NAME/workers-ai/v1",
       "api_key": "...",
-      "model_filter": ["@cf/meta/llama-3.1-70b-instruct", "@cf/meta/llama-3.1-8b-instruct", "@cf/mistral/mistral-7b-instruct-v0.1"]
+      "model_filter": null
     },
     "vercel": {
       "base_url": "https://ai-gateway.vercel.sh/v1",
@@ -124,11 +124,10 @@
     "opencode-zen": {
       "base_url": "https://opencode.ai/zen/v1",
       "api_key": "opencode-...",
-      "model_filter": ["big-pickle", "deepseek-v4-flash-free", "minimax-m2.5-free", "nemotron-3-super-free"],
-      "_note": "Verify model IDs via GET /v1/models — opencode.ai/zen may update its free model list."
+      "model_filter": null
     }
   },
-  "known_free": [
+  "believed_free": [
     "google/gemini-2.5-pro",
     "google/gemini-2.5-flash",
     "google/gemini-2.5-flash-lite",

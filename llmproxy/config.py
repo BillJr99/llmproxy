@@ -13,7 +13,7 @@ Schema:
       "model_filter": ["model-a", "model-b"]   // null or absent = allow all
     }
   },
-  "known_free": ["model-a", "provider/model-b"],  // models the 'free' virtual
+  "believed_free": ["model-a", "provider/model-b"],  // models the 'free' virtual
                                                   // model should include even
                                                   // when their ID lacks 'free'
   "model_reasoning": {                            // optional; tag individual
@@ -89,7 +89,7 @@ DEFAULT_SERVER_CONFIG = {
 
 DEFAULT_CONFIG: dict = {
     "providers": {},
-    "known_free": [],
+    "believed_free": [],
     "model_reasoning": {},
     "free_limits": {},
     "server": dict(DEFAULT_SERVER_CONFIG),

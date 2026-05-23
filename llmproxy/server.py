@@ -443,7 +443,7 @@ def _get_route_cache_snapshot() -> dict[str, tuple[str, str]]:
 def _sync_local_provider_models_once() -> None:
     """
     On first call after startup, poll every localhost provider's /models endpoint
-    and sync unprefixed model IDs into config['known_free'] and config['model_reasoning'].
+    and sync unprefixed model IDs into config['believed_free'] and config['model_reasoning'].
 
     - Models with "/" in their ID are skipped (they are externally namespaced).
     - Models no longer returned by a local provider are pruned from both lists.
@@ -467,7 +467,7 @@ def _sync_local_provider_models_once() -> None:
         if not local_providers:
             return
 
-        existing_kf: list = config.setdefault("known_free", [])
+        existing_kf: list = config.setdefault("believed_free", [])
         existing_mr: dict = config.setdefault("model_reasoning", {})
         modified = False
 
@@ -495,7 +495,7 @@ def _sync_local_provider_models_once() -> None:
             for e in stale_kf:
                 existing_kf.remove(e)
                 modified = True
-                logger.info("[local-sync] Pruned stale known_free: %s", e)
+                logger.info("[local-sync] Pruned stale believed_free: %s", e)
 
             stale_mr = [k for k in existing_mr if k.startswith(prefix) and k not in expected]
             for k in stale_mr:
@@ -508,7 +508,7 @@ def _sync_local_provider_models_once() -> None:
                 if qualified not in existing_kf:
                     existing_kf.append(qualified)
                     modified = True
-                    logger.info("[local-sync] Added known_free: %s", qualified)
+                    logger.info("[local-sync] Added believed_free: %s", qualified)
                 if qualified not in existing_mr:
                     model_id = qualified[len(prefix):]
                     existing_mr[qualified] = _infer_local_reasoning_level(model_id)
@@ -556,7 +556,7 @@ def list_models() -> Response:
 
     Two synthetic virtual models are prepended when their backing candidates
     exist: 'free' (cycles through models whose ID contains 'free' or appears
-    in config['known_free']) and 'local' (cycles through models on localhost
+    in config['believed_free']) and 'local' (cycles through models on localhost
     providers).
 
     Results are cached for models_cache_ttl seconds (default 60) to avoid
@@ -597,11 +597,11 @@ def list_models() -> Response:
     with _model_route_cache_lock:
         snapshot = dict(_model_route_cache)
     synthetic: list[dict] = []
-    known_free = _normalized_known_free(config)
+    believed_free = _normalized_believed_free(config)
     has_free = any(
         "free" in uid.lower()
-        or uid.lower() in known_free
-        or f"{pn}/{uid}".lower() in known_free
+        or uid.lower() in believed_free
+        or f"{pn}/{uid}".lower() in believed_free
         for pn, uid in snapshot.values()
     )
     if has_free:
@@ -610,7 +610,7 @@ def list_models() -> Response:
             "object": "model",
             "owned_by": "llmproxy",
             "name": "llmproxy/free",
-            "_note": "Virtual model: cycles through all models whose ID contains 'free' (or appears in config['known_free']) until one succeeds.",
+            "_note": "Virtual model: cycles through all models whose ID contains 'free' (or appears in config['believed_free']) until one succeeds.",
         })
     if any(
         _is_local_url(cfg.get("base_url", ""))
@@ -651,7 +651,7 @@ def list_models() -> Response:
                 "_note": f"Virtual model: cycles through local models tagged '{level}' reasoning.",
             })
 
-    # Annotate real models with (known_free) and/or (local) suffixes in name.
+    # Annotate real models with (believed_free) and/or (local) suffixes in name.
     for model in all_models:
         route = snapshot.get(model["id"])
         if not route:
@@ -661,10 +661,10 @@ def list_models() -> Response:
         uid_lower = upstream_id.lower()
         if (
             "free" in uid_lower
-            or uid_lower in known_free
-            or f"{provider_name}/{uid_lower}" in known_free
+            or uid_lower in believed_free
+            or f"{provider_name}/{uid_lower}" in believed_free
         ):
-            suffixes.append("known_free")
+            suffixes.append("believed_free")
         provider_cfg = get_provider(config, provider_name)
         if provider_cfg and _is_local_url(provider_cfg.get("base_url", "")):
             suffixes.append("local")
@@ -1054,21 +1054,21 @@ def _capacity_ordered_candidates(
 
 # — "free" candidate selector —
 
-def _normalized_known_free(config: dict) -> set[str]:
+def _normalized_believed_free(config: dict) -> set[str]:
     """
-    Return a lowercased set of valid `known_free` entries from *config*.
+    Return a lowercased set of valid `believed_free` entries from *config*.
 
     Defensive against user-edited config.json: a missing field, ``None``,
     a non-list value, or non-string entries never raise — invalid shapes
     are logged once per call and silently dropped so a typo in config.json
     cannot turn /v1/models or /v1/chat/completions into a 500.
     """
-    raw = config.get("known_free")
+    raw = config.get("believed_free")
     if raw is None:
         return set()
     if not isinstance(raw, list):
         logger.warning(
-            "config['known_free'] must be a list of strings; got %s — ignoring.",
+            "config['believed_free'] must be a list of strings; got %s — ignoring.",
             type(raw).__name__,
         )
         return set()
@@ -1081,7 +1081,7 @@ def _normalized_known_free(config: dict) -> set[str]:
             bad_summary.append((index, type(entry).__name__))
     if bad_summary:
         logger.warning(
-            "config['known_free'] contains %d non-string entr%s (ignored) at index/type: %s",
+            "config['believed_free'] contains %d non-string entr%s (ignored) at index/type: %s",
             len(bad_summary),
             "y" if len(bad_summary) == 1 else "ies",
             ", ".join(f"{i}:{t}" for i, t in bad_summary),
@@ -1090,15 +1090,15 @@ def _normalized_known_free(config: dict) -> set[str]:
 
 
 def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
-    """(provider_name, provider_cfg, upstream_model) for every model whose upstream ID contains 'free' or appears in config['known_free']."""
+    """(provider_name, provider_cfg, upstream_model) for every model whose upstream ID contains 'free' or appears in config['believed_free']."""
     config = load_config()
-    known_free = _normalized_known_free(config)
+    believed_free = _normalized_believed_free(config)
     candidates = []
     for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
         is_free = (
             "free" in upstream_id.lower()
-            or upstream_id.lower() in known_free
-            or f"{provider_name}/{upstream_id}".lower() in known_free
+            or upstream_id.lower() in believed_free
+            or f"{provider_name}/{upstream_id}".lower() in believed_free
         )
         if is_free:
             provider_cfg = get_provider(config, provider_name)
@@ -1307,7 +1307,7 @@ def _virtual_model_hint(model_full: str) -> str:
     if name == "free":
         return (
             "Check that at least one provider exposes a free-tier model "
-            "(upstream ID contains 'free', or add it to config['known_free'])."
+            "(upstream ID contains 'free', or add it to config['believed_free'])."
         )
     if name == "local":
         return "Check that at least one provider has a localhost base_url."
