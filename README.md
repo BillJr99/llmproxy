@@ -56,7 +56,7 @@ arrives with `"model": "llmproxy/free"`, the proxy:
 
 1. Collects every model across all providers whose upstream ID contains the
    word `free` (case-insensitive) **or** whose upstream ID (or full
-   `provider/upstream` ID) appears in the top-level `known_free` config list
+   `provider/upstream` ID) appears in the top-level `believed_free` config list
    — see [Configuration](#configuration).
 2. Picks a **random starting position** in that list, then tries each
    candidate in order, wrapping around.
@@ -163,7 +163,7 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
       "model_filter": ["model-a", "model-b"]
     }
   },
-  "known_free": [
+  "believed_free": [
     "openrouter/qwen/qwen3-coder:free",
     "gpt-oss-20b",
     "nvidia/meta/llama-3.1-70b-instruct"
@@ -186,10 +186,13 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
 }
 ```
 
-`model_filter` is a list of upstream model IDs to allow (without the provider
-prefix).  Set it to `null` or omit it to permit all models from that provider.
+`model_filter` is an optional list of upstream model IDs to allow (without the
+provider prefix).  It is not set by default in `config.example.json`.  Set it to
+`null` or omit it to permit all models from that provider.  It can be used as a
+manual allowlist, or as a fallback model list for providers whose `/v1/models`
+endpoint does not work (e.g. Cloudflare Workers AI, Cloudflare AI Gateway).
 
-`known_free` is an **optional** top-level array of model names that the
+`believed_free` is an **optional** top-level array of model names that the
 `free` virtual model should include even when their ID doesn't contain the
 word `free`.  Omit the field entirely (or set it to `[]`) to keep the
 default behaviour — only IDs that literally contain `free` are pulled in.
@@ -197,6 +200,11 @@ Each entry is matched (case-insensitively) against either the upstream
 model ID (e.g. `gpt-oss-20b`) or the full proxy ID (e.g.
 `openrouter/qwen/qwen3-coder:free`).  The setup wizard does not edit this
 field — add it by hand to the config file.
+
+> **Free-tier accuracy:** The `believed_free` entries in `config.example.json` and the setup wizard
+> are best-effort estimates based on publicly-stated provider free tiers.  Provider offerings
+> change without notice — no guarantee is made as to accuracy.  Verify directly with each
+> provider before relying on free availability in production.
 
 <a name="model_reasoning"></a>
 `model_reasoning` is an **optional** top-level object that tags individual
@@ -251,8 +259,8 @@ provider (manual)" menu option.
 > **Providers that do not support `GET /v1/models` (as of May 2026)**
 > Some providers return an error or non-JSON response for the `/models` endpoint.
 > For these, llmproxy synthesizes model entries from the provider's `model_filter`
-> when the fetch fails.  The setup wizard ships a default `model_filter` for each
-> affected provider so the fallback works out of the box.
+> when the fetch fails.  Set `model_filter` manually in your config for these
+> providers to enumerate the models you want available.
 >
 > | Provider | Reason |
 > |---|---|

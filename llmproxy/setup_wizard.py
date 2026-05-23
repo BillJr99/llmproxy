@@ -217,13 +217,16 @@ PROVIDER_TEMPLATES: list[dict] = [
 # Per-provider free-tier metadata (auto-populated after quick setup)
 # ---------------------------------------------------------------------------
 # Source: https://github.com/tashfeenahmed/freellmapi and provider docs.
+# DISCLAIMER: This list is a best-effort estimate. Provider free tiers change
+# without notice — no guarantee is made as to accuracy. Verify with each
+# provider directly before relying on free availability in production.
 # Each entry maps provider template key → config fragments to merge.
 # Keys use "provider_key/model_id" format matching model_reasoning convention.
 # Limits: rpm/rpd used for capacity-aware load balancing; tpm/tpd stored for
 # reference but not yet enforced (would require response token counting).
 PROVIDER_FREE_INFO: dict[str, dict] = {
     "google": {
-        "known_free": [
+        "believed_free": [
             "google/gemini-2.5-pro",
             "google/gemini-2.5-flash",
             "google/gemini-2.5-flash-lite",
@@ -240,7 +243,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
     },
     "groq": {
-        "known_free": [
+        "believed_free": [
             "groq/llama-3.3-70b-versatile",
             "groq/llama-4-scout-17b-16e-instruct",
             "groq/llama-3.1-8b-instant",
@@ -263,7 +266,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
     },
     "cerebras": {
-        "known_free": [
+        "believed_free": [
             "cerebras/qwen-3-coder-480b",
             "cerebras/llama-4-maverick-17b-128e-instruct",
             "cerebras/qwen3-235b",
@@ -283,7 +286,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
     },
     "github": {
-        "known_free": [
+        "believed_free": [
             "github/openai/gpt-5",
         ],
         "model_reasoning": {
@@ -294,7 +297,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
     },
     "sambanova": {
-        "known_free": [
+        "believed_free": [
             "sambanova/Meta-Llama-3.3-70B-Instruct",
         ],
         "model_reasoning": {
@@ -305,7 +308,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
     },
     "mistral": {
-        "known_free": [
+        "believed_free": [
             "mistral/mistral-large-latest",
             "mistral/magistral-medium-latest",
             "mistral/codestral-latest",
@@ -322,7 +325,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
     },
     "cloudflare-workers": {
-        "known_free": [
+        "believed_free": [
             "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct",
             "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct",
             "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1",
@@ -335,7 +338,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         "free_limits": {},
     },
     "cohere": {
-        "known_free": [
+        "believed_free": [
             "cohere/command-r-plus-08-2024",
         ],
         "model_reasoning": {
@@ -346,7 +349,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
     },
     "zhipu": {
-        "known_free": [
+        "believed_free": [
             "zhipu/glm-4.5-flash",
         ],
         "model_reasoning": {
@@ -357,7 +360,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
     },
     "z-ai": {
-        "known_free": [
+        "believed_free": [
             "z-ai/glm-4.5-air",
             "z-ai/glm-4.5-flash",
         ],
@@ -372,7 +375,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
     },
     "moonshot": {
-        "known_free": [
+        "believed_free": [
             "moonshot/kimi-latest",
         ],
         "model_reasoning": {
@@ -383,7 +386,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
     },
     "minimax": {
-        "known_free": [
+        "believed_free": [
             "minimax/MiniMax-M1",
         ],
         "model_reasoning": {
@@ -394,7 +397,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
     },
     "huggingface": {
-        "known_free": [
+        "believed_free": [
             "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct",
         ],
         "model_reasoning": {
@@ -403,7 +406,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         "free_limits": {},
     },
     "cloudflare-ai-gateway": {
-        "known_free": [
+        "believed_free": [
             "cloudflare-ai-gateway/@cf/meta/llama-3.1-70b-instruct",
             "cloudflare-ai-gateway/@cf/meta/llama-3.1-8b-instruct",
             "cloudflare-ai-gateway/@cf/mistral/mistral-7b-instruct-v0.1",
@@ -416,7 +419,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         "free_limits": {},
     },
     "xai": {
-        "known_free": [
+        "believed_free": [
             "xai/grok-3-mini",
             "xai/grok-3",
         ],
@@ -430,7 +433,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
     },
     "nvidia": {
-        "known_free": [
+        "believed_free": [
             "nvidia/meta/llama-3.1-70b-instruct",
         ],
         "model_reasoning": {
@@ -441,7 +444,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
     },
     "openrouter": {
-        "known_free": [],
+        "believed_free": [],
         "model_reasoning": {
             "openrouter/deepseek/deepseek-v3.1:free": "deep",
             "openrouter/moonshotai/kimi-k2:free":     "deep",
@@ -461,7 +464,7 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
         },
     },
     "opencode-zen": {
-        "known_free": [
+        "believed_free": [
             "opencode-zen/big-pickle",
             "opencode-zen/deepseek-v4-flash-free",
             "opencode-zen/minimax-m2.5-free",
@@ -1004,31 +1007,31 @@ def _pick_model_scrollable(
 
 
 # ---------------------------------------------------------------------------
-# Model-tags menu (known_free + model_reasoning)
+# Model-tags menu (believed_free + model_reasoning)
 # ---------------------------------------------------------------------------
 
 def _edit_model_tags(config: dict, providers: dict) -> bool:
     """
-    Interactive sub-menu for managing known_free and model_reasoning.
+    Interactive sub-menu for managing believed_free and model_reasoning.
     Returns True if the config was modified.
     """
     modified = False
 
     while True:
-        known_free: list = config.setdefault("known_free", [])
+        believed_free: list = config.setdefault("believed_free", [])
         reasoning: dict = config.setdefault("model_reasoning", {})
 
         print()
         print(_divider())
         print(_h("  Model Tags"))
         print()
-        print(f"  {_dim('known_free:')}     {len(known_free)} entr{'y' if len(known_free)==1 else 'ies'}")
+        print(f"  {_dim('believed_free:')}     {len(believed_free)} entr{'y' if len(believed_free)==1 else 'ies'}")
         print(f"  {_dim('model_reasoning:')} {len(reasoning)} entr{'y' if len(reasoning)==1 else 'ies'}")
         print()
 
         options = [
-            "Add model to known_free",
-            "Remove model from known_free",
+            "Add model to believed_free",
+            "Remove model from believed_free",
             "Tag model with reasoning level  (exploratory / standard / deep)",
             "Remove reasoning tag from model",
             "View current tags",
@@ -1038,35 +1041,35 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
         if choice is None or choice == 5:
             break
 
-        # ── Add to known_free ───────────────────────────────────
+        # ── Add to believed_free ───────────────────────────────────
         if choice == 0:
             if not providers:
                 print(_warn("  No providers configured — add a provider first."))
                 continue
             entry = _pick_model_scrollable(
                 providers,
-                prompt="Add to known_free — pick a model",
-                exclude=set(known_free),
+                prompt="Add to believed_free — pick a model",
+                exclude=set(believed_free),
             )
             if entry:
-                known_free.append(entry)
-                config["known_free"] = known_free
-                print(_ok(f"  Added '{entry}' to known_free."))
+                believed_free.append(entry)
+                config["believed_free"] = believed_free
+                print(_ok(f"  Added '{entry}' to believed_free."))
                 modified = True
 
-        # ── Remove from known_free ──────────────────────────────────
+        # ── Remove from believed_free ──────────────────────────────────
         elif choice == 1:
-            if not known_free:
-                print(_warn("  known_free is empty."))
+            if not believed_free:
+                print(_warn("  believed_free is empty."))
                 continue
             print()
-            print(_h("  Remove from known_free:"))
-            idx = _pick(known_free)
+            print(_h("  Remove from believed_free:"))
+            idx = _pick(believed_free)
             if idx is None:
                 continue
-            removed = known_free.pop(idx)
-            config["known_free"] = known_free
-            print(_ok(f"  Removed '{removed}' from known_free."))
+            removed = believed_free.pop(idx)
+            config["believed_free"] = believed_free
+            print(_ok(f"  Removed '{removed}' from believed_free."))
             modified = True
 
         # ── Tag model with reasoning level ───────────────────────────
@@ -1112,9 +1115,9 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
         # ── View current tags ──────────────────────────────────────
         elif choice == 4:
             print()
-            print(_h("  known_free:"))
-            if known_free:
-                for entry in known_free:
+            print(_h("  believed_free:"))
+            if believed_free:
+                for entry in believed_free:
                     print(f"    • {entry}")
             else:
                 print(_dim("    (empty)"))
@@ -1143,29 +1146,29 @@ def _offer_free_tier_auto_populate(provider_key: str, config: dict) -> bool:
     if not info:
         return False
 
-    has_data = bool(info.get("known_free") or info.get("model_reasoning"))
+    has_data = bool(info.get("believed_free") or info.get("model_reasoning"))
     if not has_data:
         return False
 
-    n_free = len(info.get("known_free", []))
+    n_free = len(info.get("believed_free", []))
     n_reasoning = len(info.get("model_reasoning", {}))
     n_limits = len(info.get("free_limits", {}))
     print()
     print(_dim(f"  Known free-tier data for {provider_key}: "
-               f"{n_free} known_free, {n_reasoning} reasoning tag(s), {n_limits} limit(s)."))
+               f"{n_free} believed_free, {n_reasoning} reasoning tag(s), {n_limits} limit(s)."))
     if not _confirm(
-        f"Auto-populate known_free / model_reasoning / free_limits for {provider_key}?",
+        f"Auto-populate believed_free / model_reasoning / free_limits for {provider_key}?",
         default=True,
     ):
         return False
 
     modified = False
 
-    existing_kf: list = config.setdefault("known_free", [])
-    to_add_kf = [e for e in info.get("known_free", []) if e not in existing_kf]
+    existing_kf: list = config.setdefault("believed_free", [])
+    to_add_kf = [e for e in info.get("believed_free", []) if e not in existing_kf]
     if to_add_kf:
         existing_kf.extend(to_add_kf)
-        print(_ok(f"  Added {len(to_add_kf)} entr{'y' if len(to_add_kf)==1 else 'ies'} to known_free."))
+        print(_ok(f"  Added {len(to_add_kf)} entr{'y' if len(to_add_kf)==1 else 'ies'} to believed_free."))
         modified = True
 
     existing_mr: dict = config.setdefault("model_reasoning", {})
@@ -1223,7 +1226,7 @@ def _infer_reasoning_level(model_id: str) -> str:
 def _auto_register_local_models(provider_key: str, provider_cfg: dict, config: dict) -> bool:
     """
     Fetch models from a localhost provider and register unprefixed ones into
-    known_free and model_reasoning.  Called automatically — no user prompt.
+    believed_free and model_reasoning.  Called automatically — no user prompt.
 
     Only models whose ID contains no '/' are considered locally-native.
     Models with '/' (e.g. openai/gpt-4o piped through OpenWebUI) are skipped.
@@ -1243,7 +1246,7 @@ def _auto_register_local_models(provider_key: str, provider_cfg: dict, config: d
         print(_warn(f"  Could not reach '{provider_key}' to fetch models: {exc}"))
         return False
 
-    existing_kf: list = config.setdefault("known_free", [])
+    existing_kf: list = config.setdefault("believed_free", [])
     existing_mr: dict = config.setdefault("model_reasoning", {})
 
     added_free = 0
@@ -1262,7 +1265,7 @@ def _auto_register_local_models(provider_key: str, provider_cfg: dict, config: d
     if added_free or added_reasoning:
         print(_ok(
             f"  Auto-registered {added_free} local model(s) from {provider_key} "
-            f"({added_free} to known_free, {added_reasoning} to model_reasoning)."
+            f"({added_free} to believed_free, {added_reasoning} to model_reasoning)."
         ))
         return True
 
@@ -1313,7 +1316,7 @@ def run_setup(config_path: Optional[str] = None) -> None:
             "Add / edit a provider (manual)",
             "Remove a provider",
             "Configure server settings",
-            "Manage model tags  (known_free / reasoning levels)",
+            "Manage model tags  (believed_free / reasoning levels)",
             "View current configuration (JSON)",
             "Save and exit",
             "Exit without saving",
