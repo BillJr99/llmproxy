@@ -443,17 +443,6 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
             "nvidia/meta/llama-3.1-70b-instruct": {"requests_per_minute": 40, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
         },
     },
-    "nous": {
-        "known_free": [
-            "nous/stepfun/step-3.5-flash",
-        ],
-        "model_reasoning": {
-            "nous/stepfun/step-3.5-flash": "standard",
-        },
-        "free_limits": {
-            "nous/stepfun/step-3.5-flash": {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
-        },
-    },
     "openrouter": {
         "known_free": [],
         "model_reasoning": {
