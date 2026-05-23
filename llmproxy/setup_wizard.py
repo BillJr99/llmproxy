@@ -445,13 +445,13 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
     },
     "nous": {
         "known_free": [
-            "nous/deepseek-3.5-flash",
+            "nous/stepfun/step-3.5-flash",
         ],
         "model_reasoning": {
-            "nous/deepseek-3.5-flash": "standard",
+            "nous/stepfun/step-3.5-flash": "standard",
         },
         "free_limits": {
-            "nous/deepseek-3.5-flash": {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
+            "nous/stepfun/step-3.5-flash": {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
         },
     },
     "openrouter": {
