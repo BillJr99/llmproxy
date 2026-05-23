@@ -198,6 +198,11 @@ model ID (e.g. `gpt-oss-20b`) or the full proxy ID (e.g.
 `openrouter/qwen/qwen3-coder:free`).  The setup wizard does not edit this
 field — add it by hand to the config file.
 
+> **Free-tier accuracy:** The `known_free` entries in `config.example.json` and the setup wizard
+> are best-effort estimates based on publicly-stated provider free tiers.  Provider offerings
+> change without notice — no guarantee is made as to accuracy.  Verify directly with each
+> provider before relying on free availability in production.
+
 <a name="model_reasoning"></a>
 `model_reasoning` is an **optional** top-level object that tags individual
 models with a reasoning level.  Valid levels are `exploratory`, `standard`,
@@ -243,9 +248,9 @@ following providers:
 | Venice AI                         | `venice`         | `https://api.venice.ai/api/v1`                             |
 | OpenCode Zen (free gateway)       | `opencode-zen`   | `https://opencode.ai/zen/v1`                               |
 
-> **OpenCode Zen free model filter (as of May 2026)**
+> **OpenCode Zen free model filter**
 > The example config and setup wizard ship a curated `model_filter` for OpenCode Zen's free tier.
-> Current list: `big-pickle`, `deepseek-3.5-flash-free`, `minimax-m2.5-free`, `nemotron-3-super-free`.
+> Current list: `big-pickle`, `deepseek-v4-flash-free`, `minimax-m2.5-free`, `nemotron-3-super-free`.
 > Verify current IDs by running `GET https://opencode.ai/zen/v1/models`.
 
 > **API key required.** Every provider in this table requires an API key. The setup wizard displays a hint showing where to obtain each key. For keyless local access (e.g. a local Ollama instance), use the manual "Add / edit a provider" option in the wizard.

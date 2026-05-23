@@ -217,6 +217,9 @@ PROVIDER_TEMPLATES: list[dict] = [
 # Per-provider free-tier metadata (auto-populated after quick setup)
 # ---------------------------------------------------------------------------
 # Source: https://github.com/tashfeenahmed/freellmapi and provider docs.
+# DISCLAIMER: This list is a best-effort estimate. Provider free tiers change
+# without notice — no guarantee is made as to accuracy. Verify with each
+# provider directly before relying on free availability in production.
 # Each entry maps provider template key → config fragments to merge.
 # Keys use "provider_key/model_id" format matching model_reasoning convention.
 # Limits: rpm/rpd used for capacity-aware load balancing; tpm/tpd stored for
@@ -440,6 +443,17 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
             "nvidia/meta/llama-3.1-70b-instruct": {"requests_per_minute": 40, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
         },
     },
+    "nous": {
+        "known_free": [
+            "nous/deepseek-3.5-flash",
+        ],
+        "model_reasoning": {
+            "nous/deepseek-3.5-flash": "standard",
+        },
+        "free_limits": {
+            "nous/deepseek-3.5-flash": {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
+        },
+    },
     "openrouter": {
         "known_free": [],
         "model_reasoning": {
@@ -463,19 +477,19 @@ PROVIDER_FREE_INFO: dict[str, dict] = {
     "opencode-zen": {
         "known_free": [
             "opencode-zen/big-pickle",
-            "opencode-zen/deepseek-3.5-flash-free",
+            "opencode-zen/deepseek-v4-flash-free",
             "opencode-zen/minimax-m2.5-free",
             "opencode-zen/nemotron-3-super-free",
         ],
         "model_reasoning": {
             "opencode-zen/big-pickle":             "standard",
-            "opencode-zen/deepseek-3.5-flash-free": "standard",
+            "opencode-zen/deepseek-v4-flash-free": "standard",
             "opencode-zen/minimax-m2.5-free":      "standard",
             "opencode-zen/nemotron-3-super-free":  "deep",
         },
         "free_limits": {
             "opencode-zen/big-pickle":             {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
-            "opencode-zen/deepseek-3.5-flash-free": {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
+            "opencode-zen/deepseek-v4-flash-free": {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
             "opencode-zen/minimax-m2.5-free":      {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
             "opencode-zen/nemotron-3-super-free":  {"requests_per_minute": None, "requests_per_day": None, "tokens_per_minute": None, "tokens_per_day": None},
         },
