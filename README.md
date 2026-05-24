@@ -99,7 +99,9 @@ llmproxy also advertises a synthetic model named `llmproxy/local`.  When a reque
 arrives with `"model": "llmproxy/local"`, the proxy:
 
 1. Collects every model across all providers whose `base_url` hostname matches
-   a loopback address (`localhost`, `127.x.x.x`, `::1`).
+   a loopback address (`localhost`, `127.x.x.x`, `::1`, `0.0.0.0`), an mDNS
+   name (`*.local`), or a Docker host-gateway alias (`host.docker.internal`,
+   `gateway.docker.internal`).
 2. Picks a **random starting position** in that list, then tries each
    candidate in order, wrapping around.
 3. Returns the first response with an HTTP status below 400.
@@ -266,6 +268,8 @@ The wizard currently offers ready-made templates for these providers:
 | SambaNova Cloud                   | `sambanova`      | `https://api.sambanova.ai/v1`                              |
 | Mistral AI                        | `mistral`        | `https://api.mistral.ai/v1`                                |
 | Groq                              | `groq`           | `https://api.groq.com/openai/v1`                           |
+| Together AI                       | `together`       | `https://api.together.xyz/v1`                              |
+| Fireworks AI                      | `fireworks`      | `https://api.fireworks.ai/inference/v1`                    |
 | Cloudflare Workers AI             | `cloudflare-workers` | `https://api.cloudflare.com/client/v4/accounts/.../ai/v1`  |
 | Zhipu AI (BigModel)               | `zhipu`          | `https://open.bigmodel.cn/api/paas/v4`                     |
 | Z.AI                              | `z-ai`           | `https://api.z.ai/api/paas/v4`                             |
@@ -610,6 +614,44 @@ docker run -it --rm \
 # Restart only if host or port changed; hot-reload handles everything else
 docker restart llmproxy
 ```
+
+### Connecting to a local provider from inside the container
+
+When llmproxy runs in Docker but you want it to talk to a local provider like
+Ollama running on the host (or in a sibling container), `localhost` inside the
+container points to the container itself — not to your host. You have three
+options; pick whichever fits your setup.
+
+**Option A — `host.docker.internal` (recommended for Docker Desktop)**
+
+Change the provider's `base_url` from `http://localhost:11434/v1` to
+`http://host.docker.internal:11434/v1`. llmproxy already treats
+`host.docker.internal` and `gateway.docker.internal` as local for the purposes
+of `llmproxy/local` routing, so the `/local` virtual model picks it up
+automatically.
+
+On plain Linux (no Docker Desktop), `host.docker.internal` doesn't resolve by
+default — add it explicitly:
+
+```bash
+docker run --add-host=host.docker.internal:host-gateway ... llmproxy
+```
+
+…or in `docker-compose.yml`:
+
+```yaml
+services:
+  llmproxy:
+    # ...
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+```
+
+**Option B — host networking**
+
+Start llmproxy with `--network=host` and keep the original
+`http://localhost:11434/v1` config. Simplest on Linux; not available on
+Docker Desktop.
 
 ### Named-volume alternative
 
