@@ -1,7 +1,7 @@
 """Per-provider docs scrapers.
 
 Each scraper reads a single provider's docs / pricing / rate-limits page and
-emits Evidence at "high" confidence. Adding a new scraper:
+emits Evidence. Adding a new scraper:
 
   1. Drop a module at scripts/sources/docs/<provider>.py exporting a class
      deriving from DocsScraperBase.
@@ -16,11 +16,15 @@ from __future__ import annotations
 
 from .base import DocsScraperBase
 from .cerebras import CerebrasDocs
+from .cloudflare import CloudflareWorkersDocs
 from .cohere import CohereDocs
+from .github_models import GitHubModelsDocs
 from .google import GoogleDocs
 from .groq import GroqDocs
+from .huggingface import HuggingFaceDocs
 from .mistral import MistralDocs
 from .openrouter import OpenRouterFreeFilter as OpenRouterFreeFilter  # alt form
+from .sambanova import SambaNovaDocs
 
 DOCS_SOURCES: list[type[DocsScraperBase]] = [
     GoogleDocs,
@@ -28,4 +32,8 @@ DOCS_SOURCES: list[type[DocsScraperBase]] = [
     CerebrasDocs,
     MistralDocs,
     CohereDocs,
+    SambaNovaDocs,
+    GitHubModelsDocs,
+    CloudflareWorkersDocs,
+    HuggingFaceDocs,
 ]

@@ -16,6 +16,8 @@
     "sambanova",
     "mistral",
     "groq",
+    "together",
+    "fireworks",
     "cloudflare-workers",
     "zhipu",
     "z-ai",
@@ -608,6 +610,26 @@
           "tokens_per_day": null
         }
       },
+      "fallback_models": []
+    },
+    "together": {
+      "display": "Together AI",
+      "base_url": "https://api.together.xyz/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at api.together.ai/settings/api-keys",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "fireworks": {
+      "display": "Fireworks AI",
+      "base_url": "https://api.fireworks.ai/inference/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at fireworks.ai/account/api-keys",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
       "fallback_models": []
     }
   }

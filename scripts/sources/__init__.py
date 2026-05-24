@@ -7,12 +7,18 @@ Sources are registered in ALL_SOURCES so the CLI can enumerate them.
 from .api_models import ApiModelsSource
 from .base import Evidence, Source
 from .community import CommunitySource
+from .fireworks import FireworksSource
+from .litellm_cost_map import LiteLLMCostMapSource
 from .openrouter import OpenRouterSource
+from .together import TogetherSource
 
 ALL_SOURCES: dict[str, type[Source]] = {
     "openrouter": OpenRouterSource,
     "community": CommunitySource,
     "api": ApiModelsSource,
+    "litellm_cost_map": LiteLLMCostMapSource,
+    "together": TogetherSource,
+    "fireworks": FireworksSource,
 }
 
 # Docs scrapers are registered separately so we can list them under --source docs.

@@ -46,6 +46,16 @@
       "api_key": "gsk_...",
       "model_filter": null
     },
+    "together": {
+      "base_url": "https://api.together.xyz/v1",
+      "api_key": "tgp_...",
+      "model_filter": null
+    },
+    "fireworks": {
+      "base_url": "https://api.fireworks.ai/inference/v1",
+      "api_key": "fw_...",
+      "model_filter": null
+    },
     "cloudflare-workers": {
       "base_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
       "api_key": "...",

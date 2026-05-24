@@ -67,6 +67,8 @@ _PLACEHOLDER_KEYS: dict[str, str] = {
     "ollama": "ollama",
     "deepseek": "sk-...",
     "opencode-zen": "opencode-...",
+    "together": "tgp_...",
+    "fireworks": "fw_...",
 }
 
 
