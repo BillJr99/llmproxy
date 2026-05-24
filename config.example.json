@@ -6,14 +6,19 @@
       "api_key": "sk-...",
       "model_filter": null
     },
+    "nous": {
+      "base_url": "https://inference-api.nousresearch.com/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "nvidia": {
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key": "nvapi-...",
+      "model_filter": null
+    },
     "google": {
       "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
       "api_key": "AIza...",
-      "model_filter": null
-    },
-    "groq": {
-      "base_url": "https://api.groq.com/openai/v1",
-      "api_key": "gsk_...",
       "model_filter": null
     },
     "cerebras": {
@@ -36,13 +41,13 @@
       "api_key": "...",
       "model_filter": null
     },
-    "cloudflare-workers": {
-      "base_url": "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1",
-      "api_key": "...",
+    "groq": {
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_key": "gsk_...",
       "model_filter": null
     },
-    "cohere": {
-      "base_url": "https://api.cohere.com/compatibility/v1",
+    "cloudflare-workers": {
+      "base_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
       "api_key": "...",
       "model_filter": null
     },
@@ -53,6 +58,26 @@
     },
     "z-ai": {
       "base_url": "https://api.z.ai/api/paas/v4",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "deepseek": {
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "sk-...",
+      "model_filter": null
+    },
+    "cohere": {
+      "base_url": "https://api.cohere.com/compatibility/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "openrouter": {
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key": "sk-or-...",
+      "model_filter": null
+    },
+    "ollama-cloud": {
+      "base_url": "https://ollama.com/v1",
       "api_key": "...",
       "model_filter": null
     },
@@ -71,23 +96,13 @@
       "api_key": "hf_...",
       "model_filter": null
     },
-    "nous": {
-      "base_url": "https://inference-api.nousresearch.com/v1",
-      "api_key": "...",
-      "model_filter": null
-    },
-    "nvidia": {
-      "base_url": "https://integrate.api.nvidia.com/v1",
-      "api_key": "nvapi-...",
-      "model_filter": null
-    },
     "xai": {
       "base_url": "https://api.x.ai/v1",
       "api_key": "xai-...",
       "model_filter": null
     },
     "cloudflare-ai-gateway": {
-      "base_url": "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/YOUR_GATEWAY_NAME/workers-ai/v1",
+      "base_url": "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai/v1",
       "api_key": "...",
       "model_filter": null
     },
@@ -96,38 +111,24 @@
       "api_key": "vercel-...",
       "model_filter": null
     },
-    "openrouter": {
-      "base_url": "https://openrouter.ai/api/v1",
-      "api_key": "sk-or-...",
-      "model_filter": null
-    },
     "venice": {
       "base_url": "https://api.venice.ai/api/v1",
       "api_key": "...",
-      "model_filter": null
-    },
-    "ollama": {
-      "base_url": "http://localhost:11434/v1",
-      "api_key": "ollama",
-      "model_filter": null
-    },
-    "ollama-cloud": {
-      "base_url": "https://ollama.com/v1",
-      "api_key": "...",
-      "model_filter": null
-    },
-    "deepseek": {
-      "base_url": "https://api.deepseek.com/v1",
-      "api_key": "sk-...",
       "model_filter": null
     },
     "opencode-zen": {
       "base_url": "https://opencode.ai/zen/v1",
       "api_key": "opencode-...",
       "model_filter": null
+    },
+    "ollama": {
+      "base_url": "http://localhost:11434/v1",
+      "api_key": "ollama",
+      "model_filter": null
     }
   },
   "believed_free": [
+    "nvidia/meta/llama-3.1-70b-instruct",
     "google/gemini-2.5-pro",
     "google/gemini-2.5-flash",
     "google/gemini-2.5-flash-lite",
@@ -145,28 +146,28 @@
     "groq/llama-3.1-8b-instant",
     "groq/mixtral-8x7b-32768",
     "groq/gemma2-9b-it",
-    "cohere/command-r-plus-08-2024",
     "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct",
     "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct",
     "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1",
     "zhipu/glm-4.5-flash",
     "z-ai/glm-4.5-air",
     "z-ai/glm-4.5-flash",
+    "cohere/command-r-plus-08-2024",
     "moonshot/kimi-latest",
     "minimax/MiniMax-M1",
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct",
-    "nvidia/meta/llama-3.1-70b-instruct",
     "xai/grok-3-mini",
     "xai/grok-3",
+    "cloudflare-ai-gateway/@cf/meta/llama-3.1-70b-instruct",
+    "cloudflare-ai-gateway/@cf/meta/llama-3.1-8b-instruct",
+    "cloudflare-ai-gateway/@cf/mistral/mistral-7b-instruct-v0.1",
     "opencode-zen/big-pickle",
     "opencode-zen/deepseek-v4-flash-free",
     "opencode-zen/minimax-m2.5-free",
     "opencode-zen/nemotron-3-super-free"
   ],
   "model_reasoning": {
-    "openai/gpt-4o-mini": "exploratory",
-    "openai/gpt-4o": "standard",
-    "openai/o1": "deep",
+    "nvidia/meta/llama-3.1-70b-instruct": "standard",
     "google/gemini-2.5-pro": "deep",
     "google/gemini-2.5-flash": "standard",
     "google/gemini-2.5-flash-lite": "exploratory",
@@ -184,7 +185,6 @@
     "groq/llama-3.1-8b-instant": "exploratory",
     "groq/mixtral-8x7b-32768": "standard",
     "groq/gemma2-9b-it": "exploratory",
-    "cohere/command-r-plus-08-2024": "standard",
     "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct": "standard",
     "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct": "exploratory",
     "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
@@ -192,12 +192,7 @@
     "z-ai/glm-4.5-air": "exploratory",
     "z-ai/glm-4.5-flash": "standard",
     "z-ai/glm-4.5": "deep",
-    "moonshot/kimi-latest": "standard",
-    "minimax/MiniMax-M1": "standard",
-    "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": "standard",
-    "nvidia/meta/llama-3.1-70b-instruct": "standard",
-    "xai/grok-3-mini": "standard",
-    "xai/grok-3": "deep",
+    "cohere/command-r-plus-08-2024": "standard",
     "openrouter/deepseek/deepseek-v3.1:free": "deep",
     "openrouter/moonshotai/kimi-k2:free": "deep",
     "openrouter/qwen/qwen3-coder:free": "deep",
@@ -207,44 +202,225 @@
     "openrouter/meta-llama/llama-3.1-8b-instruct:free": "exploratory",
     "openrouter/google/gemma-2-9b-it:free": "exploratory",
     "openrouter/qwen/qwen-2.5-7b-instruct:free": "exploratory",
+    "moonshot/kimi-latest": "standard",
+    "minimax/MiniMax-M1": "standard",
+    "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": "standard",
+    "xai/grok-3-mini": "standard",
+    "xai/grok-3": "deep",
+    "cloudflare-ai-gateway/@cf/meta/llama-3.1-70b-instruct": "standard",
+    "cloudflare-ai-gateway/@cf/meta/llama-3.1-8b-instruct": "exploratory",
+    "cloudflare-ai-gateway/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
     "opencode-zen/big-pickle": "standard",
     "opencode-zen/deepseek-v4-flash-free": "standard",
     "opencode-zen/minimax-m2.5-free": "standard",
     "opencode-zen/nemotron-3-super-free": "deep"
   },
   "free_limits": {
-    "_note": "Rate limits for capacity-aware load balancing on llmproxy/free and llmproxy/*/free endpoints. Tracked per-worker-process; resets on restart. Token limits (tpm/tpd) are stored for reference but not yet enforced. Check provider docs — limits change frequently.",
-    "google/gemini-2.5-pro":              {"requests_per_minute": 5,  "requests_per_day": 100,   "tokens_per_minute": 250000, "tokens_per_day": null},
-    "google/gemini-2.5-flash":            {"requests_per_minute": 10, "requests_per_day": 20,    "tokens_per_minute": 250000, "tokens_per_day": null},
-    "google/gemini-2.5-flash-lite":       {"requests_per_minute": 15, "requests_per_day": 1000,  "tokens_per_minute": 250000, "tokens_per_day": null},
-    "groq/llama-3.3-70b-versatile":       {"requests_per_minute": 30, "requests_per_day": 1000,  "tokens_per_minute": 6000,   "tokens_per_day": 500000},
-    "groq/llama-4-scout-17b-16e-instruct":{"requests_per_minute": 30, "requests_per_day": 1000,  "tokens_per_minute": 6000,   "tokens_per_day": 1000000},
-    "groq/llama-3.1-8b-instant":          {"requests_per_minute": 30, "requests_per_day": 14400, "tokens_per_minute": null,   "tokens_per_day": null},
-    "groq/mixtral-8x7b-32768":            {"requests_per_minute": 30, "requests_per_day": 14400, "tokens_per_minute": null,   "tokens_per_day": null},
-    "groq/gemma2-9b-it":                  {"requests_per_minute": 30, "requests_per_day": 14400, "tokens_per_minute": null,   "tokens_per_day": null},
-    "cerebras/qwen-3-coder-480b":         {"requests_per_minute": 30, "requests_per_day": null,  "tokens_per_minute": 60000,  "tokens_per_day": 1000000},
-    "cerebras/llama-4-maverick-17b-128e-instruct":{"requests_per_minute": 30, "requests_per_day": null, "tokens_per_minute": 60000, "tokens_per_day": 1000000},
-    "cerebras/qwen3-235b":                {"requests_per_minute": 30, "requests_per_day": null,  "tokens_per_minute": 60000,  "tokens_per_day": 1000000},
-    "cerebras/gpt-oss-120b":              {"requests_per_minute": 30, "requests_per_day": null,  "tokens_per_minute": 60000,  "tokens_per_day": 1000000},
-    "github/openai/gpt-5":               {"requests_per_minute": 10, "requests_per_day": 50,    "tokens_per_minute": null,   "tokens_per_day": null},
-    "sambanova/Meta-Llama-3.3-70B-Instruct":{"requests_per_minute": 20, "requests_per_day": null, "tokens_per_minute": null, "tokens_per_day": 200000},
-    "mistral/mistral-large-latest":       {"requests_per_minute": 2,  "requests_per_day": null,  "tokens_per_minute": 500000, "tokens_per_day": null},
-    "mistral/magistral-medium-latest":    {"requests_per_minute": 2,  "requests_per_day": null,  "tokens_per_minute": 500000, "tokens_per_day": null},
-    "mistral/codestral-latest":           {"requests_per_minute": 2,  "requests_per_day": null,  "tokens_per_minute": 500000, "tokens_per_day": null},
-    "cohere/command-r-plus-08-2024":      {"requests_per_minute": 20, "requests_per_day": 33,    "tokens_per_minute": null,   "tokens_per_day": null},
-    "z-ai/glm-4.5-air":                   {"requests_per_minute": 15, "requests_per_day": null,  "tokens_per_minute": null,   "tokens_per_day": 1000000},
-    "z-ai/glm-4.5-flash":                 {"requests_per_minute": 15, "requests_per_day": null,  "tokens_per_minute": null,   "tokens_per_day": 1000000},
-    "moonshot/kimi-latest":               {"requests_per_minute": 60, "requests_per_day": null,  "tokens_per_minute": null,   "tokens_per_day": 500000},
-    "minimax/MiniMax-M1":                 {"requests_per_minute": 20, "requests_per_day": null,  "tokens_per_minute": 1000000,"tokens_per_day": null},
-    "nvidia/meta/llama-3.1-70b-instruct": {"requests_per_minute": 40, "requests_per_day": null,  "tokens_per_minute": null,   "tokens_per_day": null},
-    "openrouter/deepseek/deepseek-v3.1:free":{"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": null,  "tokens_per_day": null},
-    "openrouter/moonshotai/kimi-k2:free": {"requests_per_minute": 20, "requests_per_day": 200,   "tokens_per_minute": null,   "tokens_per_day": null},
-    "openrouter/qwen/qwen3-coder:free":   {"requests_per_minute": 20, "requests_per_day": 200,   "tokens_per_minute": null,   "tokens_per_day": null},
-    "openrouter/z-ai/glm-4.5-air:free":  {"requests_per_minute": 20, "requests_per_day": 200,   "tokens_per_minute": null,   "tokens_per_day": null},
-    "opencode-zen/big-pickle":             {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null,  "tokens_per_day": null},
-    "opencode-zen/deepseek-v4-flash-free": {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null,  "tokens_per_day": null},
-    "opencode-zen/minimax-m2.5-free":      {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null,  "tokens_per_day": null},
-    "opencode-zen/nemotron-3-super-free":  {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null,  "tokens_per_day": null}
+    "_note": "Rate limits for capacity-aware load balancing on llmproxy/free and llmproxy/*/free endpoints. Tracked per-worker-process; resets on restart. Token limits (tpm/tpd) are stored for reference but not yet enforced. Check provider docs \u2014 limits change frequently.",
+    "nvidia/meta/llama-3.1-70b-instruct": {
+      "requests_per_minute": 40,
+      "requests_per_day": null,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "google/gemini-2.5-pro": {
+      "requests_per_minute": 5,
+      "requests_per_day": 100,
+      "tokens_per_minute": 250000,
+      "tokens_per_day": null
+    },
+    "google/gemini-2.5-flash": {
+      "requests_per_minute": 10,
+      "requests_per_day": 20,
+      "tokens_per_minute": 250000,
+      "tokens_per_day": null
+    },
+    "google/gemini-2.5-flash-lite": {
+      "requests_per_minute": 15,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 250000,
+      "tokens_per_day": null
+    },
+    "cerebras/qwen-3-coder-480b": {
+      "requests_per_minute": 30,
+      "requests_per_day": null,
+      "tokens_per_minute": 60000,
+      "tokens_per_day": 1000000
+    },
+    "cerebras/llama-4-maverick-17b-128e-instruct": {
+      "requests_per_minute": 30,
+      "requests_per_day": null,
+      "tokens_per_minute": 60000,
+      "tokens_per_day": 1000000
+    },
+    "cerebras/qwen3-235b": {
+      "requests_per_minute": 30,
+      "requests_per_day": null,
+      "tokens_per_minute": 60000,
+      "tokens_per_day": 1000000
+    },
+    "cerebras/gpt-oss-120b": {
+      "requests_per_minute": 30,
+      "requests_per_day": null,
+      "tokens_per_minute": 60000,
+      "tokens_per_day": 1000000
+    },
+    "github/openai/gpt-5": {
+      "requests_per_minute": 10,
+      "requests_per_day": 50,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "sambanova/Meta-Llama-3.3-70B-Instruct": {
+      "requests_per_minute": 20,
+      "requests_per_day": null,
+      "tokens_per_minute": null,
+      "tokens_per_day": 200000
+    },
+    "mistral/mistral-large-latest": {
+      "requests_per_minute": 2,
+      "requests_per_day": null,
+      "tokens_per_minute": 500000,
+      "tokens_per_day": null
+    },
+    "mistral/magistral-medium-latest": {
+      "requests_per_minute": 2,
+      "requests_per_day": null,
+      "tokens_per_minute": 500000,
+      "tokens_per_day": null
+    },
+    "mistral/codestral-latest": {
+      "requests_per_minute": 2,
+      "requests_per_day": null,
+      "tokens_per_minute": 500000,
+      "tokens_per_day": null
+    },
+    "groq/llama-3.3-70b-versatile": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 6000,
+      "tokens_per_day": 500000
+    },
+    "groq/llama-4-scout-17b-16e-instruct": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 6000,
+      "tokens_per_day": 1000000
+    },
+    "groq/llama-3.1-8b-instant": {
+      "requests_per_minute": 30,
+      "requests_per_day": 14400,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "groq/mixtral-8x7b-32768": {
+      "requests_per_minute": 30,
+      "requests_per_day": 14400,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "groq/gemma2-9b-it": {
+      "requests_per_minute": 30,
+      "requests_per_day": 14400,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "zhipu/glm-4.5-flash": {
+      "requests_per_minute": null,
+      "requests_per_day": null,
+      "tokens_per_minute": null,
+      "tokens_per_day": 1000000
+    },
+    "z-ai/glm-4.5-air": {
+      "requests_per_minute": 15,
+      "requests_per_day": null,
+      "tokens_per_minute": null,
+      "tokens_per_day": 1000000
+    },
+    "z-ai/glm-4.5-flash": {
+      "requests_per_minute": 15,
+      "requests_per_day": null,
+      "tokens_per_minute": null,
+      "tokens_per_day": 1000000
+    },
+    "cohere/command-r-plus-08-2024": {
+      "requests_per_minute": 20,
+      "requests_per_day": 33,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "openrouter/deepseek/deepseek-v3.1:free": {
+      "requests_per_minute": 20,
+      "requests_per_day": 200,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "openrouter/moonshotai/kimi-k2:free": {
+      "requests_per_minute": 20,
+      "requests_per_day": 200,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "openrouter/qwen/qwen3-coder:free": {
+      "requests_per_minute": 20,
+      "requests_per_day": 200,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "openrouter/z-ai/glm-4.5-air:free": {
+      "requests_per_minute": 20,
+      "requests_per_day": 200,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "moonshot/kimi-latest": {
+      "requests_per_minute": 60,
+      "requests_per_day": null,
+      "tokens_per_minute": null,
+      "tokens_per_day": 500000
+    },
+    "minimax/MiniMax-M1": {
+      "requests_per_minute": 20,
+      "requests_per_day": null,
+      "tokens_per_minute": 1000000,
+      "tokens_per_day": null
+    },
+    "xai/grok-3-mini": {
+      "requests_per_minute": null,
+      "requests_per_day": null,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "xai/grok-3": {
+      "requests_per_minute": null,
+      "requests_per_day": null,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "opencode-zen/big-pickle": {
+      "requests_per_minute": null,
+      "requests_per_day": null,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "opencode-zen/deepseek-v4-flash-free": {
+      "requests_per_minute": null,
+      "requests_per_day": null,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "opencode-zen/minimax-m2.5-free": {
+      "requests_per_minute": null,
+      "requests_per_day": null,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "opencode-zen/nemotron-3-super-free": {
+      "requests_per_minute": null,
+      "requests_per_day": null,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    }
   },
   "server": {
     "host": "0.0.0.0",

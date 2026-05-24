@@ -1,0 +1,444 @@
+{
+  "_note": "Single source of truth for provider templates and free-tier metadata. Auto-managed by scripts/update_free_models.py. Hand-edits to per-provider 'believed_free'/'model_reasoning'/'free_limits' may be overwritten on next scrape; edit template fields (display, base_url, key_hint, ...) freely. Both llmproxy/setup_wizard.py and config.example.json are generated from this file.",
+  "_disclaimer": "Free tier status is best-effort. Provider free tiers change without notice. Verify with each provider before relying on free availability in production.",
+  "_sources": [
+    "https://github.com/tashfeenahmed/freellmapi",
+    "Per-provider docs/pricing pages",
+    "Provider /v1/models endpoints (when API key available)",
+    "OpenRouter /api/v1/models filtered by pricing.prompt == '0'"
+  ],
+  "provider_order": [
+    "nous",
+    "nvidia",
+    "google",
+    "cerebras",
+    "github",
+    "sambanova",
+    "mistral",
+    "groq",
+    "cloudflare-workers",
+    "zhipu",
+    "z-ai",
+    "deepseek",
+    "cohere",
+    "openrouter",
+    "ollama-cloud",
+    "moonshot",
+    "minimax",
+    "huggingface",
+    "xai",
+    "cloudflare-ai-gateway",
+    "vercel",
+    "venice",
+    "opencode-zen"
+  ],
+  "providers": {
+    "nous": {
+      "display": "Nous Research (Hermes)",
+      "base_url": "https://inference-api.nousresearch.com/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at nousresearch.com",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "nvidia": {
+      "display": "Nvidia NIM",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at build.nvidia.com",
+      "believed_free": [
+        "nvidia/meta/llama-3.1-70b-instruct"
+      ],
+      "model_reasoning": {
+        "nvidia/meta/llama-3.1-70b-instruct": "standard"
+      },
+      "free_limits": {
+        "nvidia/meta/llama-3.1-70b-instruct": {"requests_per_minute": 40, "requests_per_day": null, "tokens_per_minute": null, "tokens_per_day": null}
+      },
+      "fallback_models": []
+    },
+    "google": {
+      "display": "Google Gemini (via OpenAI-compat endpoint)",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "key_required": true,
+      "key_hint": "Get your API key at aistudio.google.com/apikey",
+      "believed_free": [
+        "google/gemini-2.5-pro",
+        "google/gemini-2.5-flash",
+        "google/gemini-2.5-flash-lite"
+      ],
+      "model_reasoning": {
+        "google/gemini-2.5-pro": "deep",
+        "google/gemini-2.5-flash": "standard",
+        "google/gemini-2.5-flash-lite": "exploratory"
+      },
+      "free_limits": {
+        "google/gemini-2.5-pro":        {"requests_per_minute": 5,  "requests_per_day": 100,  "tokens_per_minute": 250000, "tokens_per_day": null},
+        "google/gemini-2.5-flash":      {"requests_per_minute": 10, "requests_per_day": 20,   "tokens_per_minute": 250000, "tokens_per_day": null},
+        "google/gemini-2.5-flash-lite": {"requests_per_minute": 15, "requests_per_day": 1000, "tokens_per_minute": 250000, "tokens_per_day": null}
+      },
+      "fallback_models": []
+    },
+    "cerebras": {
+      "display": "Cerebras",
+      "base_url": "https://api.cerebras.ai/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at cloud.cerebras.ai",
+      "believed_free": [
+        "cerebras/qwen-3-coder-480b",
+        "cerebras/llama-4-maverick-17b-128e-instruct",
+        "cerebras/qwen3-235b",
+        "cerebras/gpt-oss-120b"
+      ],
+      "model_reasoning": {
+        "cerebras/qwen-3-coder-480b":                  "deep",
+        "cerebras/llama-4-maverick-17b-128e-instruct": "standard",
+        "cerebras/qwen3-235b":                         "deep",
+        "cerebras/gpt-oss-120b":                       "deep"
+      },
+      "free_limits": {
+        "cerebras/qwen-3-coder-480b":                  {"requests_per_minute": 30, "requests_per_day": null, "tokens_per_minute": 60000, "tokens_per_day": 1000000},
+        "cerebras/llama-4-maverick-17b-128e-instruct": {"requests_per_minute": 30, "requests_per_day": null, "tokens_per_minute": 60000, "tokens_per_day": 1000000},
+        "cerebras/qwen3-235b":                         {"requests_per_minute": 30, "requests_per_day": null, "tokens_per_minute": 60000, "tokens_per_day": 1000000},
+        "cerebras/gpt-oss-120b":                       {"requests_per_minute": 30, "requests_per_day": null, "tokens_per_minute": 60000, "tokens_per_day": 1000000}
+      },
+      "fallback_models": []
+    },
+    "github": {
+      "display": "GitHub Models",
+      "base_url": "https://models.inference.ai.azure.com",
+      "key_required": true,
+      "key_hint": "Get your token at github.com/settings/tokens",
+      "believed_free": [
+        "github/openai/gpt-5"
+      ],
+      "model_reasoning": {
+        "github/openai/gpt-5": "deep"
+      },
+      "free_limits": {
+        "github/openai/gpt-5": {"requests_per_minute": 10, "requests_per_day": 50, "tokens_per_minute": null, "tokens_per_day": null}
+      },
+      "fallback_models": []
+    },
+    "sambanova": {
+      "display": "SambaNova Cloud",
+      "base_url": "https://api.sambanova.ai/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at cloud.sambanova.ai",
+      "believed_free": [
+        "sambanova/Meta-Llama-3.3-70B-Instruct"
+      ],
+      "model_reasoning": {
+        "sambanova/Meta-Llama-3.3-70B-Instruct": "standard"
+      },
+      "free_limits": {
+        "sambanova/Meta-Llama-3.3-70B-Instruct": {"requests_per_minute": 20, "requests_per_day": null, "tokens_per_minute": null, "tokens_per_day": 200000}
+      },
+      "fallback_models": []
+    },
+    "mistral": {
+      "display": "Mistral AI",
+      "base_url": "https://api.mistral.ai/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at console.mistral.ai/api-keys",
+      "believed_free": [
+        "mistral/mistral-large-latest",
+        "mistral/magistral-medium-latest",
+        "mistral/codestral-latest"
+      ],
+      "model_reasoning": {
+        "mistral/mistral-large-latest":    "standard",
+        "mistral/magistral-medium-latest": "standard",
+        "mistral/codestral-latest":        "exploratory"
+      },
+      "free_limits": {
+        "mistral/mistral-large-latest":    {"requests_per_minute": 2, "requests_per_day": null, "tokens_per_minute": 500000, "tokens_per_day": null},
+        "mistral/magistral-medium-latest": {"requests_per_minute": 2, "requests_per_day": null, "tokens_per_minute": 500000, "tokens_per_day": null},
+        "mistral/codestral-latest":        {"requests_per_minute": 2, "requests_per_day": null, "tokens_per_minute": 500000, "tokens_per_day": null}
+      },
+      "fallback_models": []
+    },
+    "groq": {
+      "display": "Groq",
+      "base_url": "https://api.groq.com/openai/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at console.groq.com/keys",
+      "believed_free": [
+        "groq/llama-3.3-70b-versatile",
+        "groq/llama-4-scout-17b-16e-instruct",
+        "groq/llama-3.1-8b-instant",
+        "groq/mixtral-8x7b-32768",
+        "groq/gemma2-9b-it"
+      ],
+      "model_reasoning": {
+        "groq/llama-3.3-70b-versatile":        "standard",
+        "groq/llama-4-scout-17b-16e-instruct": "standard",
+        "groq/llama-3.1-8b-instant":           "exploratory",
+        "groq/mixtral-8x7b-32768":             "standard",
+        "groq/gemma2-9b-it":                   "exploratory"
+      },
+      "free_limits": {
+        "groq/llama-3.3-70b-versatile":        {"requests_per_minute": 30, "requests_per_day": 1000,  "tokens_per_minute": 6000, "tokens_per_day": 500000},
+        "groq/llama-4-scout-17b-16e-instruct": {"requests_per_minute": 30, "requests_per_day": 1000,  "tokens_per_minute": 6000, "tokens_per_day": 1000000},
+        "groq/llama-3.1-8b-instant":           {"requests_per_minute": 30, "requests_per_day": 14400, "tokens_per_minute": null, "tokens_per_day": null},
+        "groq/mixtral-8x7b-32768":             {"requests_per_minute": 30, "requests_per_day": 14400, "tokens_per_minute": null, "tokens_per_day": null},
+        "groq/gemma2-9b-it":                   {"requests_per_minute": 30, "requests_per_day": 14400, "tokens_per_minute": null, "tokens_per_day": null}
+      },
+      "fallback_models": []
+    },
+    "cloudflare-workers": {
+      "display": "Cloudflare Workers AI",
+      "base_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+      "key_required": true,
+      "key_hint": "Get your API token at dash.cloudflare.com → My Profile → API Tokens",
+      "account_id_required": true,
+      "account_id_label": "Cloudflare Account ID",
+      "account_id_hint": "Find your account ID at dash.cloudflare.com (top-right corner)",
+      "believed_free": [
+        "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct",
+        "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct",
+        "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1"
+      ],
+      "model_reasoning": {
+        "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct":      "standard",
+        "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct":       "exploratory",
+        "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory"
+      },
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "zhipu": {
+      "display": "Zhipu AI (BigModel)",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "key_required": true,
+      "key_hint": "Get your API key at open.bigmodel.cn/usercenter/apikeys",
+      "believed_free": [
+        "zhipu/glm-4.5-flash"
+      ],
+      "model_reasoning": {
+        "zhipu/glm-4.5-flash": "standard"
+      },
+      "free_limits": {
+        "zhipu/glm-4.5-flash": {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null, "tokens_per_day": 1000000}
+      },
+      "fallback_models": []
+    },
+    "z-ai": {
+      "display": "Z.AI",
+      "base_url": "https://api.z.ai/api/paas/v4",
+      "key_required": true,
+      "key_hint": "Get your API key at platform.z.ai",
+      "believed_free": [
+        "z-ai/glm-4.5-air",
+        "z-ai/glm-4.5-flash"
+      ],
+      "model_reasoning": {
+        "z-ai/glm-4.5-air":   "exploratory",
+        "z-ai/glm-4.5-flash": "standard",
+        "z-ai/glm-4.5":       "deep"
+      },
+      "free_limits": {
+        "z-ai/glm-4.5-air":   {"requests_per_minute": 15, "requests_per_day": null, "tokens_per_minute": null, "tokens_per_day": 1000000},
+        "z-ai/glm-4.5-flash": {"requests_per_minute": 15, "requests_per_day": null, "tokens_per_minute": null, "tokens_per_day": 1000000}
+      },
+      "fallback_models": []
+    },
+    "deepseek": {
+      "display": "DeepSeek",
+      "base_url": "https://api.deepseek.com/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at platform.deepseek.com/api_keys",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "cohere": {
+      "display": "Cohere",
+      "base_url": "https://api.cohere.com/compatibility/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at dashboard.cohere.com/api-keys",
+      "believed_free": [
+        "cohere/command-r-plus-08-2024"
+      ],
+      "model_reasoning": {
+        "cohere/command-r-plus-08-2024": "standard"
+      },
+      "free_limits": {
+        "cohere/command-r-plus-08-2024": {"requests_per_minute": 20, "requests_per_day": 33, "tokens_per_minute": null, "tokens_per_day": null}
+      },
+      "fallback_models": []
+    },
+    "openrouter": {
+      "display": "OpenRouter",
+      "base_url": "https://openrouter.ai/api/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at openrouter.ai/keys",
+      "believed_free": [],
+      "model_reasoning": {
+        "openrouter/deepseek/deepseek-v3.1:free":           "deep",
+        "openrouter/moonshotai/kimi-k2:free":               "deep",
+        "openrouter/qwen/qwen3-coder:free":                 "deep",
+        "openrouter/z-ai/glm-4.5-air:free":                 "standard",
+        "openrouter/mistralai/mistral-7b-instruct:free":    "exploratory",
+        "openrouter/meta-llama/llama-3.2-3b-instruct:free": "exploratory",
+        "openrouter/meta-llama/llama-3.1-8b-instruct:free": "exploratory",
+        "openrouter/google/gemma-2-9b-it:free":             "exploratory",
+        "openrouter/qwen/qwen-2.5-7b-instruct:free":        "exploratory"
+      },
+      "free_limits": {
+        "openrouter/deepseek/deepseek-v3.1:free": {"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": null, "tokens_per_day": null},
+        "openrouter/moonshotai/kimi-k2:free":     {"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": null, "tokens_per_day": null},
+        "openrouter/qwen/qwen3-coder:free":       {"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": null, "tokens_per_day": null},
+        "openrouter/z-ai/glm-4.5-air:free":       {"requests_per_minute": 20, "requests_per_day": 200, "tokens_per_minute": null, "tokens_per_day": null}
+      },
+      "fallback_models": []
+    },
+    "ollama-cloud": {
+      "display": "Ollama Cloud",
+      "base_url": "https://ollama.com/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at ollama.com/settings/api-keys",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "moonshot": {
+      "display": "Moonshot AI (Kimi)",
+      "base_url": "https://api.moonshot.ai/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at platform.moonshot.ai/console/api-key",
+      "believed_free": [
+        "moonshot/kimi-latest"
+      ],
+      "model_reasoning": {
+        "moonshot/kimi-latest": "standard"
+      },
+      "free_limits": {
+        "moonshot/kimi-latest": {"requests_per_minute": 60, "requests_per_day": null, "tokens_per_minute": null, "tokens_per_day": 500000}
+      },
+      "fallback_models": []
+    },
+    "minimax": {
+      "display": "MiniMax",
+      "base_url": "https://api.minimax.io/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at platform.minimax.io",
+      "believed_free": [
+        "minimax/MiniMax-M1"
+      ],
+      "model_reasoning": {
+        "minimax/MiniMax-M1": "standard"
+      },
+      "free_limits": {
+        "minimax/MiniMax-M1": {"requests_per_minute": 20, "requests_per_day": null, "tokens_per_minute": 1000000, "tokens_per_day": null}
+      },
+      "fallback_models": []
+    },
+    "huggingface": {
+      "display": "Hugging Face Inference",
+      "base_url": "https://router.huggingface.co/v1",
+      "key_required": true,
+      "key_hint": "Get your token at huggingface.co/settings/tokens",
+      "believed_free": [
+        "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct"
+      ],
+      "model_reasoning": {
+        "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": "standard"
+      },
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "xai": {
+      "display": "xAI (Grok)",
+      "base_url": "https://api.x.ai/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at console.x.ai",
+      "believed_free": [
+        "xai/grok-3-mini",
+        "xai/grok-3"
+      ],
+      "model_reasoning": {
+        "xai/grok-3-mini": "standard",
+        "xai/grok-3":      "deep"
+      },
+      "free_limits": {
+        "xai/grok-3-mini": {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null, "tokens_per_day": null},
+        "xai/grok-3":      {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null, "tokens_per_day": null}
+      },
+      "fallback_models": []
+    },
+    "cloudflare-ai-gateway": {
+      "display": "Cloudflare AI Gateway",
+      "base_url": "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai/v1",
+      "key_required": true,
+      "key_hint": "Get your API token at dash.cloudflare.com → My Profile → API Tokens",
+      "account_id_required": true,
+      "account_id_label": "Cloudflare Account ID",
+      "account_id_hint": "Find your account ID at dash.cloudflare.com (top-right corner)",
+      "gateway_id_required": true,
+      "gateway_id_label": "AI Gateway Name",
+      "gateway_id_hint": "The name you gave your AI Gateway in the Cloudflare dashboard",
+      "believed_free": [
+        "cloudflare-ai-gateway/@cf/meta/llama-3.1-70b-instruct",
+        "cloudflare-ai-gateway/@cf/meta/llama-3.1-8b-instruct",
+        "cloudflare-ai-gateway/@cf/mistral/mistral-7b-instruct-v0.1"
+      ],
+      "model_reasoning": {
+        "cloudflare-ai-gateway/@cf/meta/llama-3.1-70b-instruct":      "standard",
+        "cloudflare-ai-gateway/@cf/meta/llama-3.1-8b-instruct":       "exploratory",
+        "cloudflare-ai-gateway/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory"
+      },
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "vercel": {
+      "display": "Vercel AI Gateway",
+      "base_url": "https://ai-gateway.vercel.sh/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at vercel.com/account/tokens",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "venice": {
+      "display": "Venice AI",
+      "base_url": "https://api.venice.ai/api/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at venice.ai/settings/api",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "opencode-zen": {
+      "display": "OpenCode Zen (free gateway)",
+      "base_url": "https://opencode.ai/zen/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at opencode.ai",
+      "believed_free": [
+        "opencode-zen/big-pickle",
+        "opencode-zen/deepseek-v4-flash-free",
+        "opencode-zen/minimax-m2.5-free",
+        "opencode-zen/nemotron-3-super-free"
+      ],
+      "model_reasoning": {
+        "opencode-zen/big-pickle":             "standard",
+        "opencode-zen/deepseek-v4-flash-free": "standard",
+        "opencode-zen/minimax-m2.5-free":      "standard",
+        "opencode-zen/nemotron-3-super-free":  "deep"
+      },
+      "free_limits": {
+        "opencode-zen/big-pickle":             {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null, "tokens_per_day": null},
+        "opencode-zen/deepseek-v4-flash-free": {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null, "tokens_per_day": null},
+        "opencode-zen/minimax-m2.5-free":      {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null, "tokens_per_day": null},
+        "opencode-zen/nemotron-3-super-free":  {"requests_per_minute": null, "requests_per_day": null, "tokens_per_minute": null, "tokens_per_day": null}
+      },
+      "fallback_models": []
+    }
+  }
+}

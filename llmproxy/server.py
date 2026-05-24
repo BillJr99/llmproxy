@@ -27,13 +27,12 @@ import hashlib
 import json
 import logging
 import random
-import re
 import threading
 import time
 import traceback
 import urllib.parse
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Optional
 
 import requests
 from flask import Flask, Response, g, jsonify, make_response, request, stream_with_context
@@ -76,7 +75,7 @@ _model_route_cache_lock = threading.Lock()
 
 # Cached full model list returned by GET /v1/models.
 # Tuple is (model_list, timestamp).  Protected by _models_list_cache_lock.
-_models_list_cache: Optional[tuple[list[dict], float]] = None
+_models_list_cache: tuple[list[dict], float] | None = None
 _models_list_cache_lock = threading.Lock()
 _DEFAULT_MODELS_CACHE_TTL = 60
 
@@ -181,7 +180,7 @@ def _response_cache_prune(ttl: int) -> None:
         del _response_cache[k]
 
 
-def _response_cache_get(key: str, ttl: int) -> Optional[tuple[bytes, int, str]]:
+def _response_cache_get(key: str, ttl: int) -> tuple[bytes, int, str] | None:
     with _response_cache_lock:
         _response_cache_prune(ttl)
         entry = _response_cache.get(key)
@@ -879,11 +878,11 @@ def _proxy_cycling_non_streaming(
     candidates: list[tuple[str, dict, str]],
     payload: dict,
     timeout: int,
-    on_success: Optional[Callable[[str, str], None]] = None,
+    on_success: Callable[[str, str], None] | None = None,
 ) -> Response:
     """Try each candidate in order, returning the first success."""
     candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
-    last: Optional[Response] = None
+    last: Response | None = None
     for provider_name, provider_cfg, upstream_model in candidates:
         upstream_payload = {**payload, "model": upstream_model}
         logger.info("  [%s] trying %s/%s", label, provider_name, upstream_model)
@@ -905,7 +904,7 @@ def _proxy_cycling_streaming(
     candidates: list[tuple[str, dict, str]],
     payload: dict,
     timeout: int,
-    on_success: Optional[Callable[[str, str], None]] = None,
+    on_success: Callable[[str, str], None] | None = None,
 ) -> Response:
     """
     Try each candidate in order.  Checks the HTTP status code before committing
@@ -914,7 +913,7 @@ def _proxy_cycling_streaming(
     clients receive the same diagnostic information as the non-streaming path.
     """
     candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
-    last_error: Optional[tuple[bytes, int, str]] = None
+    last_error: tuple[bytes, int, str] | None = None
 
     for provider_name, provider_cfg, upstream_model in candidates:
         upstream_payload = {**payload, "model": upstream_model}
@@ -1040,7 +1039,7 @@ def _capacity_ordered_candidates(
         r = random.uniform(0.0, total)
         cumulative = 0.0
         picked = len(remaining) - 1
-        for i, (c, s) in enumerate(remaining):
+        for i, (_c, s) in enumerate(remaining):
             cumulative += s
             if r <= cumulative:
                 picked = i
@@ -1256,7 +1255,7 @@ def _get_virtual_candidates(model_full: str) -> list[tuple[str, dict, str]]:
 # Shared routing logic for all proxied endpoints
 # ---------------------------------------------------------------------------
 
-def _resolve_provider(model_full: str) -> tuple[Optional[str], Optional[dict], Optional[str], Optional[Response]]:
+def _resolve_provider(model_full: str) -> tuple[str | None, dict | None, str | None, Response | None]:
     """
     Parse *model_full* into (provider_name, provider_cfg, upstream_model).
 
@@ -1355,7 +1354,7 @@ def _proxy_endpoint(endpoint: str) -> Response:
     # Check the short-lived response cache for non-streaming requests.
     # Virtual cycling models bypass the cache so their load-spreading and
     # failover logic runs on every request rather than pinning to one upstream.
-    cache_key: Optional[str] = None
+    cache_key: str | None = None
     if not is_streaming and model_full not in _VIRTUAL_MODELS:
         cache_ttl: int = server_cfg.get("response_cache_ttl", _DEFAULT_RESPONSE_CACHE_TTL)
         if cache_ttl > 0:
@@ -1377,7 +1376,7 @@ def _proxy_endpoint(endpoint: str) -> Response:
         if model_full in _FREE_VIRTUAL_MODELS:
             free_limits = _get_normalized_free_limits(config)
             ordered = _capacity_ordered_candidates(candidates, free_limits)
-            on_success: Optional[Callable[[str, str], None]] = _record_usage
+            on_success: Callable[[str, str], None] | None = _record_usage
         else:
             ordered = _cycling_candidates(candidates)
             on_success = None
@@ -1525,7 +1524,7 @@ def passthrough(subpath: str) -> Response:
 # Server launcher
 # ---------------------------------------------------------------------------
 
-def run_server(config_path: Optional[str] = None) -> None:
+def run_server(config_path: str | None = None) -> None:
     """
     Start the Flask development server using settings from the config file.
 

@@ -43,7 +43,6 @@ import json
 import os
 import traceback
 from pathlib import Path
-from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -53,7 +52,7 @@ _DEFAULT_CONFIG_DIR = Path.home() / ".config" / "llmproxy"
 _DEFAULT_CONFIG_FILE = _DEFAULT_CONFIG_DIR / "config.json"
 
 
-def get_config_path(override: Optional[str] = None) -> Path:
+def get_config_path(override: str | None = None) -> Path:
     """
     Return the resolved config file path.
 
@@ -105,7 +104,7 @@ _cache: dict = {}
 _cache_mtime: float = 0.0
 
 
-def load_config(config_path: Optional[str] = None, force_reload: bool = False) -> dict:
+def load_config(config_path: str | None = None, force_reload: bool = False) -> dict:
     """
     Load configuration from disk.
 
@@ -137,7 +136,7 @@ def load_config(config_path: Optional[str] = None, force_reload: bool = False) -
         if not force_reload and _cache and mtime == _cache_mtime:
             return _cache
 
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             raw = json.load(fh)
 
         merged = _deep_merge(DEFAULT_CONFIG, raw)
@@ -151,7 +150,7 @@ def load_config(config_path: Optional[str] = None, force_reload: bool = False) -
         return _deep_merge(DEFAULT_CONFIG, {})
 
 
-def save_config(config: dict, config_path: Optional[str] = None) -> bool:
+def save_config(config: dict, config_path: str | None = None) -> bool:
     """
     Persist configuration to disk, creating parent directories as needed.
 
@@ -189,7 +188,7 @@ def save_config(config: dict, config_path: Optional[str] = None) -> bool:
 # Provider helpers
 # ---------------------------------------------------------------------------
 
-def get_provider(config: dict, provider_name: str) -> Optional[dict]:
+def get_provider(config: dict, provider_name: str) -> dict | None:
     """Return the provider config dict for *provider_name*, or None if absent."""
     return config.get("providers", {}).get(provider_name)
 

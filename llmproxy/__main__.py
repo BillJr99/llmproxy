@@ -27,7 +27,6 @@ Options
 import argparse
 import logging
 import os
-import sys
 
 from . import __version__
 from .config import get_config_path, load_config
