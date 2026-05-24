@@ -862,10 +862,14 @@ def run_setup(config_path: str | None = None) -> None:
                 providers[name] = cfg
                 print()
                 print(_ok(f"  Provider '{name}' configured from template."))
-                if _offer_free_tier_auto_populate(name, config):
-                    pass  # modified flag set below
+                # Free-tier auto-populate is only meaningful for cloud providers
+                # (provider grace tiers). Local providers use the /local family
+                # and must never land in believed_free / free_limits.
                 if _is_local_url(cfg.get("base_url", "")):
                     _auto_register_local_models(name, cfg, config)
+                else:
+                    if _offer_free_tier_auto_populate(name, config):
+                        pass  # modified flag set below
                 modified = True
 
         elif choice == 1:
@@ -890,10 +894,12 @@ def run_setup(config_path: str | None = None) -> None:
             providers[name] = cfg
             print()
             print(_ok(f"  Provider '{name}' configured."))
-            if _offer_free_tier_auto_populate(name, config):
-                pass  # modified flag set below
+            # Same split as above — local providers skip the free-tier prompt.
             if _is_local_url(cfg.get("base_url", "")):
                 _auto_register_local_models(name, cfg, config)
+            else:
+                if _offer_free_tier_auto_populate(name, config):
+                    pass  # modified flag set below
             modified = True
 
         elif choice == 2:

@@ -442,12 +442,26 @@ def _get_route_cache_snapshot() -> dict[str, tuple[str, str]]:
 def _sync_local_provider_models_once() -> None:
     """
     On first call after startup, poll every localhost provider's /models endpoint
-    and sync unprefixed model IDs into config['believed_free'] and config['model_reasoning'].
+    and sync unprefixed model IDs into config['model_reasoning'].
 
-    - Models with "/" in their ID are skipped (they are externally namespaced).
-    - Models no longer returned by a local provider are pruned from both lists.
-    - If the config changes it is persisted to disk so the sync survives server restart.
-    - Runs in a background thread so it never blocks the first /v1/models response.
+    Local providers participate in the dedicated llmproxy/local and
+    llmproxy/<level>/local virtual-endpoint families, not in llmproxy/free.
+    Models served from a localhost URL are therefore NOT added to
+    config['believed_free'] — believed_free is reserved for provider grace
+    tiers ("free" as in dollars), while /local routes on host topology.
+
+    Behaviour:
+      - Models with "/" in their ID are skipped (they are externally namespaced
+        passthroughs like 'openai/gpt-4o' piped through OpenWebUI).
+      - Models no longer returned by a local provider are pruned from
+        model_reasoning.
+      - As a one-time cleanup, any pre-existing believed_free / free_limits
+        entries for a local provider are also pruned (corrects historical
+        configs that were polluted before this fix landed).
+      - If the config changes it is persisted to disk so the sync survives
+        server restart.
+      - Runs in a background thread so it never blocks the first /v1/models
+        response.
     """
     global _local_sync_done
     with _local_sync_lock:
@@ -468,6 +482,7 @@ def _sync_local_provider_models_once() -> None:
 
         existing_kf: list = config.setdefault("believed_free", [])
         existing_mr: dict = config.setdefault("model_reasoning", {})
+        existing_fl: dict = config.setdefault("free_limits", {})
         modified = False
 
         for provider_key, provider_cfg in local_providers.items():
@@ -489,25 +504,35 @@ def _sync_local_provider_models_once() -> None:
             prefix = f"{provider_key}/"
             expected = {f"{prefix}{mid}" for mid in live_ids if mid and "/" not in mid}
 
-            # Remove stale entries that this provider previously contributed
-            stale_kf = [e for e in existing_kf if e.startswith(prefix) and e not in expected]
+            # Prune ALL believed_free entries for this provider — local models
+            # never belong here (one-time cleanup for historically polluted configs).
+            stale_kf = [e for e in existing_kf if e.startswith(prefix)]
             for e in stale_kf:
                 existing_kf.remove(e)
                 modified = True
-                logger.info("[local-sync] Pruned stale believed_free: %s", e)
+                logger.info(
+                    "[local-sync] Removed %s from believed_free "
+                    "(local provider — routed via llmproxy/local instead).", e,
+                )
 
+            # Same for free_limits — local models don't use the capacity-aware
+            # free-tier scheduler.
+            stale_fl = [k for k in existing_fl if isinstance(k, str) and k.startswith(prefix)]
+            for k in stale_fl:
+                del existing_fl[k]
+                modified = True
+                logger.info("[local-sync] Removed %s from free_limits.", k)
+
+            # Prune stale model_reasoning entries that this provider previously
+            # contributed but no longer serves.
             stale_mr = [k for k in existing_mr if k.startswith(prefix) and k not in expected]
             for k in stale_mr:
                 del existing_mr[k]
                 modified = True
                 logger.info("[local-sync] Pruned stale model_reasoning: %s", k)
 
-            # Add new entries
+            # Add new model_reasoning entries so /local/<level> routing works.
             for qualified in expected:
-                if qualified not in existing_kf:
-                    existing_kf.append(qualified)
-                    modified = True
-                    logger.info("[local-sync] Added believed_free: %s", qualified)
                 if qualified not in existing_mr:
                     model_id = qualified[len(prefix):]
                     existing_mr[qualified] = _infer_local_reasoning_level(model_id)
@@ -1089,20 +1114,31 @@ def _normalized_believed_free(config: dict) -> set[str]:
 
 
 def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
-    """(provider_name, provider_cfg, upstream_model) for every model whose upstream ID contains 'free' or appears in config['believed_free']."""
+    """(provider_name, provider_cfg, upstream_model) for every model whose upstream ID contains 'free' or appears in config['believed_free'].
+
+    Models served from a localhost / loopback URL are NEVER included — they
+    route via the dedicated llmproxy/local family instead. This is a
+    defence-in-depth guard against stale configs that still have local models
+    in believed_free; the startup local-sync cleans those up too, but this
+    runtime filter ensures /free never leaks a local model even before sync runs.
+    """
     config = load_config()
     believed_free = _normalized_believed_free(config)
     candidates = []
     for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+        provider_cfg = get_provider(config, provider_name)
+        if not provider_cfg:
+            continue
+        # Skip local providers — they belong to the /local family, not /free.
+        if _is_local_url(provider_cfg.get("base_url", "")):
+            continue
         is_free = (
             "free" in upstream_id.lower()
             or upstream_id.lower() in believed_free
             or f"{provider_name}/{upstream_id}".lower() in believed_free
         )
         if is_free:
-            provider_cfg = get_provider(config, provider_name)
-            if provider_cfg:
-                candidates.append((provider_name, provider_cfg, upstream_id))
+            candidates.append((provider_name, provider_cfg, upstream_id))
     return candidates
 
 
