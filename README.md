@@ -123,6 +123,14 @@ from a localhost-backed provider is present in the route cache — meaning the
 provider must be reachable and its `/models` listing must have been fetched
 successfully.
 
+> **Local models are not added to `believed_free`.** Local-provider models
+> (Ollama, LM Studio, OpenWebUI, etc.) live entirely under the `/local` family
+> — `llmproxy/local`, `llmproxy/standard/local`, and so on. When the setup
+> wizard auto-registers a local provider, it tags each discovered model in
+> `model_reasoning` only; `believed_free` is reserved for cloud free-tier
+> offerings. If you want a local model to also appear under `llmproxy/free`,
+> add it to `believed_free` by hand.
+
 ### Reasoning-level virtual models
 
 You can optionally tag individual models in the config with a **reasoning

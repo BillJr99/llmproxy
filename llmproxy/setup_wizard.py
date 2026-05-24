@@ -755,7 +755,12 @@ def _offer_free_tier_auto_populate(provider_key: str, config: dict) -> bool:
 def _auto_register_local_models(provider_key: str, provider_cfg: dict, config: dict) -> bool:
     """
     Fetch models from a localhost provider and register unprefixed ones into
-    believed_free and model_reasoning.  Called automatically — no user prompt.
+    model_reasoning.  Called automatically — no user prompt.
+
+    Local models are NOT added to believed_free: they have their own dedicated
+    virtual-endpoint family (llmproxy/local, llmproxy/<level>/local) keyed on
+    the provider's base_url hostname, so the "free" axis is irrelevant for
+    them.  See README → "The `local` virtual model".
 
     Only models whose ID contains no '/' are considered locally-native.
     Models with '/' (e.g. openai/gpt-4o piped through OpenWebUI) are skipped.
@@ -775,26 +780,21 @@ def _auto_register_local_models(provider_key: str, provider_cfg: dict, config: d
         print(_warn(f"  Could not reach '{provider_key}' to fetch models: {exc}"))
         return False
 
-    existing_kf: list = config.setdefault("believed_free", [])
     existing_mr: dict = config.setdefault("model_reasoning", {})
 
-    added_free = 0
     added_reasoning = 0
     for model_id in raw_models:
         if not model_id or "/" in model_id:
             continue
         qualified = f"{provider_key}/{model_id}"
-        if qualified not in existing_kf:
-            existing_kf.append(qualified)
-            added_free += 1
         if qualified not in existing_mr:
             existing_mr[qualified] = _infer_reasoning_level(model_id)
             added_reasoning += 1
 
-    if added_free or added_reasoning:
+    if added_reasoning:
         print(_ok(
-            f"  Auto-registered {added_free} local model(s) from {provider_key} "
-            f"({added_free} to believed_free, {added_reasoning} to model_reasoning)."
+            f"  Auto-registered {added_reasoning} local model(s) from {provider_key} "
+            f"into model_reasoning (eligible via llmproxy/local and llmproxy/<level>/local)."
         ))
         return True
 
