@@ -19,18 +19,13 @@ from .cerebras import CerebrasDocs
 from .cohere import CohereDocs
 from .google import GoogleDocs
 from .groq import GroqDocs
-from .mistral import (
-    MistralDocs as MistralDocs,  # disabled — URL 404 as of 2025-05; re-enable when fixed
-)
+from .mistral import MistralDocs
 from .openrouter import OpenRouterFreeFilter as OpenRouterFreeFilter  # alt form
 
 DOCS_SOURCES: list[type[DocsScraperBase]] = [
     GoogleDocs,
     GroqDocs,
     CerebrasDocs,
-    # MistralDocs — disabled: https://docs.mistral.ai/deployment/laplateforme/tier/ returns 404.
-    # The Mistral La Plateforme free tier still exists but there is no known replacement URL.
-    # Believed-free list is maintained manually in llmproxy/free_models.json until a stable
-    # docs URL is available.
+    MistralDocs,
     CohereDocs,
 ]

@@ -2,11 +2,14 @@
 
 Source: https://docs.cohere.com/docs/rate-limits
 
-Cohere offers a trial-key tier that gives free access to a small set of
-models. The page uses the word "Trial" (not "free") in the tier table, and
-model display names may include spaces and special chars (e.g. "Command A+",
-"Command A Reasoning"). We extract model names row-by-row from the first
-cell of each row in trial/free tables, then normalize to an API-compatible ID.
+Cohere offers a trial-key tier that gives free access to Command models.
+The rate-limits page has a table with columns "Model", "Trial rate limit",
+"Production rate limit". Model display names changed in 2025 from
+hyphenated slugs (command-r-plus-08-2024) to space-separated names
+(Command A+, Command R+, Command A, Command R, …).
+
+We take the first cell of every data row in a table that contains a
+"Trial rate limit" column, slugify the display name, and emit it.
 """
 
 from __future__ import annotations
@@ -18,36 +21,19 @@ from .base import DocsScraperBase, _bs, _evidence
 
 URL = "https://docs.cohere.com/docs/rate-limits"
 
-# Matches display names like: "command-r-plus-08-2024", "Command A+",
-# "Command A Reasoning", "command r", "embed-english-v3.0"
-_COMMAND_RE = re.compile(r"\bcommand\b", re.IGNORECASE)
-_EMBED_RE = re.compile(r"\bembed[\w.-]*", re.IGNORECASE)
+# Identifies tables that list trial (free) limits.
+_TRIAL_RE = re.compile(r"trial\s+rate\s+limit", re.IGNORECASE)
+# Matches any model display name starting with "Command" (case-insensitive).
+_COMMAND_RE = re.compile(r"^command\b", re.IGNORECASE)
 
 
-def _normalize_model_name(display: str) -> str | None:
-    """Convert a Cohere display name to a likely API model ID.
-
-    Examples:
-      "Command A+"            -> "command-a-plus"
-      "Command A Reasoning"   -> "command-a-reasoning"
-      "Command R+"            -> "command-r-plus"
-      "Command R"             -> "command-r"
-      "command-r-plus-08-2024"-> "command-r-plus-08-2024"  (already normalized)
-      "embed-english-v3.0"    -> "embed-english-v3.0"
-    """
-    s = display.strip()
-    if not s:
-        return None
-    # Already looks like an API ID (hyphen-separated, no spaces except "+" suffix).
-    if " " not in s and s == s.lower():
-        return s.lower()
-    # Normalize display name: lowercase, spaces→hyphens, "+" → "plus"
-    normalized = s.lower()
-    normalized = normalized.replace("+", "-plus")
-    normalized = re.sub(r"[\s]+", "-", normalized)
-    normalized = re.sub(r"-+", "-", normalized)
-    normalized = normalized.strip("-")
-    return normalized
+def _slugify(display: str) -> str:
+    """'Command A+' -> 'command-a-plus', 'Command R+' -> 'command-r-plus'."""
+    s = display.strip().lower()
+    s = s.replace("+", "-plus").replace("_", "-")
+    s = re.sub(r"[^a-z0-9-]", "-", s)
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    return s
 
 
 class CohereDocs(DocsScraperBase):
@@ -61,26 +47,27 @@ class CohereDocs(DocsScraperBase):
         seen: set[str] = set()
 
         for table in soup.find_all("table"):
-            text = table.get_text(" ", strip=True).lower()
-            if "trial" not in text and "free" not in text:
+            header_text = table.get_text(" ", strip=True)
+            if not _TRIAL_RE.search(header_text):
                 continue
 
             for row in table.find_all("tr"):
-                cells = row.find_all("td")
+                cells = [td.get_text(strip=True) for td in row.find_all(["td", "th"])]
                 if not cells:
                     continue
-                cell_text = cells[0].get_text(strip=True)
-                if not (_COMMAND_RE.search(cell_text) or _EMBED_RE.search(cell_text)):
+                display = cells[0].strip()
+                if not _COMMAND_RE.match(display):
                     continue
-                model_id = _normalize_model_name(cell_text)
-                if not model_id or model_id in seen:
+                slug = _slugify(display)
+                if not slug or slug in seen:
                     continue
-                seen.add(model_id)
+                seen.add(slug)
                 out.append(_evidence(
                     provider="cohere",
-                    model=model_id,
+                    model=slug,
                     source=self.name,
                     url=self.url,
                     is_free=True,
+                    notes=f"display_name={display!r}",
                 ))
         return out
