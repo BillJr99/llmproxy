@@ -32,13 +32,15 @@ class GoogleDocs(DocsScraperBase):
         seen: set[str] = set()
 
         # Strategy: find every table on the page; for each, check if the
-        # nearest preceding heading (h1-h4) mentions "free". Google's docs
-        # put "Free Tier" / "Paid Tier" in headings above each rate-limit
-        # table, so we can't rely on the table's own text.
+        # nearest preceding heading (h1-h4) indicates the free tier.
+        # Google's docs have changed over time:
+        #   - Old layout: heading "Free Tier" / "Paid Tier" before each table.
+        #   - New layout: heading "Tier 1 Rate Limits" (Tier 1 = free, no billing).
+        # We accept any heading that contains "free" OR "tier 1".
         for table in soup.find_all("table"):
             heading = _nearest_preceding_heading(table)
             heading_text = (heading.get_text(" ", strip=True).lower() if heading else "")
-            if "free" not in heading_text:
+            if "free" not in heading_text and "tier 1" not in heading_text:
                 continue
 
             for row in table.find_all("tr"):

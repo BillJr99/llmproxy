@@ -1,22 +1,34 @@
 <!doctype html>
 <html><body>
-<h1>Gemini API Rate limits</h1>
+<h1>Gemini API Rate Limits</h1>
+<p>The Gemini API uses a tiered system based on billing status.</p>
 
-<h2>Free Tier</h2>
+<h2>Usage Tiers</h2>
 <table>
-<thead><tr><th>Model</th><th>RPM</th><th>RPD</th><th>TPM</th></tr></thead>
+<thead><tr><th>Tier</th><th>Description</th></tr></thead>
 <tbody>
-<tr><td>Gemini-2.5-Pro</td><td>5 RPM</td><td>100 RPD</td><td>250000 TPM</td></tr>
-<tr><td>Gemini-2.5-Flash</td><td>10 RPM</td><td>20 RPD</td><td>250000 TPM</td></tr>
-<tr><td>Gemini-2.5-Flash-Lite</td><td>15 RPM</td><td>1000 RPD</td><td>250000 TPM</td></tr>
+<tr><td>Tier 1</td><td>No billing required. Lower rate limits.</td></tr>
+<tr><td>Tier 2</td><td>Billing enabled. Higher rate limits.</td></tr>
+<tr><td>Tier 3</td><td>Highest rate limits for production workloads.</td></tr>
 </tbody>
 </table>
 
-<h2>Paid Tier</h2>
+<h2>Tier 1 Rate Limits</h2>
+<table>
+<thead><tr><th>Model</th><th>RPM</th><th>RPD</th><th>TPM</th></tr></thead>
+<tbody>
+<tr><td>gemini-2.5-pro</td><td>5 RPM</td><td>100 RPD</td><td>250000 TPM</td></tr>
+<tr><td>gemini-2.5-flash</td><td>10 RPM</td><td>500 RPD</td><td>250000 TPM</td></tr>
+<tr><td>gemini-2.5-flash-lite</td><td>30 RPM</td><td>1000 RPD</td><td>1000000 TPM</td></tr>
+</tbody>
+</table>
+
+<h2>Tier 2 Rate Limits</h2>
 <table>
 <thead><tr><th>Model</th><th>RPM</th></tr></thead>
 <tbody>
-<tr><td>Gemini-2.5-Pro</td><td>2000 RPM</td></tr>
+<tr><td>gemini-2.5-pro</td><td>2000 RPM</td></tr>
+<tr><td>gemini-2.5-flash</td><td>4000 RPM</td></tr>
 </tbody>
 </table>
 </body></html>

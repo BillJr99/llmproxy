@@ -3,9 +3,10 @@
 Source: https://console.groq.com/docs/rate-limits
 
 Groq publishes one rate-limit table per model on its docs page. We extract
-the model id (the page uses inline <code>…</code> for ids) and the rpm/rpd
-columns. Free tier is the default — there's no separate "Free Tier" label,
-so every model on this page is treated as free.
+the model id from the first <td> of each data row (the page previously used
+<code> tags but now renders model IDs as plain table-cell text). Free tier
+is the default — there's no separate "Free Tier" label, so every model on
+this page is treated as free.
 """
 
 from __future__ import annotations
@@ -28,13 +29,15 @@ class GroqDocs(DocsScraperBase):
         out: list[Evidence] = []
         seen: set[str] = set()
 
-        # Walk tables; the model-id column uses <code>...</code> tags.
+        # Walk tables; the model-id column is the first <td> of each data row.
+        # (Previously the page used <code>…</code> for IDs; that was removed.)
         for table in soup.find_all("table"):
             for row in table.find_all("tr"):
-                code_tags = row.find_all("code")
-                if not code_tags:
+                cells = row.find_all("td")
+                if not cells:
                     continue
-                model = code_tags[0].get_text(strip=True)
+                # First cell — may contain a <code> tag (old layout) or plain text (new).
+                model = cells[0].get_text(strip=True)
                 if not model or "/" in model or model in seen:
                     continue
                 seen.add(model)
