@@ -13,17 +13,30 @@ model name.
 ```
 llmproxy/
 ├── run.py                   ← start the server (no install needed)
-├── llmproxy_test_client.py  ← test client (standalone, no install needed)
+├── llmproxy_test_client.py  ← live integration test client (talks to a running proxy)
+├── test_tui.py              ← interactive chat TUI (despite the name — not a test suite)
 ├── llmproxy/                ← the package
 │   ├── __main__.py
 │   ├── config.py
 │   ├── server.py
-│   └── setup_wizard.py
+│   ├── setup_wizard.py
+│   ├── free_models.py       ← loader for the JSON sidecar
+│   └── free_models.json     ← single source of truth for provider templates
+│                                + believed_free / model_reasoning / free_limits
+├── scripts/
+│   └── update_free_models.py ← scraper that keeps free_models.json current
+│       └── sources/         ← per-source plugins (openrouter, community, /models, docs)
+├── tests/                   ← pytest unit/integration suite
 ├── requirements.txt
+├── requirements-dev.txt     ← pytest, ruff, responses (test-only deps)
+├── pyproject.toml           ← pytest + ruff config
 ├── setup.py                 ← only needed for pip install
 ├── Dockerfile
 ├── docker-compose.yml
-└── config.example.json
+├── config.example.json      ← auto-generated from llmproxy/free_models.json
+└── .github/workflows/
+    ├── ci.yml               ← pytest, ruff, config-example-up-to-date guard
+    └── docker-publish.yml   ← GHCR image publish
 ```
 
 ---
@@ -109,6 +122,14 @@ The `llmproxy/local` model appears in `GET /v1/models` only when at least one mo
 from a localhost-backed provider is present in the route cache — meaning the
 provider must be reachable and its `/models` listing must have been fetched
 successfully.
+
+> **Local models are not added to `believed_free`.** Local-provider models
+> (Ollama, LM Studio, OpenWebUI, etc.) live entirely under the `/local` family
+> — `llmproxy/local`, `llmproxy/standard/local`, and so on. When the setup
+> wizard auto-registers a local provider, it tags each discovered model in
+> `model_reasoning` only; `believed_free` is reserved for cloud free-tier
+> offerings. If you want a local model to also appear under `llmproxy/free`,
+> add it to `believed_free` by hand.
 
 ### Reasoning-level virtual models
 
@@ -198,13 +219,17 @@ word `free`.  Omit the field entirely (or set it to `[]`) to keep the
 default behaviour — only IDs that literally contain `free` are pulled in.
 Each entry is matched (case-insensitively) against either the upstream
 model ID (e.g. `gpt-oss-20b`) or the full proxy ID (e.g.
-`openrouter/qwen/qwen3-coder:free`).  The setup wizard does not edit this
-field — add it by hand to the config file.
+`openrouter/qwen/qwen3-coder:free`).  The setup wizard manages this field
+via its "Manage model tags" menu and via the per-provider auto-populate step
+when you add a templated provider; the merged defaults come from
+[`llmproxy/free_models.json`](llmproxy/free_models.json).
 
-> **Free-tier accuracy:** The `believed_free` entries in `config.example.json` and the setup wizard
-> are best-effort estimates based on publicly-stated provider free tiers.  Provider offerings
-> change without notice — no guarantee is made as to accuracy.  Verify directly with each
-> provider before relying on free availability in production.
+> **Free-tier accuracy:** The `believed_free` entries in `config.example.json` and in
+> `llmproxy/free_models.json` are best-effort estimates based on publicly-stated provider
+> free tiers. Provider offerings change without notice — no guarantee is made as to accuracy.
+> Verify directly with each provider before relying on free availability in production. The
+> [`scripts/update_free_models.py`](#keeping-the-free-models-list-current) scraper exists to
+> keep these entries current.
 
 <a name="model_reasoning"></a>
 `model_reasoning` is an **optional** top-level object that tags individual
@@ -215,15 +240,21 @@ upstream model ID (e.g. `anthropic/claude-opus-4`) or the full
 `openrouter/anthropic/claude-opus-4`).  When a level has at least one tagged
 model in the route cache, the corresponding virtual endpoint is advertised in
 `GET /v1/models`.  Omit the field entirely (or set it to `{}`) to disable
-reasoning-level routing.  The setup wizard does not edit this field — add it
-by hand to the config file.
+reasoning-level routing.  The setup wizard manages this field via its
+"Manage model tags" menu (merged defaults come from `llmproxy/free_models.json`).
 
 See `config.example.json` for a complete annotated example.
 
 ### Provider templates
 
-The interactive setup wizard (`--setup`) includes ready-made templates for the
-following providers:
+Provider templates and free-tier metadata both live in
+[`llmproxy/free_models.json`](llmproxy/free_models.json) — the single source of
+truth. The setup wizard reads from this file at startup; `config.example.json`
+is regenerated from the same file. To add or update a provider, edit
+`free_models.json` directly (or run the scraper — see
+[Keeping the free-models list current](#keeping-the-free-models-list-current)).
+
+The wizard currently offers ready-made templates for these providers:
 
 | Provider                          | Default key      | Base URL                                                   |
 |-----------------------------------|------------------|-----------------------------------------------------------|
@@ -267,6 +298,73 @@ provider (manual)" menu option.
 > | **Cloudflare Workers AI** | Returns HTTP 405 — method not supported |
 > | **Cloudflare AI Gateway** | Returns HTTP 401 — no anonymous model enumeration |
 > | **Hugging Face Inference** | Returns HTML rather than JSON for `/v1/models` |
+
+---
+
+## Keeping the free-models list current
+
+Provider free tiers change without notice. The
+[`llmproxy/free_models.json`](llmproxy/free_models.json) sidecar holds the
+project's best-effort view of *which* models are currently free and *what*
+their rate limits are — used by the `llmproxy/free` virtual endpoint and by the
+setup wizard's "auto-populate" step.
+
+A scraper at `scripts/update_free_models.py` polls multiple sources, diffs the
+result against the sidecar, and prints proposed adds / removes / limit changes
+for human review.
+
+### Sources
+
+| Source       | Confidence | What it does |
+|--------------|------------|--------------|
+| `openrouter` | high       | Hits `https://openrouter.ai/api/v1/models` and flags any model with `pricing.prompt == 0` as free. |
+| `docs`       | high       | Per-provider HTML scrapers for published rate-limit / free-tier pages (Google, Groq, Cerebras, Mistral, Cohere). Add more under `scripts/sources/docs/`. |
+| `api`        | medium     | Calls each provider's OpenAI-compatible `/v1/models` endpoint when `<PROVIDER>_API_KEY` is set in your environment. Used to detect *removals* (a believed-free model that's no longer listed). |
+| `community`  | low        | Pulls the [tashfeenahmed/freellmapi](https://github.com/tashfeenahmed/freellmapi) community list as a sanity signal. |
+
+### Usage
+
+```bash
+# Preview proposed changes (no files written)
+python scripts/update_free_models.py --dry-run
+
+# Apply the changes to llmproxy/free_models.json and regenerate config.example.json
+python scripts/update_free_models.py
+
+# Restrict to one provider
+python scripts/update_free_models.py --provider google --dry-run
+
+# Restrict to specific sources
+python scripts/update_free_models.py --source openrouter,docs --dry-run
+
+# Just regenerate config.example.json from the current sidecar (no scraping)
+python scripts/update_free_models.py --regen-config-only
+```
+
+### Safety properties
+
+- **A failed source never causes a removal.** Sources run independently; any
+  source that errors out (network failure, parse error, 5xx) emits no
+  evidence rather than "every model is absent". The scraper prints which
+  sources succeeded so you can judge how much to trust the diff.
+- **`/v1/models` presence ≠ free.** The `api` source only contributes
+  *existence* evidence; it can flag removals but cannot decide that a model
+  is free.
+- **Reasoning levels are preserved.** Existing `model_reasoning` entries are
+  never overwritten. New models are tagged via
+  `infer_reasoning_level()` (deep keywords → deep; size in B → standard /
+  exploratory) so you can hand-tune later.
+
+### Optional environment variables
+
+When set, each `<PROVIDER>_API_KEY` enables the `api` source for that provider:
+
+```
+GROQ_API_KEY=gsk-...        GOOGLE_API_KEY=AIza-...
+CEREBRAS_API_KEY=csk-...    MISTRAL_API_KEY=...
+COHERE_API_KEY=...          SAMBANOVA_API_KEY=...
+```
+(and so on — uppercase the provider key, replace `-` with `_`, append `_API_KEY`).
 
 ---
 
@@ -334,7 +432,38 @@ provider changes take effect immediately without a restart.  Only `host` or
 
 ---
 
-## Test client
+## Tests, dev tooling, and CI
+
+The repo has three distinct things named "test"-ish — each does something
+different:
+
+| File                       | What it is                                                                     |
+|----------------------------|--------------------------------------------------------------------------------|
+| `tests/`                   | The pytest unit/integration suite (run with `pytest`). New as of this release. |
+| `llmproxy_test_client.py`  | Live integration test client. Talks to a running llmproxy over HTTP.           |
+| `test_tui.py`              | Interactive chat TUI for hand-driving the proxy (despite the misleading name). |
+
+### Running the unit suite
+
+```bash
+pip install -r requirements-dev.txt
+pytest                                  # run everything
+pytest --cov=llmproxy --cov=scripts     # with coverage
+pytest tests/test_scraper                # just the scraper tests
+ruff check llmproxy scripts tests        # lint
+```
+
+CI runs the same checks on every push and pull request — see
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml). It runs:
+- `pytest` across Python 3.11 and 3.12,
+- `ruff` lint,
+- a guard that fails the build if `config.example.json` has drifted from
+  `llmproxy/free_models.json` (regenerate locally with
+  `python scripts/update_free_models.py --regen-config-only`).
+
+---
+
+## Live integration test client
 
 `llmproxy_test_client.py` is a standalone script with no dependencies beyond
 `requests`.  It connects to a running llmproxy instance and exercises all

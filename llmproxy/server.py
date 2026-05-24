@@ -27,13 +27,12 @@ import hashlib
 import json
 import logging
 import random
-import re
 import threading
 import time
 import traceback
 import urllib.parse
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Optional
 
 import requests
 from flask import Flask, Response, g, jsonify, make_response, request, stream_with_context
@@ -76,7 +75,7 @@ _model_route_cache_lock = threading.Lock()
 
 # Cached full model list returned by GET /v1/models.
 # Tuple is (model_list, timestamp).  Protected by _models_list_cache_lock.
-_models_list_cache: Optional[tuple[list[dict], float]] = None
+_models_list_cache: tuple[list[dict], float] | None = None
 _models_list_cache_lock = threading.Lock()
 _DEFAULT_MODELS_CACHE_TTL = 60
 
@@ -181,7 +180,7 @@ def _response_cache_prune(ttl: int) -> None:
         del _response_cache[k]
 
 
-def _response_cache_get(key: str, ttl: int) -> Optional[tuple[bytes, int, str]]:
+def _response_cache_get(key: str, ttl: int) -> tuple[bytes, int, str] | None:
     with _response_cache_lock:
         _response_cache_prune(ttl)
         entry = _response_cache.get(key)
@@ -443,12 +442,26 @@ def _get_route_cache_snapshot() -> dict[str, tuple[str, str]]:
 def _sync_local_provider_models_once() -> None:
     """
     On first call after startup, poll every localhost provider's /models endpoint
-    and sync unprefixed model IDs into config['believed_free'] and config['model_reasoning'].
+    and sync unprefixed model IDs into config['model_reasoning'].
 
-    - Models with "/" in their ID are skipped (they are externally namespaced).
-    - Models no longer returned by a local provider are pruned from both lists.
-    - If the config changes it is persisted to disk so the sync survives server restart.
-    - Runs in a background thread so it never blocks the first /v1/models response.
+    Local providers participate in the dedicated llmproxy/local and
+    llmproxy/<level>/local virtual-endpoint families, not in llmproxy/free.
+    Models served from a localhost URL are therefore NOT added to
+    config['believed_free'] — believed_free is reserved for provider grace
+    tiers ("free" as in dollars), while /local routes on host topology.
+
+    Behaviour:
+      - Models with "/" in their ID are skipped (they are externally namespaced
+        passthroughs like 'openai/gpt-4o' piped through OpenWebUI).
+      - Models no longer returned by a local provider are pruned from
+        model_reasoning.
+      - As a one-time cleanup, any pre-existing believed_free / free_limits
+        entries for a local provider are also pruned (corrects historical
+        configs that were polluted before this fix landed).
+      - If the config changes it is persisted to disk so the sync survives
+        server restart.
+      - Runs in a background thread so it never blocks the first /v1/models
+        response.
     """
     global _local_sync_done
     with _local_sync_lock:
@@ -469,6 +482,7 @@ def _sync_local_provider_models_once() -> None:
 
         existing_kf: list = config.setdefault("believed_free", [])
         existing_mr: dict = config.setdefault("model_reasoning", {})
+        existing_fl: dict = config.setdefault("free_limits", {})
         modified = False
 
         for provider_key, provider_cfg in local_providers.items():
@@ -490,25 +504,35 @@ def _sync_local_provider_models_once() -> None:
             prefix = f"{provider_key}/"
             expected = {f"{prefix}{mid}" for mid in live_ids if mid and "/" not in mid}
 
-            # Remove stale entries that this provider previously contributed
-            stale_kf = [e for e in existing_kf if e.startswith(prefix) and e not in expected]
+            # Prune ALL believed_free entries for this provider — local models
+            # never belong here (one-time cleanup for historically polluted configs).
+            stale_kf = [e for e in existing_kf if e.startswith(prefix)]
             for e in stale_kf:
                 existing_kf.remove(e)
                 modified = True
-                logger.info("[local-sync] Pruned stale believed_free: %s", e)
+                logger.info(
+                    "[local-sync] Removed %s from believed_free "
+                    "(local provider — routed via llmproxy/local instead).", e,
+                )
 
+            # Same for free_limits — local models don't use the capacity-aware
+            # free-tier scheduler.
+            stale_fl = [k for k in existing_fl if isinstance(k, str) and k.startswith(prefix)]
+            for k in stale_fl:
+                del existing_fl[k]
+                modified = True
+                logger.info("[local-sync] Removed %s from free_limits.", k)
+
+            # Prune stale model_reasoning entries that this provider previously
+            # contributed but no longer serves.
             stale_mr = [k for k in existing_mr if k.startswith(prefix) and k not in expected]
             for k in stale_mr:
                 del existing_mr[k]
                 modified = True
                 logger.info("[local-sync] Pruned stale model_reasoning: %s", k)
 
-            # Add new entries
+            # Add new model_reasoning entries so /local/<level> routing works.
             for qualified in expected:
-                if qualified not in existing_kf:
-                    existing_kf.append(qualified)
-                    modified = True
-                    logger.info("[local-sync] Added believed_free: %s", qualified)
                 if qualified not in existing_mr:
                     model_id = qualified[len(prefix):]
                     existing_mr[qualified] = _infer_local_reasoning_level(model_id)
@@ -879,11 +903,11 @@ def _proxy_cycling_non_streaming(
     candidates: list[tuple[str, dict, str]],
     payload: dict,
     timeout: int,
-    on_success: Optional[Callable[[str, str], None]] = None,
+    on_success: Callable[[str, str], None] | None = None,
 ) -> Response:
     """Try each candidate in order, returning the first success."""
     candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
-    last: Optional[Response] = None
+    last: Response | None = None
     for provider_name, provider_cfg, upstream_model in candidates:
         upstream_payload = {**payload, "model": upstream_model}
         logger.info("  [%s] trying %s/%s", label, provider_name, upstream_model)
@@ -905,7 +929,7 @@ def _proxy_cycling_streaming(
     candidates: list[tuple[str, dict, str]],
     payload: dict,
     timeout: int,
-    on_success: Optional[Callable[[str, str], None]] = None,
+    on_success: Callable[[str, str], None] | None = None,
 ) -> Response:
     """
     Try each candidate in order.  Checks the HTTP status code before committing
@@ -914,7 +938,7 @@ def _proxy_cycling_streaming(
     clients receive the same diagnostic information as the non-streaming path.
     """
     candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
-    last_error: Optional[tuple[bytes, int, str]] = None
+    last_error: tuple[bytes, int, str] | None = None
 
     for provider_name, provider_cfg, upstream_model in candidates:
         upstream_payload = {**payload, "model": upstream_model}
@@ -1040,7 +1064,7 @@ def _capacity_ordered_candidates(
         r = random.uniform(0.0, total)
         cumulative = 0.0
         picked = len(remaining) - 1
-        for i, (c, s) in enumerate(remaining):
+        for i, (_c, s) in enumerate(remaining):
             cumulative += s
             if r <= cumulative:
                 picked = i
@@ -1090,20 +1114,31 @@ def _normalized_believed_free(config: dict) -> set[str]:
 
 
 def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
-    """(provider_name, provider_cfg, upstream_model) for every model whose upstream ID contains 'free' or appears in config['believed_free']."""
+    """(provider_name, provider_cfg, upstream_model) for every model whose upstream ID contains 'free' or appears in config['believed_free'].
+
+    Models served from a localhost / loopback URL are NEVER included — they
+    route via the dedicated llmproxy/local family instead. This is a
+    defence-in-depth guard against stale configs that still have local models
+    in believed_free; the startup local-sync cleans those up too, but this
+    runtime filter ensures /free never leaks a local model even before sync runs.
+    """
     config = load_config()
     believed_free = _normalized_believed_free(config)
     candidates = []
     for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+        provider_cfg = get_provider(config, provider_name)
+        if not provider_cfg:
+            continue
+        # Skip local providers — they belong to the /local family, not /free.
+        if _is_local_url(provider_cfg.get("base_url", "")):
+            continue
         is_free = (
             "free" in upstream_id.lower()
             or upstream_id.lower() in believed_free
             or f"{provider_name}/{upstream_id}".lower() in believed_free
         )
         if is_free:
-            provider_cfg = get_provider(config, provider_name)
-            if provider_cfg:
-                candidates.append((provider_name, provider_cfg, upstream_id))
+            candidates.append((provider_name, provider_cfg, upstream_id))
     return candidates
 
 
@@ -1256,7 +1291,7 @@ def _get_virtual_candidates(model_full: str) -> list[tuple[str, dict, str]]:
 # Shared routing logic for all proxied endpoints
 # ---------------------------------------------------------------------------
 
-def _resolve_provider(model_full: str) -> tuple[Optional[str], Optional[dict], Optional[str], Optional[Response]]:
+def _resolve_provider(model_full: str) -> tuple[str | None, dict | None, str | None, Response | None]:
     """
     Parse *model_full* into (provider_name, provider_cfg, upstream_model).
 
@@ -1355,7 +1390,7 @@ def _proxy_endpoint(endpoint: str) -> Response:
     # Check the short-lived response cache for non-streaming requests.
     # Virtual cycling models bypass the cache so their load-spreading and
     # failover logic runs on every request rather than pinning to one upstream.
-    cache_key: Optional[str] = None
+    cache_key: str | None = None
     if not is_streaming and model_full not in _VIRTUAL_MODELS:
         cache_ttl: int = server_cfg.get("response_cache_ttl", _DEFAULT_RESPONSE_CACHE_TTL)
         if cache_ttl > 0:
@@ -1377,7 +1412,7 @@ def _proxy_endpoint(endpoint: str) -> Response:
         if model_full in _FREE_VIRTUAL_MODELS:
             free_limits = _get_normalized_free_limits(config)
             ordered = _capacity_ordered_candidates(candidates, free_limits)
-            on_success: Optional[Callable[[str, str], None]] = _record_usage
+            on_success: Callable[[str, str], None] | None = _record_usage
         else:
             ordered = _cycling_candidates(candidates)
             on_success = None
@@ -1525,7 +1560,7 @@ def passthrough(subpath: str) -> Response:
 # Server launcher
 # ---------------------------------------------------------------------------
 
-def run_server(config_path: Optional[str] = None) -> None:
+def run_server(config_path: str | None = None) -> None:
     """
     Start the Flask development server using settings from the config file.
 

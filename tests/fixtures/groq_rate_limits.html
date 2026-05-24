@@ -1,0 +1,35 @@
+<!doctype html>
+<html><body>
+<h1>Rate Limits</h1>
+
+<!-- Header table: announces Free Plan / Developer Plan columns.
+     The scraper uses this to locate the following model-data table. -->
+<table>
+  <tr><td>Free Plan LimitsDeveloper Plan Limits</td><td></td></tr>
+  <tr><th>MODEL ID</th><th>RPM</th><th>RPD</th><th>TPM</th><th>TPD</th><th>ASH</th><th>ASD</th></tr>
+</table>
+
+<!-- Model data table: plain <td> cells, K/M shorthand for large numbers. -->
+<table>
+  <tr>
+    <td>llama-3.3-70b-versatile</td><td>30</td><td>1K</td><td>12K</td><td>100K</td><td>-</td><td>-</td>
+  </tr>
+  <tr>
+    <td>llama-3.1-8b-instant</td><td>30</td><td>14.4K</td><td>6K</td><td>500K</td><td>-</td><td>-</td>
+  </tr>
+  <tr>
+    <td>gemma2-9b-it</td><td>30</td><td>14.4K</td><td>15K</td><td>500K</td><td>-</td><td>-</td>
+  </tr>
+  <tr>
+    <td>mixtral-8x7b-32768</td><td>30</td><td>14.4K</td><td>-</td><td>-</td><td>-</td><td>-</td>
+  </tr>
+</table>
+
+<!-- Rate-limit headers table: should NOT be parsed as models. -->
+<h2>Rate Limit Headers</h2>
+<table>
+  <tr><th>Header</th><th>Value</th><th>Notes</th></tr>
+  <tr><td>retry-after</td><td>2</td><td>In seconds</td></tr>
+  <tr><td><code>429 Too Many Requests</code></td><td>-</td><td></td></tr>
+</table>
+</body></html>

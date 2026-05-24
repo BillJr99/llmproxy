@@ -1,0 +1,29 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "accounts/fireworks/models/llama-v3p3-70b-instruct",
+      "object": "model",
+      "is_free": true,
+      "serverless_billing": "free"
+    },
+    {
+      "id": "accounts/fireworks/models/llama-v3p1-8b-instruct",
+      "object": "model",
+      "is_free": true,
+      "serverless_billing": "free"
+    },
+    {
+      "id": "accounts/fireworks/models/firefunction-v2",
+      "object": "model",
+      "is_free": false,
+      "serverless_billing": "metered",
+      "pricing": {"input": 0.9, "output": 0.9}
+    },
+    {
+      "id": "accounts/fireworks/models/deepseek-r1-basic",
+      "object": "model",
+      "pricing": {"input": 0, "output": 0}
+    }
+  ]
+}

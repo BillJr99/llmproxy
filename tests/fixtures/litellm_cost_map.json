@@ -1,0 +1,66 @@
+{
+  "sample_text_completion_openai": {
+    "max_tokens": 4096,
+    "input_cost_per_token": 0.000015,
+    "output_cost_per_token": 0.00006,
+    "litellm_provider": "openai",
+    "mode": "chat"
+  },
+  "groq/llama-3.1-8b-instant": {
+    "max_tokens": 8192,
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "litellm_provider": "groq",
+    "mode": "chat"
+  },
+  "groq/llama-3.3-70b-versatile": {
+    "max_tokens": 32768,
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "litellm_provider": "groq",
+    "mode": "chat"
+  },
+  "groq/whisper-large-v3": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "litellm_provider": "groq",
+    "mode": "audio_transcription"
+  },
+  "cerebras/llama3.1-8b": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "litellm_provider": "cerebras",
+    "mode": "chat"
+  },
+  "openrouter/google/gemini-2.0-flash-exp:free": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "litellm_provider": "openrouter",
+    "mode": "chat"
+  },
+  "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo-Free": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "litellm_provider": "together_ai",
+    "mode": "chat"
+  },
+  "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "litellm_provider": "fireworks_ai",
+    "mode": "chat"
+  },
+  "gemini/gemini-1.5-flash-002": {
+    "input_cost_per_token": 0.000000075,
+    "output_cost_per_token": 0.0000003,
+    "litellm_provider": "gemini",
+    "mode": "chat"
+  },
+  "some-unknown-provider/foo-model": {
+    "input_cost_per_token": 0,
+    "output_cost_per_token": 0,
+    "litellm_provider": "weirdprovider",
+    "mode": "chat"
+  },
+  "_metadata_block": "not a model entry — just a sample value to confirm we ignore non-dicts"
+}

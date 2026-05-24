@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q --strict-markers"
+filterwarnings = [
+    "ignore::DeprecationWarning:flask.*",
+    "ignore::DeprecationWarning:werkzeug.*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = [
+    "E501",   # line length is enforced by formatter, not lint
+    "B008",   # function-call-in-default-argument (intentional in dataclasses)
+    "UP007",  # X | Y vs Optional[X] — both styles coexist in this codebase
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B018"]   # tests sometimes hold expressions for side-effects

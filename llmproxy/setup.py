@@ -1,10 +1,12 @@
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 setup(
     name="llmproxy",
     version="1.0.0",
     description="OpenAI-compatible multi-provider LLM proxy",
     packages=find_packages(),
+    package_data={"llmproxy": ["free_models.json"]},
+    include_package_data=True,
     python_requires=">=3.11",
     install_requires=[
         "flask>=3.0.0",

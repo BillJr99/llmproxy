@@ -1,0 +1,24 @@
+{
+  "data": [
+    {
+      "id": "meta-llama/llama-3.2-3b-instruct:free",
+      "name": "Llama 3.2 3B Free",
+      "pricing": {"prompt": "0", "completion": "0", "request": "0"}
+    },
+    {
+      "id": "anthropic/claude-3.5-sonnet",
+      "name": "Claude 3.5 Sonnet",
+      "pricing": {"prompt": "0.000003", "completion": "0.000015", "request": "0"}
+    },
+    {
+      "id": "deepseek/deepseek-v3.1:free",
+      "name": "DeepSeek V3.1 Free",
+      "pricing": {"prompt": "0", "completion": "0", "request": "0"}
+    },
+    {
+      "id": "qwen/qwen3-coder:free",
+      "name": "Qwen 3 Coder Free",
+      "pricing": {"prompt": "0", "completion": "0"}
+    }
+  ]
+}

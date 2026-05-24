@@ -1,0 +1,26 @@
+[
+  {
+    "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
+    "object": "model",
+    "type": "chat",
+    "pricing": {"input": 0, "output": 0, "hourly": 0, "base": 0}
+  },
+  {
+    "id": "meta-llama/Llama-Vision-Free",
+    "object": "model",
+    "type": "chat",
+    "pricing": {"input": 0, "output": 0, "hourly": 0, "base": 0}
+  },
+  {
+    "id": "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+    "object": "model",
+    "type": "chat",
+    "pricing": {"input": 3.5, "output": 3.5, "hourly": 0, "base": 0}
+  },
+  {
+    "id": "togethercomputer/m2-bert-80M-32k-retrieval",
+    "object": "model",
+    "type": "embedding",
+    "pricing": {"input": 0, "output": 0, "hourly": 0, "base": 0}
+  }
+]

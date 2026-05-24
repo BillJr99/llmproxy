@@ -1,0 +1,39 @@
+<!doctype html>
+<html><body>
+<h1>Rate limits</h1>
+
+<h2>Usage tiers</h2>
+<!-- The "Free" row in this table is what the scraper checks to confirm
+     the free tier exists before emitting any model IDs. -->
+<table>
+<thead><tr><th>Usage tier</th><th>Qualification</th><th>Billing tier cap</th></tr></thead>
+<tbody>
+<tr><td>Free</td><td>Active project or free trial</td><td>N/A</td></tr>
+<tr><td>Tier 1</td><td>Set up and link an active billing account</td><td>$250</td></tr>
+<tr><td>Tier 2</td><td>Paid $100 + 3 days</td><td>$2,000</td></tr>
+</tbody>
+</table>
+
+<h2>Gemini API rate limits</h2>
+<p>Rate limits depend on a variety of factors and can be viewed in Google AI Studio.</p>
+
+<!-- Model ID strings embedded in page content (anchor href attributes,
+     code blocks, table cells). The scraper extracts these via regex over
+     the raw HTML rather than parsing a Free-Tier table that no longer exists. -->
+<p>The following models are available:
+  <a href="#gemini-2.5-pro">gemini-2.5-pro</a>,
+  <a href="#gemini-2.5-flash">gemini-2.5-flash</a>,
+  <a href="#gemini-2.5-flash-lite">gemini-2.5-flash-lite</a>,
+  <a href="#gemini-2.0-flash">gemini-2.0-flash</a>.
+</p>
+
+<h2>Batch API rate limits</h2>
+<h3>Tier 1</h3>
+<table>
+<thead><tr><th>Model</th><th>Batch enqueued tokens</th></tr></thead>
+<tbody>
+<tr><td>gemini-2.5-pro</td><td>5,000,000</td></tr>
+<tr><td>gemini-2.5-flash</td><td>10,000,000</td></tr>
+</tbody>
+</table>
+</body></html>
