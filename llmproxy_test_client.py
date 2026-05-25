@@ -219,8 +219,9 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
         for prov, ids in by_provider.items():
             print(_info(f"  {prov}: {len(ids)} model{'s' if len(ids) != 1 else ''}"))
 
-        # Verify naming convention: every non-synthetic ID should use either the
-        # slash format ("provider/model") or the display format ("model (provider)").
+        # Verify naming convention: every non-synthetic ID should use the
+        # display format ("model__provider"), the slash format ("provider/model"),
+        # or the legacy display format ("model (provider)") for backward compat.
         # Virtual cycling models all live under the reserved "llmproxy/" namespace.
         SYNTHETIC_IDS = {
             "llmproxy/free", "llmproxy/local",
@@ -232,7 +233,9 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
         def _valid_id(mid: str) -> bool:
             if mid in SYNTHETIC_IDS:
                 return True
-            if mid.endswith(")") and " (" in mid:  # display format: model (provider)
+            if "__" in mid:                         # display format: model__provider
+                return True
+            if mid.endswith(")") and " (" in mid:  # legacy display format
                 return True
             if "/" in mid:                          # slash format: provider/model
                 return True
