@@ -62,6 +62,29 @@ The `upstream_model_id` may itself contain slashes.  Examples:
 The proxy strips the leading `<provider_name>/` before forwarding the request to
 the upstream provider's base URL.
 
+### Display format returned by `GET /v1/models`
+
+While the slash form above is the canonical **input** form (accepted by every
+endpoint), `GET /v1/models` advertises ids in a different **display** form:
+
+```
+<upstream_model_id>__<provider_name>
+```
+
+For example, an Ollama model with upstream id `qwen2.5vl:3b` is listed as
+`qwen2.5vl:3b__ollama`. The double-underscore separator avoids two real-world
+client bugs:
+
+- Spaces and parentheses break strict client validators (e.g. Hermes rejects
+  any model name containing whitespace).
+- A `/` separator causes some clients to silently truncate the id at the first
+  `/`, hiding the provider suffix in their menus.
+
+Clients may submit any of the three forms in `"model"` on chat/completions
+requests: the new `model__provider` display form, the canonical
+`provider/model` slash form, or the legacy `model (provider)` form (still
+accepted for backward compatibility).
+
 ### The `free` virtual model
 
 llmproxy advertises a special synthetic model named `llmproxy/free`.  When a request

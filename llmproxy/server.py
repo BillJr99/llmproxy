@@ -343,9 +343,19 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         # Strip a duplicate provider prefix so "nvidia/nvidia/llama-x" → "llama-x".
         auto_prefix = provider_name + "/"
         stripped = upstream_id[len(auto_prefix):] if upstream_id.startswith(auto_prefix) else upstream_id
-        # Use "model (provider)" as the proxy ID — shows fully in client menus
-        # without being silently truncated at a "/" boundary.
-        proxy_id = f"{stripped} ({provider_name})"
+        # Use "model__provider" as the proxy ID.  The double-underscore separator
+        # satisfies two constraints that previous formats failed:
+        #   - no spaces or parens, so strict clients (e.g. Hermes) that validate
+        #     model names against a "no whitespace / no special chars" rule accept it
+        #   - no "/", so clients that silently truncate at the first "/" still show
+        #     the full id in their menus
+        # Any spaces in the upstream model id or provider name are replaced with "_"
+        # for the same reason — strict validators reject whitespace in model names.
+        # The route cache keys on this sanitized display id; routing still uses the
+        # original upstream_id when forwarding to the provider.
+        safe_stripped = stripped.replace(" ", "_")
+        safe_provider = provider_name.replace(" ", "_")
+        proxy_id = f"{safe_stripped}__{safe_provider}"
         proxy_model["id"] = proxy_id
         proxy_model["name"] = proxy_id
         proxy_model["_upstream_id"] = upstream_id
@@ -711,9 +721,11 @@ def get_model(model_id: str) -> Response:
     """
     Return metadata for a single proxy model ID.
 
-    Accepts both the display format returned by /v1/models ("model (provider)")
-    and the slash format ("provider/upstream_model").  The route cache is
-    checked first so display-format IDs resolve correctly without parsing.
+    Accepts the display format returned by /v1/models ("model__provider"),
+    the legacy display format ("model (provider)", still accepted for backward
+    compatibility), and the slash format ("provider/upstream_model").  The
+    route cache is checked first so display-format IDs resolve correctly
+    without parsing.
 
     All virtual models (e.g. "llmproxy/free", "llmproxy/standard/local") are
     handled here via the _VIRTUAL_MODELS membership check.
@@ -1301,16 +1313,21 @@ def _resolve_provider(model_full: str) -> tuple[str | None, dict | None, str | N
     """
     config = load_config()
 
-    # Cache-first: the display ID format "model (provider)" is not parseable by
-    # parse_model_string, so the cache (populated by /v1/models) is authoritative.
+    # Cache-first: display ID formats ("model__provider", and the legacy
+    # "model (provider)") are not parseable by parse_model_string, so the cache
+    # (populated by /v1/models) is authoritative.
     with _model_route_cache_lock:
         cached_route = _model_route_cache.get(model_full)
     if cached_route:
         provider_name, upstream_model = cached_route
+    elif "__" in model_full:
+        # Cold-cache fallback for current "model__provider" format.
+        model_part, _, provider_name = model_full.rpartition("__")
+        upstream_model = model_part
     elif model_full.endswith(")") and " (" in model_full:
-        # Cold-cache fallback for "model (provider)" format.
+        # Cold-cache fallback for legacy "model (provider)" format (backward compat).
         model_part, _, provider_name = model_full[:-1].rpartition(" (")
-        upstream_model = model_part  # may be missing a provider prefix; best-effort
+        upstream_model = model_part
     else:
         try:
             provider_name, upstream_model = parse_model_string(model_full)
