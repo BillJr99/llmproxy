@@ -11,14 +11,20 @@ Implements the following OpenAI API endpoints:
 
 Model naming convention
 -----------------------
-All models exposed by this proxy use the form:
-    <provider_name>/<upstream_model_id>
+GET /v1/models advertises every model in the display form:
+    <provider_name>__<upstream_model_id>
 
-For example, if the provider is named "openrouter" and the upstream model
-is "openrouter/free", the proxy model ID is "openrouter/openrouter/free".
+For example, an "ollama" provider serving "qwen2.5vl:3b" is shown as
+"ollama__qwen2.5vl:3b".  Spaces in either side are replaced with "_".
 
-The server strips the leading <provider_name>/ prefix before forwarding
-each request to the appropriate upstream base URL.
+Three additional input forms also resolve on every proxied endpoint, for
+backward compatibility with pinned client configs:
+    <provider_name>/<upstream_model_id>     (canonical slash form)
+    <upstream_model_id>__<provider_name>    (PR #27 legacy display form)
+    <upstream_model_id> (<provider_name>)   (pre-PR #27 legacy display form)
+
+The server strips the provider prefix/suffix before forwarding each request
+to the appropriate upstream base URL.
 """
 
 import collections
@@ -56,15 +62,27 @@ logger = logging.getLogger("llmproxy.server")
 _REASONING_LEVELS: tuple[str, ...] = ("exploratory", "standard", "deep")
 # Per-candidate timeout for virtual-model cycling so a slow upstream doesn't block all failover.
 _VIRTUAL_CANDIDATE_TIMEOUT: int = 60
-_VIRTUAL_MODELS: frozenset[str] = frozenset({
+# Virtual models use the "llmproxy__" prefix (same double-underscore as the
+# provider display form) so strict clients accept them and they sort together.
+# The legacy "llmproxy/" prefix is kept in the membership set so pinned client
+# configs continue to resolve; only the new form is advertised in /v1/models.
+_NEW_VIRTUAL_MODELS: frozenset[str] = frozenset({
+    "llmproxy__free", "llmproxy__local",
+    *(f"llmproxy__{lvl}" for lvl in _REASONING_LEVELS),
+    *(f"llmproxy__{lvl}/free" for lvl in _REASONING_LEVELS),
+    *(f"llmproxy__{lvl}/local" for lvl in _REASONING_LEVELS),
+})
+_LEGACY_VIRTUAL_MODELS: frozenset[str] = frozenset({
     "llmproxy/free", "llmproxy/local",
     *(f"llmproxy/{lvl}" for lvl in _REASONING_LEVELS),
     *(f"llmproxy/{lvl}/free" for lvl in _REASONING_LEVELS),
     *(f"llmproxy/{lvl}/local" for lvl in _REASONING_LEVELS),
 })
+_VIRTUAL_MODELS: frozenset[str] = _NEW_VIRTUAL_MODELS | _LEGACY_VIRTUAL_MODELS
 # Virtual models that use capacity-aware free-tier load balancing.
 _FREE_VIRTUAL_MODELS: frozenset[str] = frozenset({
-    "llmproxy/free",
+    "llmproxy__free", "llmproxy/free",
+    *(f"llmproxy__{lvl}/free" for lvl in _REASONING_LEVELS),
     *(f"llmproxy/{lvl}/free" for lvl in _REASONING_LEVELS),
 })
 
@@ -343,19 +361,21 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         # Strip a duplicate provider prefix so "nvidia/nvidia/llama-x" → "llama-x".
         auto_prefix = provider_name + "/"
         stripped = upstream_id[len(auto_prefix):] if upstream_id.startswith(auto_prefix) else upstream_id
-        # Use "model__provider" as the proxy ID.  The double-underscore separator
+        # Use "provider__model" as the proxy ID.  The double-underscore separator
         # satisfies two constraints that previous formats failed:
         #   - no spaces or parens, so strict clients (e.g. Hermes) that validate
         #     model names against a "no whitespace / no special chars" rule accept it
         #   - no "/", so clients that silently truncate at the first "/" still show
         #     the full id in their menus
+        # The provider goes first to mirror the canonical "provider/model" slash form
+        # used everywhere else in the codebase.
         # Any spaces in the upstream model id or provider name are replaced with "_"
         # for the same reason — strict validators reject whitespace in model names.
         # The route cache keys on this sanitized display id; routing still uses the
         # original upstream_id when forwarding to the provider.
         safe_stripped = stripped.replace(" ", "_")
         safe_provider = provider_name.replace(" ", "_")
-        proxy_id = f"{safe_stripped}__{safe_provider}"
+        proxy_id = f"{safe_provider}__{safe_stripped}"
         proxy_model["id"] = proxy_id
         proxy_model["name"] = proxy_id
         proxy_model["_upstream_id"] = upstream_id
@@ -454,8 +474,8 @@ def _sync_local_provider_models_once() -> None:
     On first call after startup, poll every localhost provider's /models endpoint
     and sync unprefixed model IDs into config['model_reasoning'].
 
-    Local providers participate in the dedicated llmproxy/local and
-    llmproxy/<level>/local virtual-endpoint families, not in llmproxy/free.
+    Local providers participate in the dedicated llmproxy__local and
+    llmproxy__<level>/local virtual-endpoint families, not in llmproxy__free.
     Models served from a localhost URL are therefore NOT added to
     config['believed_free'] — believed_free is reserved for provider grace
     tiers ("free" as in dollars), while /local routes on host topology.
@@ -522,7 +542,7 @@ def _sync_local_provider_models_once() -> None:
                 modified = True
                 logger.info(
                     "[local-sync] Removed %s from believed_free "
-                    "(local provider — routed via llmproxy/local instead).", e,
+                    "(local provider — routed via llmproxy__local instead).", e,
                 )
 
             # Same for free_limits — local models don't use the capacity-aware
@@ -640,10 +660,10 @@ def list_models() -> Response:
     )
     if has_free:
         synthetic.append({
-            "id": "llmproxy/free",
+            "id": "llmproxy__free",
             "object": "model",
             "owned_by": "llmproxy",
-            "name": "llmproxy/free",
+            "name": "llmproxy__free",
             "_note": "Virtual model: cycles through all models whose ID contains 'free' (or appears in config['believed_free']) until one succeeds.",
         })
     if any(
@@ -652,36 +672,36 @@ def list_models() -> Response:
         if (cfg := get_provider(config, pn))
     ):
         synthetic.append({
-            "id": "llmproxy/local",
+            "id": "llmproxy__local",
             "object": "model",
             "owned_by": "llmproxy",
-            "name": "llmproxy/local",
+            "name": "llmproxy__local",
             "_note": "Virtual model: cycles through all models served on localhost until one succeeds.",
         })
 
     for level in _REASONING_LEVELS:
         if _get_reasoning_model_candidates(level):
             synthetic.append({
-                "id": f"llmproxy/{level}",
+                "id": f"llmproxy__{level}",
                 "object": "model",
                 "owned_by": "llmproxy",
-                "name": f"llmproxy/{level}",
+                "name": f"llmproxy__{level}",
                 "_note": f"Virtual model: cycles through all models tagged '{level}' reasoning until one succeeds.",
             })
         if _get_reasoning_free_candidates(level):
             synthetic.append({
-                "id": f"llmproxy/{level}/free",
+                "id": f"llmproxy__{level}/free",
                 "object": "model",
                 "owned_by": "llmproxy",
-                "name": f"llmproxy/{level}/free",
+                "name": f"llmproxy__{level}/free",
                 "_note": f"Virtual model: cycles through free-tier models tagged '{level}' reasoning.",
             })
         if _get_reasoning_local_candidates(level):
             synthetic.append({
-                "id": f"llmproxy/{level}/local",
+                "id": f"llmproxy__{level}/local",
                 "object": "model",
                 "owned_by": "llmproxy",
-                "name": f"llmproxy/{level}/local",
+                "name": f"llmproxy__{level}/local",
                 "_note": f"Virtual model: cycles through local models tagged '{level}' reasoning.",
             })
 
@@ -721,13 +741,15 @@ def get_model(model_id: str) -> Response:
     """
     Return metadata for a single proxy model ID.
 
-    Accepts the display format returned by /v1/models ("model__provider"),
-    the legacy display format ("model (provider)", still accepted for backward
-    compatibility), and the slash format ("provider/upstream_model").  The
-    route cache is checked first so display-format IDs resolve correctly
-    without parsing.
+    Accepts the display format returned by /v1/models ("provider__model"),
+    two legacy display formats kept for backward compatibility
+    ("model__provider" from PR #27 and "model (provider)" from before that),
+    and the canonical slash format ("provider/upstream_model").  The route
+    cache is checked first so display-format IDs resolve correctly without
+    parsing.
 
-    All virtual models (e.g. "llmproxy/free", "llmproxy/standard/local") are
+    All virtual models (e.g. "llmproxy__free", "llmproxy__standard/local",
+    plus the legacy "llmproxy/free" forms) are
     handled here via the _VIRTUAL_MODELS membership check.
     """
     if model_id in _VIRTUAL_MODELS:
@@ -1129,7 +1151,7 @@ def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
     """(provider_name, provider_cfg, upstream_model) for every model whose upstream ID contains 'free' or appears in config['believed_free'].
 
     Models served from a localhost / loopback URL are NEVER included — they
-    route via the dedicated llmproxy/local family instead. This is a
+    route via the dedicated llmproxy__local family instead. This is a
     defence-in-depth guard against stale configs that still have local models
     in believed_free; the startup local-sync cleans those up too, but this
     runtime filter ensures /free never leaks a local model even before sync runs.
@@ -1282,9 +1304,18 @@ def _get_reasoning_local_candidates(level: str) -> list[tuple[str, dict, str]]:
     return [(pn, pc, um) for pn, pc, um in _get_local_model_candidates() if (pn, um) in reasoning_set]
 
 
+def _strip_virtual_prefix(model_full: str) -> str:
+    """Strip the leading "llmproxy__" or legacy "llmproxy/" virtual-model prefix."""
+    if model_full.startswith("llmproxy__"):
+        return model_full[len("llmproxy__"):]
+    if model_full.startswith("llmproxy/"):
+        return model_full[len("llmproxy/"):]
+    return model_full
+
+
 def _get_virtual_candidates(model_full: str) -> list[tuple[str, dict, str]]:
     """Dispatch to the correct candidate selector for any virtual model name."""
-    name = model_full[len("llmproxy/"):] if model_full.startswith("llmproxy/") else model_full
+    name = _strip_virtual_prefix(model_full)
     if name == "free":
         return _get_free_model_candidates()
     if name == "local":
@@ -1313,17 +1344,25 @@ def _resolve_provider(model_full: str) -> tuple[str | None, dict | None, str | N
     """
     config = load_config()
 
-    # Cache-first: display ID formats ("model__provider", and the legacy
-    # "model (provider)") are not parseable by parse_model_string, so the cache
-    # (populated by /v1/models) is authoritative.
+    # Cache-first: display ID formats ("provider__model", and the legacy
+    # "model__provider" / "model (provider)") are not parseable by
+    # parse_model_string, so the cache (populated by /v1/models) is authoritative.
     with _model_route_cache_lock:
         cached_route = _model_route_cache.get(model_full)
     if cached_route:
         provider_name, upstream_model = cached_route
     elif "__" in model_full:
-        # Cold-cache fallback for current "model__provider" format.
-        model_part, _, provider_name = model_full.rpartition("__")
-        upstream_model = model_part
+        # Try the current "provider__model" form first (provider on the left).
+        # If the left side isn't a configured provider, fall back to the legacy
+        # "model__provider" form from PR #27 (provider on the right). If neither
+        # side matches a known provider, keep the right-side-as-provider guess so
+        # the downstream "Unknown provider" error message is unchanged.
+        left, _, right = model_full.partition("__")
+        if get_provider(config, left):
+            provider_name, upstream_model = left, right
+        else:
+            left2, _, right2 = model_full.rpartition("__")
+            provider_name, upstream_model = right2, left2
     elif model_full.endswith(")") and " (" in model_full:
         # Cold-cache fallback for legacy "model (provider)" format (backward compat).
         model_part, _, provider_name = model_full[:-1].rpartition(" (")
@@ -1355,7 +1394,7 @@ def _resolve_provider(model_full: str) -> tuple[str | None, dict | None, str | N
 
 def _virtual_model_hint(model_full: str) -> str:
     """Return a one-sentence config hint for an unavailable virtual model."""
-    name = model_full[len("llmproxy/"):] if model_full.startswith("llmproxy/") else model_full
+    name = _strip_virtual_prefix(model_full)
     if name == "free":
         return (
             "Check that at least one provider exposes a free-tier model "

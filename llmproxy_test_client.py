@@ -220,10 +220,19 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
             print(_info(f"  {prov}: {len(ids)} model{'s' if len(ids) != 1 else ''}"))
 
         # Verify naming convention: every non-synthetic ID should use the
-        # display format ("model__provider"), the slash format ("provider/model"),
-        # or the legacy display format ("model (provider)") for backward compat.
-        # Virtual cycling models all live under the reserved "llmproxy/" namespace.
+        # display format ("provider__model"), the slash format ("provider/model"),
+        # or one of the two legacy display formats ("model__provider" from PR #27
+        # or "model (provider)" from before that) for backward compat.
+        # Virtual cycling models all live under the reserved "llmproxy" namespace
+        # (new "llmproxy__..." form, or legacy "llmproxy/..." form).
         SYNTHETIC_IDS = {
+            # New form (advertised by /v1/models)
+            "llmproxy__free", "llmproxy__local",
+            "llmproxy__exploratory", "llmproxy__standard", "llmproxy__deep",
+            "llmproxy__exploratory/free", "llmproxy__exploratory/local",
+            "llmproxy__standard/free", "llmproxy__standard/local",
+            "llmproxy__deep/free", "llmproxy__deep/local",
+            # Legacy form (still accepted as input)
             "llmproxy/free", "llmproxy/local",
             "llmproxy/exploratory", "llmproxy/standard", "llmproxy/deep",
             "llmproxy/exploratory/free", "llmproxy/exploratory/local",
@@ -233,9 +242,9 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
         def _valid_id(mid: str) -> bool:
             if mid in SYNTHETIC_IDS:
                 return True
-            if "__" in mid:                         # display format: model__provider
+            if "__" in mid:                         # display format: provider__model (or PR #27 legacy)
                 return True
-            if mid.endswith(")") and " (" in mid:  # legacy display format
+            if mid.endswith(")") and " (" in mid:  # pre-PR #27 legacy display format
                 return True
             if "/" in mid:                          # slash format: provider/model
                 return True
@@ -247,26 +256,26 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
         else:
             results.ok("All model IDs follow proxy naming convention")
 
-        if any(m.get("id") == "llmproxy/free" for m in models):
-            results.ok("Synthetic 'llmproxy/free' cycling model is advertised")
+        if any(m.get("id") == "llmproxy__free" for m in models):
+            results.ok("Synthetic 'llmproxy__free' cycling model is advertised")
         else:
-            results.skip("Synthetic 'llmproxy/free' model", "no free-tier models found across providers")
+            results.skip("Synthetic 'llmproxy__free' model", "no free-tier models found across providers")
 
-        if any(m.get("id") == "llmproxy/local" for m in models):
-            results.ok("Synthetic 'llmproxy/local' cycling model is advertised")
+        if any(m.get("id") == "llmproxy__local" for m in models):
+            results.ok("Synthetic 'llmproxy__local' cycling model is advertised")
         else:
-            results.skip("Synthetic 'llmproxy/local' model", "no providers with a localhost base_url found")
+            results.skip("Synthetic 'llmproxy__local' model", "no providers with a localhost base_url found")
 
         for _level in ("exploratory", "standard", "deep"):
-            if any(m.get("id") == f"llmproxy/{_level}" for m in models):
-                results.ok(f"Synthetic 'llmproxy/{_level}' reasoning model is advertised")
+            if any(m.get("id") == f"llmproxy__{_level}" for m in models):
+                results.ok(f"Synthetic 'llmproxy__{_level}' reasoning model is advertised")
             else:
                 results.skip(
-                    f"Synthetic 'llmproxy/{_level}' reasoning model",
+                    f"Synthetic 'llmproxy__{_level}' reasoning model",
                     f"no models tagged '{_level}' in config['model_reasoning']",
                 )
             for _suffix in ("free", "local"):
-                _combo = f"llmproxy/{_level}/{_suffix}"
+                _combo = f"llmproxy__{_level}/{_suffix}"
                 if any(m.get("id") == _combo for m in models):
                     results.ok(f"Synthetic '{_combo}' combo model is advertised")
 
@@ -730,18 +739,18 @@ def test_free_model(base_url: str, **_) -> None:
     # Confirm the model is advertised; skip suite if no free-tier candidates exist.
     candidates: list[str] = []
     try:
-        resp = _get(base_url, "/models/llmproxy/free")
+        resp = _get(base_url, "/models/llmproxy__free")
         if resp.status_code == 200:
             data = resp.json()
             candidates = data.get("_candidates", [])
-            results.ok("GET /v1/models/llmproxy/free returns 200",
+            results.ok("GET /v1/models/llmproxy__free returns 200",
                        f"{len(candidates)} candidate(s): {', '.join(candidates[:4])}"
                        + (" ..." if len(candidates) > 4 else ""))
         else:
-            results.fail("GET /v1/models/llmproxy/free", f"status={resp.status_code}")
+            results.fail("GET /v1/models/llmproxy__free", f"status={resp.status_code}")
             return
     except Exception as e:
-        results.fail("GET /v1/models/llmproxy/free", str(e))
+        results.fail("GET /v1/models/llmproxy__free", str(e))
         return
 
     if not candidates:
@@ -769,7 +778,7 @@ def test_free_model(base_url: str, **_) -> None:
     print(f"  {BOLD}Non-streaming prompts:{RESET}")
     for label, prompt in _FREE_PROMPTS:
         payload = {
-            "model": "llmproxy/free",
+            "model": "llmproxy__free",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 32,
             "temperature": 0,
@@ -785,26 +794,26 @@ def test_free_model(base_url: str, **_) -> None:
                 used_model = data.get("model", "?")
                 if content:
                     results.ok(
-                        f"llmproxy/free → {label}",
+                        f"llmproxy__free → {label}",
                         f"via {used_model}  reply={repr(content[:60])}  {elapsed:.2f}s",
                     )
                 else:
                     results.skip(
-                        f"llmproxy/free → {label}",
+                        f"llmproxy__free → {label}",
                         f"via {used_model}  no content in response  raw={_json_or_text_dict(data)}",
                     )
             else:
-                results.fail(f"llmproxy/free → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
+                results.fail(f"llmproxy__free → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
         except requests.exceptions.Timeout:
-            results.fail(f"llmproxy/free → {label}", "timed out after 90s")
+            results.fail(f"llmproxy__free → {label}", "timed out after 90s")
         except Exception as e:
-            results.fail(f"llmproxy/free → {label}", str(e))
+            results.fail(f"llmproxy__free → {label}", str(e))
 
     # Streaming prompt.
     print()
     print(f"  {BOLD}Streaming prompt:{RESET}")
     stream_payload = {
-        "model": "llmproxy/free",
+        "model": "llmproxy__free",
         "messages": [{"role": "user", "content": "Count from 1 to 3, one number per line."}],
         "max_tokens": 32,
         "temperature": 0,
@@ -818,7 +827,7 @@ def test_free_model(base_url: str, **_) -> None:
         print(_info("Streaming tokens: "), end="", flush=True)
         with _post_stream(base_url, "/chat/completions", stream_payload, timeout=90) as resp:
             if resp.status_code != 200:
-                results.fail("llmproxy/free (streaming)", f"status={resp.status_code}  body={resp.text[:200]}")
+                results.fail("llmproxy__free (streaming)", f"status={resp.status_code}  body={resp.text[:200]}")
             else:
                 for raw_line in resp.iter_lines():
                     if not raw_line:
@@ -845,16 +854,16 @@ def test_free_model(base_url: str, **_) -> None:
         elapsed = time.monotonic() - t0
         full_content = "".join(parts)
         if full_content:
-            results.ok("llmproxy/free (streaming)", f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s")
+            results.ok("llmproxy__free (streaming)", f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s")
         elif chunks > 0:
             chunk_info = f"  sample chunks: {sample_chunks}" if sample_chunks else ""
-            results.skip("llmproxy/free (streaming)", f"{chunks} chunks received but no content tokens (model may use non-standard delta fields){chunk_info}")
+            results.skip("llmproxy__free (streaming)", f"{chunks} chunks received but no content tokens (model may use non-standard delta fields){chunk_info}")
         else:
-            results.fail("llmproxy/free (streaming)", "received 0 chunks")
+            results.fail("llmproxy__free (streaming)", "received 0 chunks")
     except requests.exceptions.Timeout:
-        results.fail("llmproxy/free (streaming)", "timed out after 90s")
+        results.fail("llmproxy__free (streaming)", "timed out after 90s")
     except Exception as e:
-        results.fail("llmproxy/free (streaming)", str(e))
+        results.fail("llmproxy__free (streaming)", str(e))
         traceback.print_exc()
 
 
@@ -880,21 +889,21 @@ def test_local_model(base_url: str, **_) -> None:
 
     # Confirm the model is advertised (or skip if no local providers).
     try:
-        resp = _get(base_url, "/models/llmproxy/local")
+        resp = _get(base_url, "/models/llmproxy__local")
         if resp.status_code == 200:
             data = resp.json()
             candidates = data.get("_candidates", [])
             if not candidates:
                 results.skip("local model cycling", "no providers with a localhost base_url configured")
                 return
-            results.ok("GET /v1/models/llmproxy/local returns 200",
+            results.ok("GET /v1/models/llmproxy__local returns 200",
                        f"{len(candidates)} candidate(s): {', '.join(candidates[:4])}"
                        + (" ..." if len(candidates) > 4 else ""))
         else:
-            results.fail("GET /v1/models/llmproxy/local", f"status={resp.status_code}")
+            results.fail("GET /v1/models/llmproxy__local", f"status={resp.status_code}")
             return
     except Exception as e:
-        results.fail("GET /v1/models/llmproxy/local", str(e))
+        results.fail("GET /v1/models/llmproxy__local", str(e))
         return
 
     # Non-streaming prompts.
@@ -902,7 +911,7 @@ def test_local_model(base_url: str, **_) -> None:
     print(f"  {BOLD}Non-streaming prompts:{RESET}")
     for label, prompt in _LOCAL_PROMPTS:
         payload = {
-            "model": "llmproxy/local",
+            "model": "llmproxy__local",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 32,
             "temperature": 0,
@@ -918,26 +927,26 @@ def test_local_model(base_url: str, **_) -> None:
                 used_model = data.get("model", "?")
                 if content:
                     results.ok(
-                        f"llmproxy/local → {label}",
+                        f"llmproxy__local → {label}",
                         f"via {used_model}  reply={repr(content[:60])}  {elapsed:.2f}s",
                     )
                 else:
                     results.skip(
-                        f"llmproxy/local → {label}",
+                        f"llmproxy__local → {label}",
                         f"via {used_model}  no content in response  raw={_json_or_text_dict(data)}",
                     )
             else:
-                results.fail(f"llmproxy/local → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
+                results.fail(f"llmproxy__local → {label}", f"status={resp.status_code}  body={_json_or_text(resp)}")
         except requests.exceptions.Timeout:
-            results.fail(f"llmproxy/local → {label}", "timed out after 90s")
+            results.fail(f"llmproxy__local → {label}", "timed out after 90s")
         except Exception as e:
-            results.fail(f"llmproxy/local → {label}", str(e))
+            results.fail(f"llmproxy__local → {label}", str(e))
 
     # Streaming prompt.
     print()
     print(f"  {BOLD}Streaming prompt:{RESET}")
     stream_payload = {
-        "model": "llmproxy/local",
+        "model": "llmproxy__local",
         "messages": [{"role": "user", "content": "Count from 1 to 3, one number per line."}],
         "max_tokens": 32,
         "temperature": 0,
@@ -951,7 +960,7 @@ def test_local_model(base_url: str, **_) -> None:
         print(_info("Streaming tokens: "), end="", flush=True)
         with _post_stream(base_url, "/chat/completions", stream_payload, timeout=90) as resp:
             if resp.status_code != 200:
-                results.fail("llmproxy/local (streaming)", f"status={resp.status_code}  body={resp.text[:200]}")
+                results.fail("llmproxy__local (streaming)", f"status={resp.status_code}  body={resp.text[:200]}")
             else:
                 for raw_line in resp.iter_lines():
                     if not raw_line:
@@ -978,16 +987,16 @@ def test_local_model(base_url: str, **_) -> None:
         elapsed = time.monotonic() - t0
         full_content = "".join(parts)
         if full_content:
-            results.ok("llmproxy/local (streaming)", f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s")
+            results.ok("llmproxy__local (streaming)", f"{chunks} chunks  content={repr(full_content[:60])}  {elapsed:.2f}s")
         elif chunks > 0:
             chunk_info = f"  sample chunks: {sample_chunks}" if sample_chunks else ""
-            results.skip("llmproxy/local (streaming)", f"{chunks} chunks received but no content tokens (model may use non-standard delta fields){chunk_info}")
+            results.skip("llmproxy__local (streaming)", f"{chunks} chunks received but no content tokens (model may use non-standard delta fields){chunk_info}")
         else:
-            results.fail("llmproxy/local (streaming)", "received 0 chunks")
+            results.fail("llmproxy__local (streaming)", "received 0 chunks")
     except requests.exceptions.Timeout:
-        results.fail("llmproxy/local (streaming)", "timed out after 90s")
+        results.fail("llmproxy__local (streaming)", "timed out after 90s")
     except Exception as e:
-        results.fail("llmproxy/local (streaming)", str(e))
+        results.fail("llmproxy__local (streaming)", str(e))
         traceback.print_exc()
 
 
@@ -1221,8 +1230,8 @@ def _pick_model(models: list[str], preferred: Optional[str]) -> Optional[str]:
         return None
     # Prefer the synthetic "free" cycling model when it's available — it
     # automatically routes to a working free-tier backend.
-    if "llmproxy/free" in models:
-        return "llmproxy/free"
+    if "llmproxy__free" in models:
+        return "llmproxy__free"
     # Fall back to other free or small models by name.
     for keyword in ("free", "mini", "flash", "haiku", "small", "tiny", "7b", "8b"):
         for m in models:
