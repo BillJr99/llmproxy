@@ -12,7 +12,6 @@ import re
 
 import pytest
 
-
 _DISPLAY_ID_RE = re.compile(r"^[^\s()]+__[A-Za-z0-9_.\-]+$")
 
 
