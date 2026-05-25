@@ -4,14 +4,15 @@ test_tui.py — Interactive chat TUI for llmproxy.
 
 Connects to an llmproxy server and provides a conversational interface with
 streaming responses.  Supports model switching including all virtual endpoints
-(llmproxy/free, llmproxy/local, llmproxy/exploratory, llmproxy/standard, llmproxy/deep,
-and their free/local combinations).
+(llmproxy__free, llmproxy__local, llmproxy__exploratory, llmproxy__standard,
+llmproxy__deep, and their free/local combinations).  The legacy "llmproxy/..."
+forms are also accepted as input.
 
 Usage
 -----
   python test_tui.py
   python test_tui.py --base-url http://localhost:8080/v1
-  python test_tui.py --model llmproxy/standard --system "You are a concise assistant."
+  python test_tui.py --model llmproxy__standard --system "You are a concise assistant."
 
 Commands (type inside the chat)
 --------------------------------
@@ -59,6 +60,13 @@ RED     = "\033[31m"
 _W = 72   # display width
 
 _VIRTUAL_IDS = frozenset({
+    # New "llmproxy__..." form (advertised by /v1/models)
+    "llmproxy__free", "llmproxy__local",
+    "llmproxy__exploratory", "llmproxy__standard", "llmproxy__deep",
+    "llmproxy__exploratory/free", "llmproxy__exploratory/local",
+    "llmproxy__standard/free", "llmproxy__standard/local",
+    "llmproxy__deep/free", "llmproxy__deep/local",
+    # Legacy "llmproxy/..." form (still accepted as input)
     "llmproxy/free", "llmproxy/local",
     "llmproxy/exploratory", "llmproxy/standard", "llmproxy/deep",
     "llmproxy/exploratory/free", "llmproxy/exploratory/local",
@@ -102,7 +110,13 @@ def _fetch_models(base_url: str) -> Optional[list[dict]]:
 def _auto_pick(models: list[dict]) -> Optional[str]:
     """Pick a sensible default model from the list."""
     ids = {m["id"] for m in models}
-    for pref in ("llmproxy/standard", "llmproxy/free", "llmproxy/local", "llmproxy/exploratory", "llmproxy/deep"):
+    for pref in (
+        "llmproxy__standard", "llmproxy__free", "llmproxy__local",
+        "llmproxy__exploratory", "llmproxy__deep",
+        # Legacy fallbacks if the server hasn't been upgraded yet.
+        "llmproxy/standard", "llmproxy/free", "llmproxy/local",
+        "llmproxy/exploratory", "llmproxy/deep",
+    ):
         if pref in ids:
             return pref
     if models:

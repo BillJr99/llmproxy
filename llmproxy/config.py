@@ -23,7 +23,7 @@ Schema:
   },                                              // virtual endpoints
   "free_limits": {                                // optional; per-model rate limits
     "<provider>/<upstream_model_id>": {           // used for capacity-aware ordering
-      "requests_per_minute": 15,                  // on llmproxy/free and */free
+      "requests_per_minute": 15,                  // on llmproxy__free and */free
       "requests_per_day": 1500,                   // endpoints; null = not tracked
       "tokens_per_minute": null,                  // token limits stored for reference
       "tokens_per_day": null                      // but not yet enforced (no token
