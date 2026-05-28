@@ -376,7 +376,30 @@ python scripts/update_free_models.py --source openrouter,docs --dry-run
 
 # Just regenerate config.example.json from the current sidecar (no scraping)
 python scripts/update_free_models.py --regen-config-only
+
+# Also sync your live config.json's free-tier sections from the sidecar
+python scripts/update_free_models.py --config ~/.config/llmproxy/config.json --dry-run
+python scripts/update_free_models.py --config ~/.config/llmproxy/config.json
+
+# Sync the config from the current sidecar without scraping
+python scripts/update_free_models.py --regen-config-only --config ~/.config/llmproxy/config.json
 ```
+
+### Syncing your live config (`--config PATH`)
+
+The proxy reads `believed_free` / `model_reasoning` / `free_limits` at runtime
+from *your* `config.json`, not from the sidecar. Pass `--config PATH` to also
+reconcile a live config in the same run (honors `--dry-run`):
+
+- **Scope is limited to providers configured in that file.** Entries for custom
+  providers, or sidecar providers you haven't configured, are left untouched —
+  as are non-model keys like the `_note` in `free_limits`.
+- **`believed_free` and `free_limits` are synced** — newly-free models are added
+  and models that are no longer free are removed.
+- **`model_reasoning` is add-only.** Existing reasoning tags are never pruned, so
+  a model keeps its reasoning level even after it leaves the free tier.
+- Your `providers`, `server`, and any other config sections are preserved; only
+  the three free-tier sections change.
 
 ### Safety properties
 
