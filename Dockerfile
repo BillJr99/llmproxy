@@ -5,7 +5,11 @@
 # Build:
 #   docker build -t llmproxy .
 #
-# Run the server (config bind-mounted from host, runs as current user):
+# The image runs as a non-root user by default — no --user flag required.
+# When bind-mounting a host config directory, pass --user $(id -u):$(id -g)
+# so files created inside the container are owned by you on the host.
+#
+# Run the server (config bind-mounted from host):
 #   mkdir -p ~/.config/llmproxy
 #   docker run -d \
 #     -p 8080:8080 \
@@ -27,10 +31,11 @@
 #   docker restart llmproxy
 #
 # Named-volume alternative (config stays inside Docker, not on the host
-# filesystem — useful for CI or rootless environments):
+# filesystem — useful for CI or rootless environments). Mount over the
+# default config location under the non-root user's home:
 #   docker run -d \
 #     -p 8080:8080 \
-#     -v llmproxy_config:/root/.config/llmproxy \
+#     -v llmproxy_config:/home/llmproxy/.config/llmproxy \
 #     --name llmproxy \
 #     llmproxy
 #
@@ -56,6 +61,21 @@ RUN pip install --upgrade pip && \
 COPY llmproxy/ ./llmproxy/
 COPY llmproxy/setup.py .
 RUN pip install -e .
+
+# ── Run as a non-root user ────────────────────────────────────────────────
+# Create an unprivileged user (uid 1000) in the root group (gid 0) and make
+# the config + home directories group-writable. The image therefore runs as
+# non-root by default (no --user required), and also works under an arbitrary
+# `--user <uid>:0` (e.g. OpenShift, or `--user $(id -u):0`) because everything
+# the process writes is group-root-writable. HOME is fixed so Path.home()
+# (used for the default ~/.config/llmproxy config path) resolves even when the
+# uid has no /etc/passwd entry.
+ENV HOME=/home/llmproxy
+RUN useradd --uid 1000 --gid 0 --create-home --home-dir "$HOME" llmproxy \
+    && mkdir -p /config "$HOME/.config/llmproxy" \
+    && chgrp -R 0 /config "$HOME" \
+    && chmod -R g+rwX /config "$HOME"
+USER 1000:0
 
 # ── Expose the default listen port ────────────────────────────────────────
 EXPOSE 8080
