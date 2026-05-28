@@ -8,6 +8,7 @@ Usage
   python scripts/update_free_models.py --provider google
   python scripts/update_free_models.py --source openrouter,docs
   python scripts/update_free_models.py --regen-config-only
+  python scripts/update_free_models.py --config ~/.config/llmproxy/config.json
 
 Behavior
 --------
@@ -29,6 +30,7 @@ Manual review is expected — run with --dry-run first.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 from collections import defaultdict
@@ -345,6 +347,163 @@ def write_config_example(out: Path = CONFIG_EXAMPLE_PATH) -> None:
 
 
 # ---------------------------------------------------------------------------
+# User config.json sync  (--config)
+# ---------------------------------------------------------------------------
+
+def _provider_of(model_id: str) -> str:
+    """Provider key for a qualified model id ('github/openai/gpt-4o' -> 'github')."""
+    return model_id.split("/", 1)[0]
+
+
+def reconcile_user_config(sidecar: dict, user_cfg: dict) -> dict:
+    """Sync a user config's free-tier sections from *sidecar*, in place.
+
+    Scope is limited to providers that appear in both the user config's
+    ``providers`` block and the sidecar. For those providers:
+
+      * ``believed_free`` and ``free_limits`` are reconciled — newly-free models
+        are added and models that are no longer free are removed.
+      * ``model_reasoning`` is add-only; existing tags are never pruned (a model
+        can carry a reasoning level without being free).
+
+    Entries for any other provider (custom providers, or sidecar providers the
+    user has not configured) are left untouched, as are non-model keys in
+    ``free_limits`` (e.g. the ``_note`` string).
+
+    Returns a changes summary:
+      {"believed_free": {"add": [...], "remove": [...]},
+       "free_limits":   {"set": [...], "remove": [...]},
+       "model_reasoning": {"add": [...]}}
+    """
+    providers: dict = sidecar.get("providers", {})
+    configured = set(user_cfg.get("providers", {})) & set(providers)
+
+    # Sidecar aggregates restricted to configured providers.
+    sc_believed: set[str] = set()
+    sc_limits: dict[str, dict] = {}
+    sc_reasoning: dict[str, str] = {}
+    for pkey in configured:
+        prov = providers[pkey]
+        sc_believed.update(prov.get("believed_free", []))
+        sc_limits.update(prov.get("free_limits", {}))
+        sc_reasoning.update(prov.get("model_reasoning", {}))
+
+    changes = {
+        "believed_free": {"add": [], "remove": []},
+        "free_limits": {"set": [], "remove": []},
+        "model_reasoning": {"add": []},
+    }
+
+    # ── believed_free ──────────────────────────────────────────────────────
+    existing_bf = user_cfg.get("believed_free")
+    if not isinstance(existing_bf, list):
+        existing_bf = []
+    new_bf: list[str] = []
+    for mid in existing_bf:
+        if not isinstance(mid, str):
+            new_bf.append(mid)  # leave anything unexpected alone
+            continue
+        if _provider_of(mid) in configured and mid not in sc_believed:
+            changes["believed_free"]["remove"].append(mid)  # no longer free
+        else:
+            new_bf.append(mid)  # untouched provider, or still free
+    present = set(new_bf)
+    for mid in sorted(sc_believed):
+        if mid not in present:
+            new_bf.append(mid)
+            changes["believed_free"]["add"].append(mid)
+    user_cfg["believed_free"] = new_bf
+    new_bf_set = set(new_bf)
+
+    # ── free_limits ────────────────────────────────────────────────────────
+    existing_fl = user_cfg.get("free_limits")
+    if not isinstance(existing_fl, dict):
+        existing_fl = {}
+    for key in list(existing_fl.keys()):
+        # Preserve non-model keys (e.g. "_note") and unconfigured providers.
+        if "/" not in key or _provider_of(key) not in configured:
+            continue
+        if key not in new_bf_set:
+            del existing_fl[key]
+            changes["free_limits"]["remove"].append(key)
+    for mid, lim in sc_limits.items():
+        if mid in new_bf_set and existing_fl.get(mid) != lim:
+            existing_fl[mid] = copy.deepcopy(lim)
+            changes["free_limits"]["set"].append(mid)
+    user_cfg["free_limits"] = existing_fl
+
+    # ── model_reasoning (add-only) ─────────────────────────────────────────
+    existing_mr = user_cfg.get("model_reasoning")
+    if not isinstance(existing_mr, dict):
+        existing_mr = {}
+    for mid, level in sc_reasoning.items():
+        if mid not in existing_mr:
+            existing_mr[mid] = level
+            changes["model_reasoning"]["add"].append(mid)
+    user_cfg["model_reasoning"] = existing_mr
+
+    return changes
+
+
+def _config_changed(changes: dict) -> bool:
+    return any(
+        bucket.get(k) for bucket in changes.values() for k in bucket
+    )
+
+
+def print_config_diff(path: Path, changes: dict) -> None:
+    print(_h(f"\n=== Proposed config changes ({path}) ==="))
+    if not _config_changed(changes):
+        print(_dim("  (no changes — config already in sync)"))
+        return
+    labels = {
+        "believed_free": "believed_free",
+        "free_limits": "free_limits",
+        "model_reasoning": "model_reasoning",
+    }
+    for section in ("believed_free", "free_limits", "model_reasoning"):
+        bucket = changes[section]
+        if not any(bucket.values()):
+            continue
+        print(f"\n  {_h(labels[section])}:")
+        for mid in bucket.get("add", []):
+            print(_ok(f"    + {mid}"))
+        for mid in bucket.get("set", []):
+            print(_dim(f"    ~ {mid}"))
+        for mid in bucket.get("remove", []):
+            print(_err(f"    - {mid}"))
+
+
+def _sync_user_config(sidecar: dict, config_path: str, *, dry_run: bool) -> int:
+    """Reconcile the user config at *config_path* from *sidecar*. Returns an
+    exit code (0 ok, non-zero on a read error)."""
+    path = Path(config_path).expanduser()
+    try:
+        user_cfg = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        print(_err(f"\n--config: file not found: {path}"))
+        return 2
+    except (OSError, json.JSONDecodeError) as exc:
+        print(_err(f"\n--config: could not read {path}: {exc}"))
+        return 2
+    if not isinstance(user_cfg, dict):
+        print(_err(f"\n--config: {path} is not a JSON object"))
+        return 2
+
+    changes = reconcile_user_config(sidecar, user_cfg)
+    print_config_diff(path, changes)
+
+    if not _config_changed(changes):
+        return 0
+    if dry_run:
+        print(_dim("\n(dry run — config not written)"))
+        return 0
+    path.write_text(json.dumps(user_cfg, indent=2), encoding="utf-8")
+    print(_ok(f"Synced free-tier sections into {path}"))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -367,11 +526,17 @@ def main(argv: list[str] | None = None) -> int:
                     help="Comma-separated source names (default: all).")
     ap.add_argument("--regen-config-only", action="store_true",
                     help="Skip scraping; regenerate config.example.json from the current sidecar.")
+    ap.add_argument("--config", metavar="PATH",
+                    help="Also sync a user config.json's believed_free / free_limits "
+                         "(add new + remove no-longer-free) and model_reasoning (add-only) "
+                         "from the updated sidecar. Limited to providers configured in that file.")
     args = ap.parse_args(argv)
 
     if args.regen_config_only:
         write_config_example()
         print(_ok(f"Regenerated {CONFIG_EXAMPLE_PATH}"))
+        if args.config:
+            return _sync_user_config(load_data(), args.config, dry_run=args.dry_run)
         return 0
 
     requested = [s.strip() for s in args.source.split(",") if s.strip()]
@@ -413,18 +578,28 @@ def main(argv: list[str] | None = None) -> int:
     print_diff(updates, source_status)
 
     if args.dry_run:
+        # Reflect the would-be sidecar state in the user-config diff without
+        # writing anything to the sidecar.
+        if args.config:
+            target = copy.deepcopy(sidecar)
+            apply_updates(target, updates)
+            _sync_user_config(target, args.config, dry_run=True)
         print(_dim("\n(dry run — no files written)"))
         return 0
 
     changed = apply_updates(sidecar, updates)
-    if not changed:
+    if changed:
+        DATA_PATH.write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
+        print(_ok(f"\nUpdated {DATA_PATH}"))
+        write_config_example()
+        print(_ok(f"Regenerated {CONFIG_EXAMPLE_PATH}"))
+    else:
         print(_dim("\nNo changes to apply."))
-        return 0
 
-    DATA_PATH.write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
-    print(_ok(f"\nUpdated {DATA_PATH}"))
-    write_config_example()
-    print(_ok(f"Regenerated {CONFIG_EXAMPLE_PATH}"))
+    # Sync the user config even when the sidecar was unchanged — a stale config
+    # should still be reconciled against the current sidecar.
+    if args.config:
+        return _sync_user_config(sidecar, args.config, dry_run=False)
     return 0
 
 
