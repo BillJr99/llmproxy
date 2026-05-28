@@ -67,10 +67,10 @@ jobs:
       - name: Regenerate config.example.json from sidecar
         run: python scripts/update_free_models.py --regen-config-only
 
-      - name: Fail if config.example.json drifts from llmproxy/free_models.json
+      - name: Fail if config.example.json drifts from llmproxy/providers.json
         run: |
           if ! git diff --exit-code config.example.json; then
-            echo "::error::config.example.json is out of sync with llmproxy/free_models.json."
+            echo "::error::config.example.json is out of sync with llmproxy/providers.json."
             echo "Run: python scripts/update_free_models.py --regen-config-only"
             exit 1
           fi

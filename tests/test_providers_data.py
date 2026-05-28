@@ -1,4 +1,4 @@
-"""Structural invariants for llmproxy/free_models.json.
+"""Structural invariants for llmproxy/providers.json.
 
 These guard against bad scraper writes — any time a check fails, either the
 scraper wrote nonsense or a hand-edit drifted from the schema. The intent
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from llmproxy.free_models import FREE_LIMIT_KEYS, VALID_REASONING_LEVELS, load_data
+from llmproxy.providers import FREE_LIMIT_KEYS, VALID_REASONING_LEVELS, load_data
 
 SIDE = load_data()
 

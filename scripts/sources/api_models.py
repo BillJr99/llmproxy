@@ -16,7 +16,7 @@ import os
 
 import requests
 
-from llmproxy.free_models import load_data  # type: ignore
+from llmproxy.providers import load_data  # type: ignore
 
 from .base import Evidence, Source
 
