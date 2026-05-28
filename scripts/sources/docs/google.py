@@ -13,7 +13,7 @@ Strategy:
   1. Confirm the "Free" usage tier is present in the usage-tiers table.
      If not found, emit nothing (conservative — a missing tier row means
      the page structure changed too much to trust our output).
-  2. Collect every gemini-* model ID string from the page text.
+  2. Collect every gemini-* and gemma-* model ID string from the page text.
   3. Emit them all as is_free=True with no rate-limit figures (since the
      page no longer publishes per-model free limits).
 
@@ -31,9 +31,12 @@ from .base import DocsScraperBase, _bs, _evidence
 
 URL = "https://ai.google.dev/gemini-api/docs/rate-limits"
 
-# Gemini model IDs in the page source, e.g. gemini-2.5-flash-lite.
-# Exclude image/asset filenames and non-model strings.
-_MODEL_RE = re.compile(r"\bgemini-[\d]+[\.\d]*-[\w.-]+", re.IGNORECASE)
+# Model IDs in the page source. Covers both the Gemini line
+# (e.g. gemini-2.5-flash-lite, gemini-3-flash-preview) and the open Gemma
+# line (e.g. gemma-3-27b-it), both of which are served free via the
+# OpenAI-compatible Gemini endpoint. Exclude image/asset filenames and
+# non-model strings via _NOISE_SUFFIXES below.
+_MODEL_RE = re.compile(r"\b(?:gemini|gemma)-[\d]+[\.\d]*-[\w.-]+", re.IGNORECASE)
 
 # Suffixes that indicate non-model strings (UI components, images, etc.)
 _NOISE_SUFFIXES = {".png", ".svg", ".jpg", "-hovercard", "-button", "-logo",

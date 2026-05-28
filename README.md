@@ -609,9 +609,10 @@ docker pull ghcr.io/billjr99/llmproxy:latest
 
 ### First-time setup
 
-Config is bind-mounted from `~/.config/llmproxy` on the host.  The container
-runs as your current user so all files created inside the container are owned
-by you on the host.
+Config is bind-mounted from `~/.config/llmproxy` on the host.  The image runs
+as a non-root user by default (no `--user` required); passing
+`--user $(id -u):$(id -g)` makes files created inside the container owned by
+you on the host.
 
 ```bash
 mkdir -p ~/.config/llmproxy
@@ -689,18 +690,20 @@ Docker Desktop.
 ### Named-volume alternative
 
 If you prefer to keep the config entirely inside Docker (useful for CI or
-rootless environments where a host-path mount is inconvenient):
+rootless environments where a host-path mount is inconvenient), mount the
+named volume over the default config location under the non-root user's home
+(`/home/llmproxy/.config/llmproxy`):
 
 ```bash
 # Setup
 docker run -it --rm \
-  -v llmproxy_config:/root/.config/llmproxy \
+  -v llmproxy_config:/home/llmproxy/.config/llmproxy \
   llmproxy --setup
 
 # Server
 docker run -d \
   -p 8080:8080 \
-  -v llmproxy_config:/root/.config/llmproxy \
+  -v llmproxy_config:/home/llmproxy/.config/llmproxy \
   --name llmproxy \
   llmproxy
 ```
@@ -805,6 +808,7 @@ All endpoints mirror the OpenAI API.
 | Method | Path                    | Description                               |
 |--------|-------------------------|-------------------------------------------|
 | GET    | `/health`               | Health check; returns provider list       |
+| GET    | `/version`              | Returns the running llmproxy version      |
 | GET    | `/v1/models`            | Aggregate model list from all providers   |
 | GET    | `/v1/models/<model_id>` | Single model lookup                       |
 | POST   | `/v1/chat/completions`  | Chat completions (streaming supported)    |
