@@ -27,6 +27,7 @@ Options
 import argparse
 import logging
 import os
+import tempfile
 
 from . import __version__
 from .config import get_config_path, load_config
@@ -89,6 +90,24 @@ def _build_parser() -> argparse.ArgumentParser:
         version=f"llmproxy {__version__}",
     )
     return parser
+
+
+def _gunicorn_worker_tmp_dir() -> str | None:
+    """Pick a writable directory for gunicorn's per-worker heartbeat files.
+
+    Gunicorn touches a small temp file per worker (default: the system temp
+    dir). In containers run read-only or with an arbitrary ``--user``, Python's
+    tempfile resolution can fall through to the current working directory
+    (``/app`` in our image), which a non-root user cannot write — gunicorn then
+    crashes at startup with a PermissionError. Prefer ``/dev/shm`` (memory-
+    backed; gunicorn's documented Docker recommendation), then the system temp
+    dir. Return None to accept gunicorn's default only when nothing else is
+    writable.
+    """
+    for candidate in ("/dev/shm", tempfile.gettempdir()):
+        if candidate and os.path.isdir(candidate) and os.access(candidate, os.W_OK):
+            return candidate
+    return None
 
 
 def main() -> None:
@@ -180,6 +199,7 @@ def main() -> None:
             "timeout": max(server_cfg.get("stream_timeout", 300), 120),
             "loglevel": log_level.lower(),
             "accesslog": "-",
+            "worker_tmp_dir": _gunicorn_worker_tmp_dir(),
         }
         logging.getLogger("llmproxy").info(
             "Starting with gunicorn — %s:%d (%d workers x 4 threads)",

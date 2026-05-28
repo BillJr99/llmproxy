@@ -45,6 +45,16 @@ def test_health_endpoint(client):
     pytest.skip("No health endpoint registered on this server build")
 
 
+def test_version_endpoint(client):
+    """/version should return 200 with the package version."""
+    resp = client.get("/version")
+    assert resp.status_code == 200, f"expected 200, got {resp.status_code}"
+    body = resp.get_json()
+    assert body is not None, "expected JSON body"
+    assert body.get("name") == "llmproxy"
+    assert body.get("version"), "expected a non-empty version string"
+
+
 def test_models_endpoint_registered(client):
     """/v1/models route should exist and respond non-5xx, regardless of
     whether the upstream provider is reachable."""

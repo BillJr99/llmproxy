@@ -43,6 +43,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from flask import Flask, Response, g, jsonify, make_response, request, stream_with_context
 
+from . import __version__
 from .config import (
     RESERVED_PROVIDER_NAMES,
     get_provider,
@@ -294,6 +295,21 @@ def health() -> Response:
     config = load_config()
     providers = list(config.get("providers", {}).keys())
     return jsonify({"status": "ok", "providers": providers})
+
+
+# ---------------------------------------------------------------------------
+# /version
+# ---------------------------------------------------------------------------
+
+@app.route("/version", methods=["GET"])
+def version() -> Response:
+    """Report the running llmproxy version.
+
+    Clients and uptime probes commonly poll /version. Without this explicit
+    route Flask returns 404, since the /v1/<path> pass-through only covers
+    /v1/* paths.
+    """
+    return jsonify({"name": "llmproxy", "version": __version__})
 
 
 # ---------------------------------------------------------------------------
