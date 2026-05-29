@@ -198,9 +198,9 @@
     },
     "github": {
       "display": "GitHub Models",
-      "base_url": "https://models.inference.ai.azure.com",
+      "base_url": "https://models.github.ai/inference",
       "key_required": true,
-      "key_hint": "Get your token at github.com/settings/tokens",
+      "key_hint": "Get a token at github.com/settings/tokens with the 'Models' permission (fine-grained: Models→read)",
       "believed_free": [
         "github/openai/gpt-4o",
         "github/openai/gpt-4o-mini",

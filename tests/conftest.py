@@ -21,8 +21,8 @@ def fixtures_dir() -> Path:
 
 @pytest.fixture
 def sidecar_data() -> dict:
-    """Live contents of llmproxy/free_models.json."""
-    from llmproxy.free_models import load_data
+    """Live contents of llmproxy/providers.json."""
+    from llmproxy.providers import load_data
     return load_data()
 
 

@@ -18,18 +18,18 @@ from .config import (
     load_config,
     save_config,
 )
-from .free_models import (
+from .providers import (
     get_provider_free_info,
     get_provider_templates,
 )
-from .free_models import (
+from .providers import (
     infer_reasoning_level as _infer_reasoning_level,
 )
 
 # ---------------------------------------------------------------------------
 # Provider templates and free-tier metadata
 # ---------------------------------------------------------------------------
-# Both data structures are loaded from llmproxy/free_models.json (the single
+# Both data structures are loaded from llmproxy/providers.json (the single
 # source of truth). To add, remove, or update a provider — edit that JSON
 # file. The scraper at scripts/update_free_models.py keeps the believed_free
 # / model_reasoning / free_limits sections current by polling provider docs,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from llmproxy.free_models import load_data
+from llmproxy.providers import load_data
 
 
 def test_provider_templates_loaded():

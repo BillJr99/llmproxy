@@ -27,7 +27,7 @@
       "model_filter": null
     },
     "github": {
-      "base_url": "https://models.inference.ai.azure.com",
+      "base_url": "https://models.github.ai/inference",
       "api_key": "ghp_...",
       "model_filter": null
     },

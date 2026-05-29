@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from llmproxy.free_models import load_data
+from llmproxy.providers import load_data
 from scripts.update_free_models import (
     CONFIG_EXAMPLE_PATH,
     regenerate_config_example,
