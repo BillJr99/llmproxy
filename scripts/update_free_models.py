@@ -137,6 +137,7 @@ def aggregate(
         adds: list[str] = []
         removes: list[str] = []
         limits: dict[str, dict] = {}
+        capabilities: dict[str, list[str]] = {}
 
         # Adds — high-confidence positive, no high-confidence negative.
         candidates = set(by_model[provider_key].keys())
@@ -150,6 +151,12 @@ def aggregate(
             for e in sorted(evs, key=lambda x: 0 if x.confidence == "high" else 1):
                 if e.limits:
                     limits[model_id] = _normalize_limits(e.limits)
+                    break
+            # Merge capabilities — prefer the highest-confidence record that has
+            # an opinion (capabilities is not None).
+            for e in sorted(evs, key=lambda x: 0 if x.confidence == "high" else 1):
+                if e.capabilities is not None:
+                    capabilities[model_id] = list(e.capabilities)
                     break
 
         # Removes — high-confidence negative OR absent from a successful
@@ -169,6 +176,7 @@ def aggregate(
             "add": sorted(set(adds)),
             "remove": sorted(set(removes)),
             "limits": limits,
+            "capabilities": capabilities,
         }
     return out
 
@@ -228,6 +236,28 @@ def apply_updates(sidecar: dict, updates: dict) -> bool:
         for mid in change["remove"]:
             if mid in fl:
                 del fl[mid]
+                changed = True
+
+        # Capabilities — only stored for free models (parallel to free_limits).
+        # Avoid creating the key unless we actually store something, so a
+        # no-op update never mutates the sidecar.
+        mc: dict | None = prov.get("model_capabilities")
+        for mid, caps in change.get("capabilities", {}).items():
+            if mid not in bf:
+                continue
+            if caps:
+                if mc is None:
+                    mc = prov.setdefault("model_capabilities", {})
+                if mc.get(mid) != caps:
+                    mc[mid] = caps
+                    changed = True
+            elif mc is not None and mid in mc:
+                del mc[mid]
+                changed = True
+        # Drop capabilities for models we just removed from the free set.
+        for mid in change["remove"]:
+            if mc is not None and mid in mc:
+                del mc[mid]
                 changed = True
     return changed
 
@@ -300,11 +330,13 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
 
     believed_free: list[str] = []
     model_reasoning: dict[str, str] = {}
+    model_capabilities: dict[str, list[str]] = {}
     free_limits: dict[str, dict] = {}
     for key in order:
         prov = sidecar["providers"][key]
         believed_free.extend(prov.get("believed_free", []))
         model_reasoning.update(prov.get("model_reasoning", {}))
+        model_capabilities.update(prov.get("model_capabilities", {}))
         free_limits.update(prov.get("free_limits", {}))
 
     note = top_note or (
@@ -329,6 +361,7 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         "providers": providers_block,
         "believed_free": believed_free,
         "model_reasoning": model_reasoning,
+        "model_capabilities": model_capabilities,
         "free_limits": free_limits_with_note,
         "server": server_block or {
             "host": "0.0.0.0",
@@ -363,8 +396,9 @@ def reconcile_user_config(sidecar: dict, user_cfg: dict) -> dict:
 
       * ``believed_free`` and ``free_limits`` are reconciled — newly-free models
         are added and models that are no longer free are removed.
-      * ``model_reasoning`` is add-only; existing tags are never pruned (a model
-        can carry a reasoning level without being free).
+      * ``model_reasoning`` and ``model_capabilities`` are add-only; existing
+        tags are never pruned (a model can carry a reasoning level or capability
+        tags without being free, and users may hand-tag their own models).
 
     Entries for any other provider (custom providers, or sidecar providers the
     user has not configured) are left untouched, as are non-model keys in
@@ -373,7 +407,8 @@ def reconcile_user_config(sidecar: dict, user_cfg: dict) -> dict:
     Returns a changes summary:
       {"believed_free": {"add": [...], "remove": [...]},
        "free_limits":   {"set": [...], "remove": [...]},
-       "model_reasoning": {"add": [...]}}
+       "model_reasoning": {"add": [...]},
+       "model_capabilities": {"add": [...]}}
     """
     providers: dict = sidecar.get("providers", {})
     configured = set(user_cfg.get("providers", {})) & set(providers)
@@ -382,16 +417,19 @@ def reconcile_user_config(sidecar: dict, user_cfg: dict) -> dict:
     sc_believed: set[str] = set()
     sc_limits: dict[str, dict] = {}
     sc_reasoning: dict[str, str] = {}
+    sc_capabilities: dict[str, list[str]] = {}
     for pkey in configured:
         prov = providers[pkey]
         sc_believed.update(prov.get("believed_free", []))
         sc_limits.update(prov.get("free_limits", {}))
         sc_reasoning.update(prov.get("model_reasoning", {}))
+        sc_capabilities.update(prov.get("model_capabilities", {}))
 
     changes = {
         "believed_free": {"add": [], "remove": []},
         "free_limits": {"set": [], "remove": []},
         "model_reasoning": {"add": []},
+        "model_capabilities": {"add": []},
     }
 
     # ── believed_free ──────────────────────────────────────────────────────
@@ -441,6 +479,16 @@ def reconcile_user_config(sidecar: dict, user_cfg: dict) -> dict:
             existing_mr[mid] = level
             changes["model_reasoning"]["add"].append(mid)
     user_cfg["model_reasoning"] = existing_mr
+
+    # ── model_capabilities (add-only) ──────────────────────────────────────
+    existing_mc = user_cfg.get("model_capabilities")
+    if not isinstance(existing_mc, dict):
+        existing_mc = {}
+    for mid, caps in sc_capabilities.items():
+        if mid not in existing_mc:
+            existing_mc[mid] = list(caps)
+            changes["model_capabilities"]["add"].append(mid)
+    user_cfg["model_capabilities"] = existing_mc
 
     return changes
 

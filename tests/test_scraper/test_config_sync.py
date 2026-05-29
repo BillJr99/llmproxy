@@ -135,3 +135,41 @@ def test_sync_writes_when_not_dry_run(tmp_path):
 def test_missing_file_returns_error(tmp_path):
     rc = _sync_user_config(_sidecar(), str(tmp_path / "nope.json"), dry_run=False)
     assert rc == 2
+
+
+def test_model_capabilities_is_add_only():
+    sidecar = {
+        "providers": {
+            "google": {
+                "base_url": "u", "display": "G",
+                "believed_free": ["google/added"],
+                "model_capabilities": {
+                    "google/added": ["tools", "vision"],
+                    "google/keep": ["tools"],
+                },
+            },
+            "groq": {  # not configured by user -> ignored
+                "base_url": "u", "display": "Q",
+                "believed_free": [],
+                "model_capabilities": {"groq/skip": ["tools"]},
+            },
+        },
+        "provider_order": ["google", "groq"],
+    }
+    cfg = {
+        "providers": {
+            "google": {"base_url": "u", "api_key": "k"},
+            "custom": {"base_url": "u", "api_key": "k"},
+        },
+        "model_capabilities": {
+            "google/keep": ["reasoning"],   # user-set -> must NOT be overwritten
+            "custom/mine": ["tools"],       # unconfigured provider -> untouched
+        },
+    }
+    changes = reconcile_user_config(sidecar, cfg)
+    mc = cfg["model_capabilities"]
+    assert mc["google/added"] == ["tools", "vision"]   # newly added
+    assert mc["google/keep"] == ["reasoning"]          # add-only: NOT overwritten
+    assert mc["custom/mine"] == ["tools"]              # untouched
+    assert "groq/skip" not in mc                       # unconfigured provider ignored
+    assert changes["model_capabilities"]["add"] == ["google/added"]

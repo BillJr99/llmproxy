@@ -62,3 +62,27 @@ def test_limits_only_apply_to_free_models():
     changed = apply_updates(s, updates)
     assert changed is False
     assert "p/not-free" not in s["providers"]["p"]["free_limits"]
+
+
+def test_capabilities_only_stored_for_free_models():
+    s = _sidecar()
+    updates = {"p": {
+        "add": ["p/new"],
+        "remove": [],
+        "limits": {},
+        "capabilities": {"p/new": ["tools"], "p/not-free": ["vision"]},
+    }}
+    changed = apply_updates(s, updates)
+    assert changed is True
+    mc = s["providers"]["p"]["model_capabilities"]
+    assert mc["p/new"] == ["tools"]        # newly free model gets capabilities
+    assert "p/not-free" not in mc           # not free -> ignored
+
+
+def test_capabilities_dropped_when_model_removed():
+    s = _sidecar()
+    s["providers"]["p"]["model_capabilities"] = {"p/old": ["tools"]}
+    updates = {"p": {"add": [], "remove": ["p/old"], "limits": {}, "capabilities": {}}}
+    changed = apply_updates(s, updates)
+    assert changed is True
+    assert "p/old" not in s["providers"]["p"]["model_capabilities"]

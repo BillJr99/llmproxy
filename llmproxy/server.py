@@ -61,6 +61,9 @@ app = Flask(__name__)
 logger = logging.getLogger("llmproxy.server")
 
 _REASONING_LEVELS: tuple[str, ...] = ("exploratory", "standard", "deep")
+# Capabilities that get their own capability-selecting virtual endpoints
+# (llmproxy__tools, llmproxy__vision, and their /free variants).
+_CAPABILITY_VIRTUALS: tuple[str, ...] = ("tools", "vision")
 # Per-candidate timeout for virtual-model cycling so a slow upstream doesn't block all failover.
 _VIRTUAL_CANDIDATE_TIMEOUT: int = 60
 # Virtual models use the "llmproxy__" prefix (same double-underscore as the
@@ -72,12 +75,16 @@ _NEW_VIRTUAL_MODELS: frozenset[str] = frozenset({
     *(f"llmproxy__{lvl}" for lvl in _REASONING_LEVELS),
     *(f"llmproxy__{lvl}/free" for lvl in _REASONING_LEVELS),
     *(f"llmproxy__{lvl}/local" for lvl in _REASONING_LEVELS),
+    *(f"llmproxy__{cap}" for cap in _CAPABILITY_VIRTUALS),
+    *(f"llmproxy__{cap}/free" for cap in _CAPABILITY_VIRTUALS),
 })
 _LEGACY_VIRTUAL_MODELS: frozenset[str] = frozenset({
     "llmproxy/free", "llmproxy/local",
     *(f"llmproxy/{lvl}" for lvl in _REASONING_LEVELS),
     *(f"llmproxy/{lvl}/free" for lvl in _REASONING_LEVELS),
     *(f"llmproxy/{lvl}/local" for lvl in _REASONING_LEVELS),
+    *(f"llmproxy/{cap}" for cap in _CAPABILITY_VIRTUALS),
+    *(f"llmproxy/{cap}/free" for cap in _CAPABILITY_VIRTUALS),
 })
 _VIRTUAL_MODELS: frozenset[str] = _NEW_VIRTUAL_MODELS | _LEGACY_VIRTUAL_MODELS
 # Virtual models that use capacity-aware free-tier load balancing.
@@ -85,6 +92,8 @@ _FREE_VIRTUAL_MODELS: frozenset[str] = frozenset({
     "llmproxy__free", "llmproxy/free",
     *(f"llmproxy__{lvl}/free" for lvl in _REASONING_LEVELS),
     *(f"llmproxy/{lvl}/free" for lvl in _REASONING_LEVELS),
+    *(f"llmproxy__{cap}/free" for cap in _CAPABILITY_VIRTUALS),
+    *(f"llmproxy/{cap}/free" for cap in _CAPABILITY_VIRTUALS),
 })
 
 # Maps proxy display ID -> (provider_name, upstream_id).
@@ -721,6 +730,24 @@ def list_models() -> Response:
                 "_note": f"Virtual model: cycles through local models tagged '{level}' reasoning.",
             })
 
+    for cap in _CAPABILITY_VIRTUALS:
+        if _get_capability_model_candidates(cap):
+            synthetic.append({
+                "id": f"llmproxy__{cap}",
+                "object": "model",
+                "owned_by": "llmproxy",
+                "name": f"llmproxy__{cap}",
+                "_note": f"Virtual model: cycles through all models tagged '{cap}' in config['model_capabilities'], failing over until one succeeds.",
+            })
+        if _get_capability_free_candidates(cap):
+            synthetic.append({
+                "id": f"llmproxy__{cap}/free",
+                "object": "model",
+                "owned_by": "llmproxy",
+                "name": f"llmproxy__{cap}/free",
+                "_note": f"Virtual model: cycles through free-tier models tagged '{cap}' in config['model_capabilities'].",
+            })
+
     # Annotate real models with (believed_free) and/or (local) suffixes in name.
     for model in all_models:
         route = snapshot.get(model["id"])
@@ -944,6 +971,203 @@ def _proxy_streaming(
 
 
 # ---------------------------------------------------------------------------
+# Capability detection — what a request needs and whether a response delivered
+# ---------------------------------------------------------------------------
+# llmproxy can route around models that don't support a requested capability.
+# Each capability has up to three pure detectors:
+#   request-detector  : does this request need the capability?
+#   strict-detector   : was the capability *mandatory* (so a 200 that ignores it
+#                       is a genuine failure worth failing over)?  May be None.
+#   response-validator: did a non-streaming 200 actually deliver it?  May be None.
+# Capabilities without a response-validator rely on the upstream returning an
+# HTTP error (which already triggers virtual-model failover) — there is no
+# reliable 200-body signal that e.g. a non-vision model silently ignored an image.
+
+
+def _request_has_tools(payload: dict) -> bool:
+    """True when the request carries a non-empty ``tools`` array."""
+    tools = payload.get("tools")
+    return isinstance(tools, list) and len(tools) > 0
+
+
+def _tool_use_forced(payload: dict) -> bool:
+    """True when the request both provides tools and *forces* a tool call.
+
+    Per the OpenAI spec a tool call is mandatory when ``tool_choice`` is the
+    string ``"required"`` or an object selecting a specific function.  Under
+    ``"auto"``/``"none"``/absent the model may legitimately answer without a
+    tool call, so those are never treated as forced.
+    """
+    if not _request_has_tools(payload):
+        return False
+    tc = payload.get("tool_choice")
+    if tc == "required":
+        return True
+    return isinstance(tc, dict) and tc.get("type") == "function"
+
+
+def _response_has_tool_call(body_bytes: bytes) -> bool:
+    """Whether a non-streaming chat completion body contains a tool/function call.
+
+    Safe default is ``True`` (i.e. "can't confirm a failure"): malformed JSON or
+    an unexpected shape must never trigger a spurious failover that discards a
+    possibly-valid 200.  Returns ``False`` only when the body is well-formed and
+    definitively has no tool call.
+    """
+    try:
+        data = json.loads(body_bytes)
+    except Exception:
+        return True
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not isinstance(choices, list):
+        return True
+    for ch in choices:
+        if not isinstance(ch, dict):
+            continue
+        msg = ch.get("message") or ch.get("delta") or {}
+        if isinstance(msg, dict) and (msg.get("tool_calls") or msg.get("function_call")):
+            return True
+    return False
+
+
+def _request_has_image(payload: dict) -> bool:
+    """True when any message includes an image content part (vision request)."""
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return False
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and (
+                part.get("type") == "image_url" or "image_url" in part
+            ):
+                return True
+    return False
+
+
+def _request_wants_reasoning(payload: dict) -> bool:
+    """True when the request asks for reasoning (``reasoning_effort``/``reasoning``)."""
+    return payload.get("reasoning_effort") is not None or payload.get("reasoning") is not None
+
+
+def _request_wants_json(payload: dict) -> bool:
+    """True when the request forces a JSON response via ``response_format``."""
+    rf = payload.get("response_format")
+    return isinstance(rf, dict) and rf.get("type") in ("json_object", "json_schema")
+
+
+def _response_is_json(body_bytes: bytes) -> bool:
+    """Whether the assistant message content of a 200 parses as JSON.
+
+    Safe default ``True`` on any uncertainty (malformed/odd shape) so we never
+    fail over a response we can't actually prove is non-JSON.
+    """
+    try:
+        data = json.loads(body_bytes)
+    except Exception:
+        return True
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not isinstance(choices, list) or not choices:
+        return True
+    first = choices[0]
+    if not isinstance(first, dict):
+        return True
+    content = (first.get("message") or {}).get("content")
+    if not isinstance(content, str):
+        return True
+    try:
+        json.loads(content)
+        return True
+    except Exception:
+        return False
+
+
+# capability -> (request_detector, strict_detector | None, response_validator | None)
+_CAPABILITIES: dict[str, tuple] = {
+    "tools": (_request_has_tools, _tool_use_forced, _response_has_tool_call),
+    "vision": (_request_has_image, None, None),
+    "reasoning": (_request_wants_reasoning, None, None),
+    "json": (_request_wants_json, _request_wants_json, _response_is_json),
+}
+
+
+def _model_capabilities(config: dict) -> dict[str, set[str]]:
+    """Return config['model_capabilities'] as a lowercased map key -> set of caps.
+
+    Defensive against user-edited config: missing/None/non-dict → {}, and any
+    malformed entry is logged once and skipped rather than raising.
+    """
+    raw = config.get("model_capabilities")
+    if not isinstance(raw, dict):
+        if raw is not None:
+            logger.warning(
+                "config['model_capabilities'] must be a dict; got %s — ignoring.",
+                type(raw).__name__,
+            )
+        return {}
+    result: dict[str, set[str]] = {}
+    for key, val in raw.items():
+        if not isinstance(key, str) or not isinstance(val, list):
+            logger.warning(
+                "config['model_capabilities']: invalid entry %r: %r — skipping.", key, val
+            )
+            continue
+        caps = {c.lower() for c in val if isinstance(c, str) and c.lower() in _CAPABILITIES}
+        result[key.lower()] = caps
+    return result
+
+
+def _model_has_capability(provider_name: str, upstream_id: str, cap: str, cap_map: dict[str, set[str]]) -> bool:
+    """Two-form lookup (bare id or provider/id) for a single capability."""
+    caps = cap_map.get(upstream_id.lower()) or cap_map.get(f"{provider_name}/{upstream_id}".lower())
+    return bool(caps and cap in caps)
+
+
+def _needed_capabilities(payload: dict) -> set[str]:
+    """The set of capabilities this request needs, per the request-detectors."""
+    return {cap for cap, (detect, _s, _v) in _CAPABILITIES.items() if detect(payload)}
+
+
+def _order_by_capability(
+    candidates: list[tuple[str, dict, str]],
+    needed: set[str],
+    cap_map: dict[str, set[str]],
+) -> list[tuple[str, dict, str]]:
+    """Stable-sort candidates so those satisfying the most needed caps come first.
+
+    Never drops candidates — incomplete capability metadata must not turn a
+    request into a hard 503.  A no-op when *needed* is empty.
+    """
+    if not needed:
+        return candidates
+
+    def satisfied(c: tuple[str, dict, str]) -> int:
+        pn, _cfg, uid = c
+        return sum(1 for cap in needed if _model_has_capability(pn, uid, cap, cap_map))
+
+    return sorted(candidates, key=satisfied, reverse=True)
+
+
+def _capability_failed(payload: dict, body_bytes: bytes) -> bool:
+    """True when a non-streaming 200 failed to deliver a *forced* capability.
+
+    Only capabilities whose strict-detector fires and that have a response
+    validator can trigger this (today: tools, json).  Capabilities without a
+    validator (vision, reasoning) rely on HTTP-error failover instead.
+    """
+    for _cap, (_detect, strict, validate) in _CAPABILITIES.items():
+        if strict is None or validate is None:
+            continue
+        if strict(payload) and not validate(body_bytes):
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Virtual models — shared cycling logic + per-model candidate selectors
 # ---------------------------------------------------------------------------
 
@@ -955,7 +1179,14 @@ def _proxy_cycling_non_streaming(
     timeout: int,
     on_success: Callable[[str, str], None] | None = None,
 ) -> Response:
-    """Try each candidate in order, returning the first success."""
+    """Try each candidate in order, returning the first success.
+
+    A 200 that fails to deliver a *forced* capability (e.g. ``tool_choice``
+    forced a tool call but the body has none) is treated as a failure and the
+    next candidate is tried, mirroring HTTP-error failover.  When every
+    candidate is exhausted the last response is returned so the client still
+    receives the real upstream body rather than a synthesized error.
+    """
     candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
     last: Response | None = None
     for provider_name, provider_cfg, upstream_model in candidates:
@@ -963,6 +1194,13 @@ def _proxy_cycling_non_streaming(
         logger.info("  [%s] trying %s/%s", label, provider_name, upstream_model)
         resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, candidate_timeout)
         if resp.status_code < 400:
+            if _capability_failed(payload, resp.get_data()):
+                logger.warning(
+                    "  [%s] %s/%s returned 200 but did not honor a forced capability, trying next",
+                    label, provider_name, upstream_model,
+                )
+                last = resp
+                continue
             if on_success is not None:
                 on_success(provider_name, upstream_model)
             return resp
@@ -1010,6 +1248,11 @@ def _proxy_cycling_streaming(
                 )
                 continue
 
+            # Reactive capability detection (forced-tool/json 200-body checks) is
+            # intentionally NOT applied to streaming: inspecting delta.tool_calls
+            # would require buffering the SSE stream before committing the first
+            # chunk, defeating the zero-latency passthrough below.  Proactive
+            # capability ordering still steers streaming requests to capable models.
             if on_success is not None:
                 on_success(provider_name, upstream_model)
 
@@ -1320,6 +1563,27 @@ def _get_reasoning_local_candidates(level: str) -> list[tuple[str, dict, str]]:
     return [(pn, pc, um) for pn, pc, um in _get_local_model_candidates() if (pn, um) in reasoning_set]
 
 
+# — capability candidate selectors —
+
+def _get_capability_model_candidates(cap: str) -> list[tuple[str, dict, str]]:
+    """(provider, cfg, upstream) for every model tagged with capability *cap*."""
+    config = load_config()
+    cap_map = _model_capabilities(config)
+    candidates = []
+    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+        if _model_has_capability(provider_name, upstream_id, cap, cap_map):
+            provider_cfg = get_provider(config, provider_name)
+            if provider_cfg:
+                candidates.append((provider_name, provider_cfg, upstream_id))
+    return candidates
+
+
+def _get_capability_free_candidates(cap: str) -> list[tuple[str, dict, str]]:
+    """Candidates that both have capability *cap* AND qualify as free-tier."""
+    cap_set = {(pn, um) for pn, _, um in _get_capability_model_candidates(cap)}
+    return [(pn, pc, um) for pn, pc, um in _get_free_model_candidates() if (pn, um) in cap_set]
+
+
 def _strip_virtual_prefix(model_full: str) -> str:
     """Strip the leading "llmproxy__" or legacy "llmproxy/" virtual-model prefix."""
     if model_full.startswith("llmproxy__"):
@@ -1338,11 +1602,16 @@ def _get_virtual_candidates(model_full: str) -> list[tuple[str, dict, str]]:
         return _get_local_model_candidates()
     if name in _REASONING_LEVELS:
         return _get_reasoning_model_candidates(name)
+    if name in _CAPABILITY_VIRTUALS:
+        return _get_capability_model_candidates(name)
     for level in _REASONING_LEVELS:
         if name == f"{level}/free":
             return _get_reasoning_free_candidates(level)
         if name == f"{level}/local":
             return _get_reasoning_local_candidates(level)
+    for cap in _CAPABILITY_VIRTUALS:
+        if name == f"{cap}/free":
+            return _get_capability_free_candidates(cap)
     return []
 
 
@@ -1431,6 +1700,14 @@ def _virtual_model_hint(model_full: str) -> str:
                 f"Need a model tagged '{level}' in config['model_reasoning'] "
                 f"that is also served by a localhost provider."
             )
+    for cap in _CAPABILITY_VIRTUALS:
+        if name == cap:
+            return f"Tag at least one model with '{cap}' in config['model_capabilities']."
+        if name == f"{cap}/free":
+            return (
+                f"Need a model tagged '{cap}' in config['model_capabilities'] "
+                f"that is also free-tier."
+            )
     return ""
 
 
@@ -1488,6 +1765,12 @@ def _proxy_endpoint(endpoint: str) -> Response:
         else:
             ordered = _cycling_candidates(candidates)
             on_success = None
+        # Proactively prefer candidates that support the capabilities this
+        # request needs (tools/vision/reasoning/json).  Stable, never drops
+        # candidates, and a no-op when nothing is needed or no metadata exists.
+        needed = _needed_capabilities(payload)
+        if needed:
+            ordered = _order_by_capability(ordered, needed, _model_capabilities(config))
         logger.info("  [%s] cycling through %d candidate(s)", model_full, len(ordered))
         if is_streaming:
             timeout = server_cfg.get("stream_timeout", 300)

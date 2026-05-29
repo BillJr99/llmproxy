@@ -404,6 +404,7 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
 
 _PAGE_SIZE = 20
 _REASONING_LEVELS = ("exploratory", "standard", "deep")
+_CAPABILITIES = ("tools", "vision", "reasoning", "json")
 
 
 def _fetch_provider_models_direct(providers: dict) -> list[tuple[str, str]]:
@@ -579,13 +580,15 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
     while True:
         believed_free: list = config.setdefault("believed_free", [])
         reasoning: dict = config.setdefault("model_reasoning", {})
+        capabilities: dict = config.setdefault("model_capabilities", {})
 
         print()
         print(_divider())
         print(_h("  Model Tags"))
         print()
-        print(f"  {_dim('believed_free:')}     {len(believed_free)} entr{'y' if len(believed_free)==1 else 'ies'}")
-        print(f"  {_dim('model_reasoning:')} {len(reasoning)} entr{'y' if len(reasoning)==1 else 'ies'}")
+        print(f"  {_dim('believed_free:')}      {len(believed_free)} entr{'y' if len(believed_free)==1 else 'ies'}")
+        print(f"  {_dim('model_reasoning:')}    {len(reasoning)} entr{'y' if len(reasoning)==1 else 'ies'}")
+        print(f"  {_dim('model_capabilities:')} {len(capabilities)} entr{'y' if len(capabilities)==1 else 'ies'}")
         print()
 
         options = [
@@ -593,11 +596,13 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
             "Remove model from believed_free",
             "Tag model with reasoning level  (exploratory / standard / deep)",
             "Remove reasoning tag from model",
+            "Tag model with capabilities  (tools / vision / reasoning / json)",
+            "Remove capability tag from model",
             "View current tags",
             "Back to main menu",
         ]
         choice = _pick(options, label="Option")
-        if choice is None or choice == 5:
+        if choice is None or choice == 7:
             break
 
         # ── Add to believed_free ───────────────────────────────────
@@ -671,8 +676,54 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
             print(_ok(f"  Removed reasoning tag for '{key}'."))
             modified = True
 
-        # ── View current tags ──────────────────────────────────────
+        # ── Tag model with capabilities ─────────────────────────────
         elif choice == 4:
+            if not providers:
+                print(_warn("  No providers configured — add a provider first."))
+                continue
+            entry = _pick_model_scrollable(
+                providers,
+                prompt="Tag with capabilities — pick a model",
+            )
+            if not entry:
+                continue
+            existing_caps = capabilities.get(entry, [])
+            print()
+            print(f"  Toggle capabilities for {_ok(entry)} "
+                  f"(currently: {', '.join(existing_caps) or 'none'}):")
+            selected = []
+            for cap in _CAPABILITIES:
+                if _confirm(f"  Supports '{cap}'?", default=(cap in existing_caps)):
+                    selected.append(cap)
+            if selected:
+                capabilities[entry] = selected
+                config["model_capabilities"] = capabilities
+                print(_ok(f"  Tagged '{entry}' with: {', '.join(selected)}."))
+            elif entry in capabilities:
+                del capabilities[entry]
+                config["model_capabilities"] = capabilities
+                print(_ok(f"  Cleared capabilities for '{entry}'."))
+            modified = True
+
+        # ── Remove capability tag ───────────────────────────────────
+        elif choice == 5:
+            if not capabilities:
+                print(_warn("  model_capabilities is empty."))
+                continue
+            print()
+            print(_h("  Remove capability tag:"))
+            entries = [f"{k}  →  {', '.join(v)}" for k, v in capabilities.items()]
+            idx = _pick(entries)
+            if idx is None:
+                continue
+            key = list(capabilities.keys())[idx]
+            del capabilities[key]
+            config["model_capabilities"] = capabilities
+            print(_ok(f"  Removed capability tag for '{key}'."))
+            modified = True
+
+        # ── View current tags ──────────────────────────────────────
+        elif choice == 6:
             print()
             print(_h("  believed_free:"))
             if believed_free:
@@ -685,6 +736,13 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
             if reasoning:
                 for k, v in reasoning.items():
                     print(f"    {v:<14}  {k}")
+            else:
+                print(_dim("    (empty)"))
+            print()
+            print(_h("  model_capabilities:"))
+            if capabilities:
+                for k, v in capabilities.items():
+                    print(f"    {', '.join(v):<24}  {k}")
             else:
                 print(_dim("    (empty)"))
             print()
@@ -705,18 +763,25 @@ def _offer_free_tier_auto_populate(provider_key: str, config: dict) -> bool:
     if not info:
         return False
 
-    has_data = bool(info.get("believed_free") or info.get("model_reasoning"))
+    has_data = bool(
+        info.get("believed_free")
+        or info.get("model_reasoning")
+        or info.get("model_capabilities")
+    )
     if not has_data:
         return False
 
     n_free = len(info.get("believed_free", []))
     n_reasoning = len(info.get("model_reasoning", {}))
+    n_caps = len(info.get("model_capabilities", {}))
     n_limits = len(info.get("free_limits", {}))
     print()
     print(_dim(f"  Known free-tier data for {provider_key}: "
-               f"{n_free} believed_free, {n_reasoning} reasoning tag(s), {n_limits} limit(s)."))
+               f"{n_free} believed_free, {n_reasoning} reasoning tag(s), "
+               f"{n_caps} capability tag(s), {n_limits} limit(s)."))
     if not _confirm(
-        f"Auto-populate believed_free / model_reasoning / free_limits for {provider_key}?",
+        f"Auto-populate believed_free / model_reasoning / model_capabilities / "
+        f"free_limits for {provider_key}?",
         default=True,
     ):
         return False
@@ -735,6 +800,13 @@ def _offer_free_tier_auto_populate(provider_key: str, config: dict) -> bool:
     if to_add_mr:
         existing_mr.update(to_add_mr)
         print(_ok(f"  Added {len(to_add_mr)} entr{'y' if len(to_add_mr)==1 else 'ies'} to model_reasoning."))
+        modified = True
+
+    existing_mc: dict = config.setdefault("model_capabilities", {})
+    to_add_mc = {k: v for k, v in info.get("model_capabilities", {}).items() if k not in existing_mc}
+    if to_add_mc:
+        existing_mc.update(to_add_mc)
+        print(_ok(f"  Added {len(to_add_mc)} entr{'y' if len(to_add_mc)==1 else 'ies'} to model_capabilities."))
         modified = True
 
     existing_fl: dict = config.setdefault("free_limits", {})

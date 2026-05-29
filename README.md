@@ -22,7 +22,7 @@ llmproxy/
 │   ├── setup_wizard.py
 │   ├── providers.py         ← loader for the JSON sidecar
 │   └── providers.json       ← single source of truth for ALL provider templates
-│                                (+ believed_free / model_reasoning / free_limits)
+│                                (+ believed_free / model_reasoning / model_capabilities / free_limits)
 ├── scripts/
 │   └── update_free_models.py ← scraper that keeps providers.json's free-tier fields current
 │       └── sources/         ← per-source plugins (openrouter, community, /models, docs)
@@ -201,6 +201,63 @@ curl http://localhost:8080/v1/models/llmproxy__standard/free | jq '._candidates'
 Tags are configured via the `model_reasoning` field — see
 [Configuration → model_reasoning](#model_reasoning) below.
 
+### Capability-aware routing & failover
+
+Free models vary wildly in what they support: some handle tool/function calls,
+some accept images, some emit reasoning, some honor JSON-mode. llmproxy can tag
+each model with the capabilities it supports (via `model_capabilities`) and use
+that to route requests on **any** virtual model:
+
+- **Proactive ordering** — when a request needs a capability, candidates that
+  support it are tried **first**. This is a stable reordering: models with
+  unknown capability are kept as fallbacks, so incomplete metadata never turns a
+  request into a hard failure.
+- **Reactive failover** — when a capability was *mandatory* but the upstream
+  returned a 200 that didn't deliver it, llmproxy fails over to the next
+  candidate, exactly like it does on an HTTP error. Today this covers:
+  - **tools** — `tool_choice` forced a call (`"required"` or a specific
+    function) but the response contained no `tool_calls`.
+  - **json** — `response_format` requested JSON but the body wasn't valid JSON.
+
+  (Reactive 200-body detection runs on **non-streaming** requests only; streaming
+  responses still benefit from proactive ordering. Capabilities without a
+  reliable 200 signal — **vision**, **reasoning** — rely on the upstream
+  returning an HTTP error, which already triggers failover.)
+
+The `tool_choice: "auto"` case is never treated as a failure — a model may
+legitimately answer without calling a tool.
+
+Detected capabilities: `tools`, `vision`, `reasoning`, `json`.
+
+When at least one model is tagged, dedicated capability virtual endpoints appear:
+
+| Virtual model name        | Selects                                                  |
+|---------------------------|----------------------------------------------------------|
+| `llmproxy__tools`         | All models tagged `tools`                                 |
+| `llmproxy__tools/free`    | Models tagged `tools` **and** qualifying as free-tier     |
+| `llmproxy__vision`        | All models tagged `vision`                                |
+| `llmproxy__vision/free`   | Models tagged `vision` **and** qualifying as free-tier    |
+
+```bash
+# Route a tool-calling request only to tool-capable free models, failing
+# over automatically if one returns no tool call:
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "llmproxy__tools/free",
+       "tool_choice": "required",
+       "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+       "messages": [{"role": "user", "content": "Weather in Paris?"}]}'
+
+# llmproxy__free also benefits — it now orders/fails over by capability when
+# the request carries tools or images.
+```
+
+Tags are configured via the `model_capabilities` field, which **auto-populates**
+from the scraper (OpenRouter's `supported_parameters` / image modality) and the
+setup wizard's *Manage model tags → Tag model capabilities* menu — see
+[Configuration → model_capabilities](#model_capabilities) below. The legacy
+`llmproxy/...` input form (e.g. `llmproxy/tools/free`) is also accepted.
+
 ---
 
 ## Configuration
@@ -230,6 +287,10 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "anthropic/claude-opus-4": "deep",
     "openrouter/deepseek/deepseek-r1": "deep",
     "nvidia/meta/llama-3.1-70b-instruct": "standard"
+  },
+  "model_capabilities": {
+    "openrouter/qwen/qwen3-coder:free": ["tools", "reasoning"],
+    "google/gemini-2.5-flash": ["tools", "vision", "json"]
   },
   "server": {
     "host": "0.0.0.0",
@@ -277,6 +338,20 @@ model in the route cache, the corresponding virtual endpoint is advertised in
 `GET /v1/models`.  Omit the field entirely (or set it to `{}`) to disable
 reasoning-level routing.  The setup wizard manages this field via its
 "Manage model tags" menu (merged defaults come from `llmproxy/providers.json`).
+
+<a name="model_capabilities"></a>
+`model_capabilities` is an **optional** top-level object that tags individual
+models with the capabilities they support.  Valid values are `tools`, `vision`,
+`reasoning`, and `json` (a list per model).  Keys are matched
+(case-insensitively) against either the upstream model ID or the full
+`provider/upstream_model` proxy ID, like `model_reasoning`.  It drives
+[capability-aware routing & failover](#capability-aware-routing--failover) on
+all virtual models and powers the `llmproxy__tools` / `llmproxy__vision`
+endpoints (advertised when at least one model carries the tag).  Omit it (or set
+it to `{}`) to disable capability-aware behavior — the proxy then behaves exactly
+as before.  The field **auto-populates** from the scraper (OpenRouter's
+`supported_parameters` and image input modality) and from the setup wizard's
+"Manage model tags → Tag model capabilities" menu.
 
 See `config.example.json` for a complete annotated example.
 
@@ -387,19 +462,21 @@ python scripts/update_free_models.py --regen-config-only --config ~/.config/llmp
 
 ### Syncing your live config (`--config PATH`)
 
-The proxy reads `believed_free` / `model_reasoning` / `free_limits` at runtime
-from *your* `config.json`, not from the sidecar. Pass `--config PATH` to also
-reconcile a live config in the same run (honors `--dry-run`):
+The proxy reads `believed_free` / `model_reasoning` / `model_capabilities` /
+`free_limits` at runtime from *your* `config.json`, not from the sidecar. Pass
+`--config PATH` to also reconcile a live config in the same run (honors
+`--dry-run`):
 
 - **Scope is limited to providers configured in that file.** Entries for custom
   providers, or sidecar providers you haven't configured, are left untouched —
   as are non-model keys like the `_note` in `free_limits`.
 - **`believed_free` and `free_limits` are synced** — newly-free models are added
   and models that are no longer free are removed.
-- **`model_reasoning` is add-only.** Existing reasoning tags are never pruned, so
-  a model keeps its reasoning level even after it leaves the free tier.
+- **`model_reasoning` and `model_capabilities` are add-only.** Existing tags are
+  never pruned or overwritten, so a model keeps its reasoning level / capability
+  tags (including any you set by hand) even after it leaves the free tier.
 - Your `providers`, `server`, and any other config sections are preserved; only
-  the three free-tier sections change.
+  the free-tier sections change.
 
 ### Safety properties
 
