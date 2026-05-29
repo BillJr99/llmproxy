@@ -311,6 +311,7 @@
     "opencode-zen/minimax-m2.5-free": "standard",
     "opencode-zen/nemotron-3-super-free": "deep"
   },
+  "model_capabilities": {},
   "free_limits": {
     "_note": "Rate limits for capacity-aware load balancing on llmproxy/free and llmproxy/*/free endpoints. Tracked per-worker-process; resets on restart. Token limits (tpm/tpd) are stored for reference but not yet enforced. Check provider docs \u2014 limits change frequently.",
     "nvidia/meta/llama-3.1-70b-instruct": {

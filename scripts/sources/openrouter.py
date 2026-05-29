@@ -42,9 +42,34 @@ class OpenRouterSource(Source):
                 source=self.name,
                 confidence="high",
                 url=self.url,
+                capabilities=_capabilities(model),
                 notes=f"prompt={pricing.get('prompt')!r} completion={pricing.get('completion')!r}",
             ))
         return out
+
+
+def _capabilities(model: dict) -> list[str]:
+    """Map an OpenRouter model entry to llmproxy capability tags.
+
+    Derives from `supported_parameters` (tools / reasoning / structured-output)
+    and `architecture.input_modalities` (image -> vision).
+    """
+    supported = model.get("supported_parameters") or []
+    if not isinstance(supported, list):
+        supported = []
+    modalities = (model.get("architecture") or {}).get("input_modalities") or []
+    if not isinstance(modalities, list):
+        modalities = []
+    caps: list[str] = []
+    if "tools" in supported:
+        caps.append("tools")
+    if "image" in modalities:
+        caps.append("vision")
+    if "reasoning" in supported:
+        caps.append("reasoning")
+    if "structured_outputs" in supported or "response_format" in supported:
+        caps.append("json")
+    return caps
 
 
 def _to_float(v) -> float:

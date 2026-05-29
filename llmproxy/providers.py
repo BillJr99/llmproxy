@@ -40,7 +40,7 @@ _TEMPLATE_FIELDS = frozenset({
 })
 
 # Fields that belong to the free-tier metadata view.
-_FREE_INFO_FIELDS = ("believed_free", "model_reasoning", "free_limits")
+_FREE_INFO_FIELDS = ("believed_free", "model_reasoning", "model_capabilities", "free_limits")
 
 VALID_REASONING_LEVELS = frozenset({"exploratory", "standard", "deep"})
 FREE_LIMIT_KEYS = ("requests_per_minute", "requests_per_day",
@@ -88,13 +88,14 @@ def get_provider_free_info(data: dict | None = None) -> dict[str, dict]:
     """Return the per-provider free-tier metadata.
 
     Shape matches the legacy PROVIDER_FREE_INFO dict: provider_key →
-    {believed_free, model_reasoning, free_limits}.
+    {believed_free, model_reasoning, model_capabilities, free_limits}.
     """
     d = data if data is not None else _cached_data()
     return {
         key: {
             "believed_free": list(prov.get("believed_free", [])),
             "model_reasoning": dict(prov.get("model_reasoning", {})),
+            "model_capabilities": {k: list(v) for k, v in prov.get("model_capabilities", {}).items()},
             "free_limits": {k: dict(v) for k, v in prov.get("free_limits", {}).items()},
         }
         for key, prov in d["providers"].items()

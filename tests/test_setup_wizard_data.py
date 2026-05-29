@@ -14,11 +14,12 @@ def test_provider_templates_loaded():
 
 
 def test_provider_free_info_shapes_match_legacy():
-    """Every provider entry must have the three legacy fields, even if empty."""
+    """Every provider entry must have the metadata fields, even if empty."""
     from llmproxy.setup_wizard import PROVIDER_FREE_INFO
     for _pkey, info in PROVIDER_FREE_INFO.items():
         assert isinstance(info["believed_free"], list)
         assert isinstance(info["model_reasoning"], dict)
+        assert isinstance(info["model_capabilities"], dict)
         assert isinstance(info["free_limits"], dict)
 
 

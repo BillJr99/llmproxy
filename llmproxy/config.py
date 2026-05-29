@@ -21,6 +21,13 @@ Schema:
     "<provider>/<upstream_model_id>": "standard", // level so they appear under
     "another-model": "deep"                       // the exploratory/standard/deep
   },                                              // virtual endpoints
+  "model_capabilities": {                         // optional; tag individual models
+    "<upstream_model_id>": ["tools", "vision"],   // with the capabilities they
+    "<provider>/<upstream_model_id>": ["json"]    // support. Drives capability-aware
+  },                                              // routing/failover and the
+                                                  // llmproxy__tools / __vision virtual
+                                                  // endpoints. Valid values:
+                                                  // tools, vision, reasoning, json
   "free_limits": {                                // optional; per-model rate limits
     "<provider>/<upstream_model_id>": {           // used for capacity-aware ordering
       "requests_per_minute": 15,                  // on llmproxy__free and */free
@@ -90,6 +97,7 @@ DEFAULT_CONFIG: dict = {
     "providers": {},
     "believed_free": [],
     "model_reasoning": {},
+    "model_capabilities": {},
     "free_limits": {},
     "server": dict(DEFAULT_SERVER_CONFIG),
 }

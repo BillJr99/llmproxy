@@ -6,7 +6,7 @@ from pathlib import Path
 
 import responses
 
-from scripts.sources.openrouter import OPENROUTER_URL, OpenRouterSource
+from scripts.sources.openrouter import OPENROUTER_URL, OpenRouterSource, _capabilities
 
 
 @responses.activate
@@ -23,6 +23,20 @@ def test_free_models_detected(fixtures_dir: Path):
     for ev in evs:
         assert ev.confidence == "high"
         assert ev.source == "openrouter"
+
+
+def test_capabilities_mapping():
+    model = {
+        "supported_parameters": ["tools", "reasoning", "structured_outputs"],
+        "architecture": {"input_modalities": ["text", "image"]},
+    }
+    assert _capabilities(model) == ["tools", "vision", "reasoning", "json"]
+    # text-only, no special params
+    assert _capabilities({"supported_parameters": [], "architecture": {"input_modalities": ["text"]}}) == []
+    # response_format also implies json; defensive against missing/bad fields
+    assert _capabilities({"supported_parameters": ["response_format"]}) == ["json"]
+    assert _capabilities({}) == []
+    assert _capabilities({"supported_parameters": None, "architecture": None}) == []
 
 
 @responses.activate

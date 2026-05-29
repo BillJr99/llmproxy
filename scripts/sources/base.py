@@ -25,6 +25,9 @@ class Evidence:
     url: str
     limits: dict | None = None
     reasoning: str | None = None
+    # Capabilities the model supports, e.g. ["tools", "vision", "reasoning", "json"].
+    # None = the source has no opinion (don't touch existing capability metadata).
+    capabilities: list[str] | None = None
     notes: str = ""
 
 
