@@ -1,10 +1,10 @@
-"""Coverage of llmproxy.free_models.infer_reasoning_level boundaries."""
+"""Coverage of llmproxy.providers.infer_reasoning_level boundaries."""
 
 from __future__ import annotations
 
 import pytest
 
-from llmproxy.free_models import infer_reasoning_level
+from llmproxy.providers import infer_reasoning_level
 
 
 @pytest.mark.parametrize("name", [

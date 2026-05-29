@@ -1,13 +1,17 @@
-"""free_models.py — Loader for the free_models.json sidecar.
+"""providers.py — Loader for the providers.json sidecar.
 
-free_models.json is the single source of truth for:
+providers.json is the single source of truth for every supported provider:
   * Provider templates (display name, base_url, key/account/gateway requirements)
   * Per-provider believed_free lists
   * Per-provider model_reasoning (exploratory / standard / deep) tags
   * Per-provider free_limits (rpm / rpd / tpm / tpd)
 
+Providers are listed regardless of whether they offer a free tier; the
+believed_free / model_reasoning / free_limits fields simply carry the
+free-tier metadata for those that do.
+
 Both setup_wizard.py and config.example.json derive from this file. The
-scraper at scripts/update_free_models.py keeps it current.
+scraper at scripts/update_free_models.py keeps the free-tier fields current.
 """
 
 import json
@@ -19,7 +23,7 @@ from pathlib import Path
 # Paths
 # ---------------------------------------------------------------------------
 
-DATA_PATH = Path(__file__).parent / "free_models.json"
+DATA_PATH = Path(__file__).parent / "providers.json"
 
 # Fields that belong to the provider-template (wizard menu) view.
 _TEMPLATE_FIELDS = frozenset({
@@ -48,7 +52,7 @@ FREE_LIMIT_KEYS = ("requests_per_minute", "requests_per_day",
 # ---------------------------------------------------------------------------
 
 def load_data(path: Path | None = None) -> dict:
-    """Load and return the raw free_models.json contents."""
+    """Load and return the raw providers.json contents."""
     p = Path(path) if path else DATA_PATH
     with open(p, encoding="utf-8") as fh:
         return json.load(fh)

@@ -20,11 +20,11 @@ llmproxy/
 │   ├── config.py
 │   ├── server.py
 │   ├── setup_wizard.py
-│   ├── free_models.py       ← loader for the JSON sidecar
-│   └── free_models.json     ← single source of truth for provider templates
-│                                + believed_free / model_reasoning / free_limits
+│   ├── providers.py         ← loader for the JSON sidecar
+│   └── providers.json       ← single source of truth for ALL provider templates
+│                                (+ believed_free / model_reasoning / free_limits)
 ├── scripts/
-│   └── update_free_models.py ← scraper that keeps free_models.json current
+│   └── update_free_models.py ← scraper that keeps providers.json's free-tier fields current
 │       └── sources/         ← per-source plugins (openrouter, community, /models, docs)
 ├── tests/                   ← pytest unit/integration suite
 ├── requirements.txt
@@ -33,7 +33,7 @@ llmproxy/
 ├── setup.py                 ← only needed for pip install
 ├── Dockerfile
 ├── docker-compose.yml
-├── config.example.json      ← auto-generated from llmproxy/free_models.json
+├── config.example.json      ← auto-generated from llmproxy/providers.json
 └── .github/workflows/
     ├── ci.yml               ← pytest, ruff, config-example-up-to-date guard
     └── docker-publish.yml   ← GHCR image publish
@@ -257,10 +257,10 @@ model ID (e.g. `gpt-oss-20b`) or the full proxy ID (e.g.
 `openrouter/qwen/qwen3-coder:free`).  The setup wizard manages this field
 via its "Manage model tags" menu and via the per-provider auto-populate step
 when you add a templated provider; the merged defaults come from
-[`llmproxy/free_models.json`](llmproxy/free_models.json).
+[`llmproxy/providers.json`](llmproxy/providers.json).
 
 > **Free-tier accuracy:** The `believed_free` entries in `config.example.json` and in
-> `llmproxy/free_models.json` are best-effort estimates based on publicly-stated provider
+> `llmproxy/providers.json` are best-effort estimates based on publicly-stated provider
 > free tiers. Provider offerings change without notice — no guarantee is made as to accuracy.
 > Verify directly with each provider before relying on free availability in production. The
 > [`scripts/update_free_models.py`](#keeping-the-free-models-list-current) scraper exists to
@@ -276,17 +276,17 @@ upstream model ID (e.g. `anthropic/claude-opus-4`) or the full
 model in the route cache, the corresponding virtual endpoint is advertised in
 `GET /v1/models`.  Omit the field entirely (or set it to `{}`) to disable
 reasoning-level routing.  The setup wizard manages this field via its
-"Manage model tags" menu (merged defaults come from `llmproxy/free_models.json`).
+"Manage model tags" menu (merged defaults come from `llmproxy/providers.json`).
 
 See `config.example.json` for a complete annotated example.
 
 ### Provider templates
 
 Provider templates and free-tier metadata both live in
-[`llmproxy/free_models.json`](llmproxy/free_models.json) — the single source of
+[`llmproxy/providers.json`](llmproxy/providers.json) — the single source of
 truth. The setup wizard reads from this file at startup; `config.example.json`
 is regenerated from the same file. To add or update a provider, edit
-`free_models.json` directly (or run the scraper — see
+`providers.json` directly (or run the scraper — see
 [Keeping the free-models list current](#keeping-the-free-models-list-current)).
 
 The wizard currently offers ready-made templates for these providers:
@@ -297,7 +297,7 @@ The wizard currently offers ready-made templates for these providers:
 | Nvidia NIM                        | `nvidia`         | `https://integrate.api.nvidia.com/v1`                      |
 | Google Gemini (OpenAI-compat)     | `google`         | `https://generativelanguage.googleapis.com/v1beta/openai`  |
 | Cerebras                          | `cerebras`       | `https://api.cerebras.ai/v1`                               |
-| GitHub Models                     | `github`         | `https://models.inference.ai.azure.com`                    |
+| GitHub Models                     | `github`         | `https://models.github.ai/inference`                       |
 | SambaNova Cloud                   | `sambanova`      | `https://api.sambanova.ai/v1`                              |
 | Mistral AI                        | `mistral`        | `https://api.mistral.ai/v1`                                |
 | Groq                              | `groq`           | `https://api.groq.com/openai/v1`                           |
@@ -340,8 +340,8 @@ provider (manual)" menu option.
 
 ## Keeping the free-models list current
 
-Provider free tiers change without notice. The
-[`llmproxy/free_models.json`](llmproxy/free_models.json) sidecar holds the
+Provider free tiers change without notice. The free-tier fields in
+[`llmproxy/providers.json`](llmproxy/providers.json) hold the
 project's best-effort view of *which* models are currently free and *what*
 their rate limits are — used by the `llmproxy__free` virtual endpoint and by the
 setup wizard's "auto-populate" step.
@@ -365,7 +365,7 @@ for human review.
 # Preview proposed changes (no files written)
 python scripts/update_free_models.py --dry-run
 
-# Apply the changes to llmproxy/free_models.json and regenerate config.example.json
+# Apply the changes to llmproxy/providers.json and regenerate config.example.json
 python scripts/update_free_models.py
 
 # Restrict to one provider
@@ -518,7 +518,7 @@ CI runs the same checks on every push and pull request — see
 - `pytest` across Python 3.11 and 3.12,
 - `ruff` lint,
 - a guard that fails the build if `config.example.json` has drifted from
-  `llmproxy/free_models.json` (regenerate locally with
+  `llmproxy/providers.json` (regenerate locally with
   `python scripts/update_free_models.py --regen-config-only`).
 
 ---

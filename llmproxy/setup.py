@@ -5,7 +5,7 @@ setup(
     version="1.0.0",
     description="OpenAI-compatible multi-provider LLM proxy",
     packages=find_packages(),
-    package_data={"llmproxy": ["free_models.json"]},
+    package_data={"llmproxy": ["providers.json"]},
     include_package_data=True,
     python_requires=">=3.11",
     install_requires=[

@@ -1,6 +1,6 @@
 """Community-list source — github.com/tashfeenahmed/freellmapi.
 
-This is the upstream cited in llmproxy/free_models.json's _sources field
+This is the upstream cited in llmproxy/providers.json's _sources field
 (and originally at setup_wizard.py:219 before the refactor). It is a
 community-maintained list of free-tier LLM APIs; confidence is "low"
 because entries lag provider changes and aren't always normalized.

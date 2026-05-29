@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """update_free_models.py — Scrape provider sources, diff against the sidecar,
-and write add/remove updates back into llmproxy/free_models.json.
+and write add/remove updates back into llmproxy/providers.json.
 
 Usage
 -----
@@ -20,7 +20,7 @@ Behavior
   a successful /v1/models fetch for that provider is missing it AND the
   provider's API key was present (so the fetch is trusted).
 * model_reasoning is preserved across runs; new models get reasoning
-  inferred via llmproxy.free_models.infer_reasoning_level.
+  inferred via llmproxy.providers.infer_reasoning_level.
 * free_limits are merged: scraped limits override stored ones; existing
   limits are kept when no source reports new ones.
 
@@ -42,7 +42,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from llmproxy.free_models import (  # noqa: E402
+from llmproxy.providers import (  # noqa: E402
     DATA_PATH,
     FREE_LIMIT_KEYS,
     infer_reasoning_level,
@@ -113,7 +113,7 @@ def aggregate(
     evidence
         All evidence records from all sources.
     current_sidecar
-        The current free_models.json contents.
+        The current providers.json contents.
     api_succeeded
         Set of provider_keys for which a /v1/models source ran cleanly. Only
         these providers can produce inference-based removals (otherwise a
