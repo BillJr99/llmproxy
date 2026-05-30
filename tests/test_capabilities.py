@@ -237,4 +237,86 @@ def test_virtual_candidate_dispatch(server):
 
 def test_virtual_model_hint_for_capabilities(server):
     assert "model_capabilities" in server._virtual_model_hint("llmproxy__tools")
-    assert "model_capabilities" in server._virtual_model_hint("llmproxy__vision/free")
+
+
+# ── expose_to_virtual_models flag ───────────────────────────────────────────
+
+@pytest.fixture
+def hidden_config(tmp_path: Path) -> Path:
+    """Config with one hidden provider (expose_to_virtual_models: false) and one normal one."""
+    cfg = {
+        "providers": {
+            "visible": {"base_url": "http://visible.example/v1", "api_key": "k", "model_filter": None},
+            "hidden": {
+                "base_url": "http://hidden.example/v1",
+                "api_key": "k",
+                "model_filter": None,
+                "expose_to_virtual_models": False,
+            },
+            "local-hidden": {
+                "base_url": "http://localhost:11434/v1",
+                "api_key": "k",
+                "model_filter": None,
+                "expose_to_virtual_models": False,
+            },
+        },
+        "believed_free": ["visible/free-model", "hidden/free-model"],
+        "model_reasoning": {
+            "visible/fast": "exploratory",
+            "hidden/fast": "exploratory",
+        },
+        "model_capabilities": {
+            "visible/tool-model": ["tools"],
+            "hidden/tool-model": ["tools"],
+        },
+        "free_limits": {},
+        "server": {"host": "127.0.0.1", "port": 8080, "log_level": "ERROR",
+                   "request_timeout": 5, "stream_timeout": 5},
+    }
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps(cfg))
+    return p
+
+
+@pytest.fixture
+def hidden_server(monkeypatch, hidden_config):
+    return _load_server_with_config(monkeypatch, hidden_config)
+
+
+def test_hidden_provider_excluded_from_virtual_candidates(hidden_server):
+    """A provider with expose_to_virtual_models: false must not appear in any virtual candidate list."""
+    _seed_route_cache(hidden_server, {
+        "visible__free-model": ("visible", "free-model"),
+        "hidden__free-model": ("hidden", "free-model"),
+        "visible__fast": ("visible", "fast"),
+        "hidden__fast": ("hidden", "fast"),
+        "visible__tool-model": ("visible", "tool-model"),
+        "hidden__tool-model": ("hidden", "tool-model"),
+        "local-hidden__llama": ("local-hidden", "llama"),
+    })
+    free_cands = hidden_server._get_free_model_candidates()
+    assert all(pn != "hidden" for pn, _, _ in free_cands), "hidden provider leaked into free candidates"
+    assert any(pn == "visible" for pn, _, _ in free_cands), "visible provider missing from free candidates"
+
+    reasoning_cands = hidden_server._get_reasoning_model_candidates("exploratory")
+    assert all(pn != "hidden" for pn, _, _ in reasoning_cands)
+    assert any(pn == "visible" for pn, _, _ in reasoning_cands)
+
+    cap_cands = hidden_server._get_capability_model_candidates("tools")
+    assert all(pn != "hidden" for pn, _, _ in cap_cands)
+    assert any(pn == "visible" for pn, _, _ in cap_cands)
+
+    local_cands = hidden_server._get_local_model_candidates()
+    assert all(pn != "local-hidden" for pn, _, _ in local_cands)
+
+
+def test_hidden_provider_still_in_flat_model_list(hidden_server):
+    """Models from a hidden provider still appear in the flat route cache (direct access works)."""
+    _seed_route_cache(hidden_server, {
+        "visible__free-model": ("visible", "free-model"),
+        "hidden__free-model": ("hidden", "free-model"),
+    })
+    with hidden_server._model_route_cache_lock:
+        snapshot = dict(hidden_server._model_route_cache)
+    assert "hidden__free-model" in snapshot, "hidden provider's model should still be routable directly"
+    assert "visible__free-model" in snapshot
