@@ -342,7 +342,11 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
     note = top_note or (
         "All providers must expose an OpenAI-compatible API "
         "(/models, /chat/completions, Bearer auth). "
-        "The provider name 'llmproxy' is reserved and must not be used."
+        "The provider name 'llmproxy' is reserved and must not be used. "
+        "Optional per-provider flag: set \"expose_to_virtual_models\": false to "
+        "exclude a provider from all virtual endpoints (llmproxy__free, "
+        "llmproxy__deep, llmproxy__tools, etc.) while still allowing direct "
+        "calls to its models."
     )
 
     free_limits_with_note: dict = {

@@ -1369,6 +1369,11 @@ def _capacity_ordered_candidates(
     return result
 
 
+def _provider_exposes_to_virtual_models(provider_cfg: dict) -> bool:
+    """Return False only when the provider explicitly opts out via expose_to_virtual_models: false."""
+    return provider_cfg.get("expose_to_virtual_models", True) is not False
+
+
 # — "free" candidate selector —
 
 def _normalized_believed_free(config: dict) -> set[str]:
@@ -1421,6 +1426,8 @@ def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
     for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
         provider_cfg = get_provider(config, provider_name)
         if not provider_cfg:
+            continue
+        if not _provider_exposes_to_virtual_models(provider_cfg):
             continue
         # Skip local providers — they belong to the /local family, not /free.
         if _is_local_url(provider_cfg.get("base_url", "")):
@@ -1505,7 +1512,11 @@ def _get_local_model_candidates() -> list[tuple[str, dict, str]]:
     candidates = []
     for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
         provider_cfg = get_provider(config, provider_name)
-        if provider_cfg and _is_local_url(provider_cfg.get("base_url", "")):
+        if not provider_cfg:
+            continue
+        if not _provider_exposes_to_virtual_models(provider_cfg):
+            continue
+        if _is_local_url(provider_cfg.get("base_url", "")):
             candidates.append((provider_name, provider_cfg, upstream_id))
     return candidates
 
@@ -1546,8 +1557,11 @@ def _get_reasoning_model_candidates(level: str) -> list[tuple[str, dict, str]]:
         )
         if lvl == level:
             provider_cfg = get_provider(config, provider_name)
-            if provider_cfg:
-                candidates.append((provider_name, provider_cfg, upstream_id))
+            if not provider_cfg:
+                continue
+            if not _provider_exposes_to_virtual_models(provider_cfg):
+                continue
+            candidates.append((provider_name, provider_cfg, upstream_id))
     return candidates
 
 
@@ -1573,8 +1587,11 @@ def _get_capability_model_candidates(cap: str) -> list[tuple[str, dict, str]]:
     for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
         if _model_has_capability(provider_name, upstream_id, cap, cap_map):
             provider_cfg = get_provider(config, provider_name)
-            if provider_cfg:
-                candidates.append((provider_name, provider_cfg, upstream_id))
+            if not provider_cfg:
+                continue
+            if not _provider_exposes_to_virtual_models(provider_cfg):
+                continue
+            candidates.append((provider_name, provider_cfg, upstream_id))
     return candidates
 
 

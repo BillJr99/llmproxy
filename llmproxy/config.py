@@ -10,7 +10,14 @@ Schema:
     "<provider_name>": {
       "base_url": "https://...",
       "api_key": "sk-...",
-      "model_filter": ["model-a", "model-b"]   // null or absent = allow all
+      "model_filter": ["model-a", "model-b"],  // null or absent = allow all
+      "expose_to_virtual_models": false         // optional; default true. Set
+                                               // false to hide this provider
+                                               // from ALL virtual endpoints
+                                               // (free/local/deep/tools/etc.)
+                                               // Models still appear in the
+                                               // flat /v1/models list and can
+                                               // be called directly.
     }
   },
   "believed_free": ["model-a", "provider/model-b"],  // models the 'free' virtual
