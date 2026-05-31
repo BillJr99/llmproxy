@@ -17,6 +17,13 @@ GET /v1/models advertises every model in the display form:
 For example, an "ollama" provider serving "qwen2.5vl:3b" is shown as
 "ollama__qwen2.5vl:3b".  Spaces in either side are replaced with "_".
 
+Upstream ids that contain multiple slashes are flattened so the display id
+carries at most one "/": all but the last slash become "_".  For example an
+"openrouter" provider serving "meta-llama/llama-3/instruct" is shown as
+"openrouter__meta-llama_llama-3/instruct".  This keeps "__" the unambiguous
+provider separator and leaves at most a single "/" in any id.  Routing always
+uses the original (un-flattened) upstream id when forwarding upstream.
+
 Three additional input forms also resolve on every proxied endpoint, for
 backward compatibility with pinned client configs:
     <provider_name>/<upstream_model_id>     (canonical slash form)
@@ -64,6 +71,10 @@ _REASONING_LEVELS: tuple[str, ...] = ("exploratory", "standard", "deep")
 # Capabilities that get their own capability-selecting virtual endpoints
 # (llmproxy__tools, llmproxy__vision, and their /free variants).
 _CAPABILITY_VIRTUALS: tuple[str, ...] = ("tools", "vision")
+# Dimensions a single provider can be sliced into via per-provider virtual models
+# (llmproxy__<provider>/<dimension>).  The bare "" form (llmproxy__<provider>)
+# cycles through ALL of that provider's models and is handled separately.
+_PER_PROVIDER_DIMENSIONS: tuple[str, ...] = (*_REASONING_LEVELS, *_CAPABILITY_VIRTUALS, "free")
 # Per-candidate timeout for virtual-model cycling so a slow upstream doesn't block all failover.
 _VIRTUAL_CANDIDATE_TIMEOUT: int = 60
 # Virtual models use the "llmproxy__" prefix (same double-underscore as the
@@ -325,6 +336,28 @@ def version() -> Response:
 # /v1/models  (GET)
 # ---------------------------------------------------------------------------
 
+def _flatten_display_model(stripped: str) -> str:
+    """Collapse all but the LAST '/' in an upstream model id into '_'.
+
+    This keeps the proxy display id (``provider__model``) to at most one slash so
+    that "__" is the unambiguous provider separator and "/" appears at most once.
+    A 0- or 1-slash id is returned unchanged.
+
+    Examples
+    --------
+    >>> _flatten_display_model("gpt-4o")
+    'gpt-4o'
+    >>> _flatten_display_model("anthropic/claude-3.5-sonnet")
+    'anthropic/claude-3.5-sonnet'
+    >>> _flatten_display_model("meta-llama/llama-3/instruct")
+    'meta-llama_llama-3/instruct'
+    """
+    last = stripped.rfind("/")
+    if last == -1:
+        return stripped
+    return stripped[:last].replace("/", "_") + "/" + stripped[last + 1:]
+
+
 def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int) -> list[dict]:
     """
     Fetch the model list from a single provider, apply any configured filter,
@@ -396,9 +429,13 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         # used everywhere else in the codebase.
         # Any spaces in the upstream model id or provider name are replaced with "_"
         # for the same reason — strict validators reject whitespace in model names.
+        # Upstream ids with multiple slashes are flattened so the display id carries
+        # at most one "/" (see _flatten_display_model); this keeps the proxy grammar
+        # unambiguous — "__" always separates the provider and there is never more
+        # than a single "/" — which matters for per-provider virtual-model parsing.
         # The route cache keys on this sanitized display id; routing still uses the
         # original upstream_id when forwarding to the provider.
-        safe_stripped = stripped.replace(" ", "_")
+        safe_stripped = _flatten_display_model(stripped).replace(" ", "_")
         safe_provider = provider_name.replace(" ", "_")
         proxy_id = f"{safe_provider}__{safe_stripped}"
         proxy_model["id"] = proxy_id
@@ -748,6 +785,34 @@ def list_models() -> Response:
                 "_note": f"Virtual model: cycles through free-tier models tagged '{cap}' in config['model_capabilities'].",
             })
 
+    # Per-provider virtual models: llmproxy__<provider> (cycles all of the
+    # provider's models) and llmproxy__<provider>/<dimension>.  Advertised only
+    # for enabled, non-local, virtual-exposing providers, and only when the
+    # provider actually has a backing model for that dimension.  Ids that collide
+    # with a global virtual name are skipped (global form takes precedence).
+    for provider_name in sorted(providers):
+        provider_cfg = providers[provider_name]
+        if _is_local_url(provider_cfg.get("base_url", "")):
+            continue
+        if not _provider_exposes_to_virtual_models(provider_cfg):
+            continue
+        for dim in ("",) + _PER_PROVIDER_DIMENSIONS:
+            vid = f"llmproxy__{provider_name}" + (f"/{dim}" if dim else "")
+            if vid in _VIRTUAL_MODELS:
+                continue  # global virtual of the same name takes precedence
+            if _get_provider_virtual_candidates(provider_name, dim):
+                scope = "all" if dim == "" else f"'{dim}'"
+                synthetic.append({
+                    "id": vid,
+                    "object": "model",
+                    "owned_by": "llmproxy",
+                    "name": vid,
+                    "_note": (
+                        f"Virtual model: cycles through {scope} of provider "
+                        f"'{provider_name}'s models until one succeeds."
+                    ),
+                })
+
     # Annotate real models with (believed_free) and/or (local) suffixes in name.
     for model in all_models:
         route = snapshot.get(model["id"])
@@ -795,7 +860,7 @@ def get_model(model_id: str) -> Response:
     plus the legacy "llmproxy/free" forms) are
     handled here via the _VIRTUAL_MODELS membership check.
     """
-    if model_id in _VIRTUAL_MODELS:
+    if _is_virtual_model(model_id):
         candidates = _get_virtual_candidates(model_id)
         return jsonify({
             "id": model_id,
@@ -1610,8 +1675,97 @@ def _strip_virtual_prefix(model_full: str) -> str:
     return model_full
 
 
+# — per-provider virtual models —
+
+def _split_per_provider_virtual(model_full: str) -> tuple[str, str] | None:
+    """Recognise a per-provider virtual model "llmproxy__<provider>[/<dimension>]".
+
+    Returns ``(provider_name, dimension)`` where *dimension* is "" for the bare
+    aggregator form (llmproxy__<provider>) or one of ``_PER_PROVIDER_DIMENSIONS``,
+    otherwise ``None``.
+
+    Precedence rule: existing GLOBAL virtual names always win — if *model_full*
+    is in ``_VIRTUAL_MODELS`` this returns ``None`` so the global selector handles
+    it (100% backward compatible).  Only then is the leading token resolved as a
+    provider, which must be configured, non-reserved, non-local, and not opted out
+    of virtual exposure.
+    """
+    if not (model_full.startswith("llmproxy__") or model_full.startswith("llmproxy/")):
+        return None
+    # Existing global forms take precedence over any same-named provider.
+    if model_full in _VIRTUAL_MODELS:
+        return None
+    name = _strip_virtual_prefix(model_full)
+    if "/" in name:
+        provider_name, dimension = name.split("/", 1)
+        if dimension not in _PER_PROVIDER_DIMENSIONS:
+            return None
+    else:
+        provider_name, dimension = name, ""
+    if not provider_name or provider_name in RESERVED_PROVIDER_NAMES:
+        return None
+    config = load_config()
+    provider_cfg = get_provider(config, provider_name)
+    if not provider_cfg:
+        return None
+    if _is_local_url(provider_cfg.get("base_url", "")):
+        return None
+    if not _provider_exposes_to_virtual_models(provider_cfg):
+        return None
+    return provider_name, dimension
+
+
+def _is_per_provider_virtual(model_full: str) -> bool:
+    """True when *model_full* is a recognised per-provider virtual model."""
+    return _split_per_provider_virtual(model_full) is not None
+
+
+def _is_virtual_model(model_full: str) -> bool:
+    """True for any virtual model: a static global name OR a per-provider form."""
+    return model_full in _VIRTUAL_MODELS or _is_per_provider_virtual(model_full)
+
+
+def _is_free_virtual_model(model_full: str) -> bool:
+    """True for capacity-aware free virtuals (global free set or <provider>/free)."""
+    if model_full in _FREE_VIRTUAL_MODELS:
+        return True
+    split = _split_per_provider_virtual(model_full)
+    return split is not None and split[1] == "free"
+
+
+def _get_provider_virtual_candidates(provider_name: str, dimension: str) -> list[tuple[str, dict, str]]:
+    """Candidates for llmproxy__<provider>[/<dimension>], scoped to one provider.
+
+    Reuses the matching global selector then filters to *provider_name*, so the
+    local / expose / free guards inside each global selector are inherited.  The
+    bare ("") form cycles through every cached model of the provider.
+    """
+    if dimension == "":
+        config = load_config()
+        provider_cfg = get_provider(config, provider_name)
+        if not provider_cfg:
+            return []
+        return [
+            (provider_name, provider_cfg, upstream_id)
+            for _proxy_id, (pn, upstream_id) in _get_route_cache_snapshot().items()
+            if pn == provider_name
+        ]
+    if dimension == "free":
+        base = _get_free_model_candidates()
+    elif dimension in _REASONING_LEVELS:
+        base = _get_reasoning_model_candidates(dimension)
+    elif dimension in _CAPABILITY_VIRTUALS:
+        base = _get_capability_model_candidates(dimension)
+    else:
+        return []
+    return [(pn, pc, um) for pn, pc, um in base if pn == provider_name]
+
+
 def _get_virtual_candidates(model_full: str) -> list[tuple[str, dict, str]]:
     """Dispatch to the correct candidate selector for any virtual model name."""
+    split = _split_per_provider_virtual(model_full)
+    if split is not None:
+        return _get_provider_virtual_candidates(*split)
     name = _strip_virtual_prefix(model_full)
     if name == "free":
         return _get_free_model_candidates()
@@ -1651,6 +1805,24 @@ def _resolve_provider(model_full: str) -> tuple[str | None, dict | None, str | N
     # parse_model_string, so the cache (populated by /v1/models) is authoritative.
     with _model_route_cache_lock:
         cached_route = _model_route_cache.get(model_full)
+    if not cached_route and "__" in model_full and "/" in model_full.partition("__")[2]:
+        # Possible cold-cache flattened multi-slash display id
+        # (e.g. "provider__sub_model/leaf"): the heuristic partition below cannot
+        # losslessly recover the original upstream ("sub_model/leaf" vs the real
+        # "sub/model/leaf"), because _flatten_display_model turned interior "/"
+        # into "_". Rebuild the route cache once from the providers' /models
+        # endpoints and retry the lookup, but only when the left token names a
+        # configured provider so unknown/garbage ids never trigger upstream fetches.
+        left_guess = model_full.partition("__")[0]
+        if get_provider(config, left_guess):
+            rebuild_providers = {
+                k: v for k, v in config.get("providers", {}).items()
+                if k not in RESERVED_PROVIDER_NAMES
+            }
+            rebuild_timeout = config.get("server", {}).get("request_timeout", 120)
+            _rebuild_route_cache(rebuild_providers, rebuild_timeout)
+            with _model_route_cache_lock:
+                cached_route = _model_route_cache.get(model_full)
     if cached_route:
         provider_name, upstream_model = cached_route
     elif "__" in model_full:
@@ -1696,6 +1868,19 @@ def _resolve_provider(model_full: str) -> tuple[str | None, dict | None, str | N
 
 def _virtual_model_hint(model_full: str) -> str:
     """Return a one-sentence config hint for an unavailable virtual model."""
+    split = _split_per_provider_virtual(model_full)
+    if split is not None:
+        provider_name, dim = split
+        if dim == "":
+            return f"Provider '{provider_name}' has no models in the route cache; check its base_url and api_key."
+        if dim == "free":
+            return (
+                f"Provider '{provider_name}' has no free-tier model "
+                f"(upstream ID contains 'free', or add it to config['believed_free'])."
+            )
+        if dim in _REASONING_LEVELS:
+            return f"Tag at least one of provider '{provider_name}'s models with '{dim}' in config['model_reasoning']."
+        return f"Tag at least one of provider '{provider_name}'s models with '{dim}' in config['model_capabilities']."
     name = _strip_virtual_prefix(model_full)
     if name == "free":
         return (
@@ -1757,7 +1942,7 @@ def _proxy_endpoint(endpoint: str) -> Response:
     # Virtual cycling models bypass the cache so their load-spreading and
     # failover logic runs on every request rather than pinning to one upstream.
     cache_key: str | None = None
-    if not is_streaming and model_full not in _VIRTUAL_MODELS:
+    if not is_streaming and not _is_virtual_model(model_full):
         cache_ttl: int = server_cfg.get("response_cache_ttl", _DEFAULT_RESPONSE_CACHE_TTL)
         if cache_ttl > 0:
             cache_key = _response_cache_key(endpoint, payload, request.headers.get("Authorization", ""))
@@ -1767,7 +1952,7 @@ def _proxy_endpoint(endpoint: str) -> Response:
                 logger.info("  [cache] HIT  key=%s…", cache_key[:12])
                 return Response(content, status=status, content_type=ct)
 
-    if model_full in _VIRTUAL_MODELS:
+    if _is_virtual_model(model_full):
         candidates = _get_virtual_candidates(model_full)
         if not candidates:
             return _error(
@@ -1775,7 +1960,7 @@ def _proxy_endpoint(endpoint: str) -> Response:
                 + _virtual_model_hint(model_full),
                 status=503,
             )
-        if model_full in _FREE_VIRTUAL_MODELS:
+        if _is_free_virtual_model(model_full):
             free_limits = _get_normalized_free_limits(config)
             ordered = _capacity_ordered_candidates(candidates, free_limits)
             on_success: Callable[[str, str], None] | None = _record_usage

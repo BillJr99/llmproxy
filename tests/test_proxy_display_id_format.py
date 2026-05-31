@@ -37,7 +37,8 @@ def _stub_response(model_ids):
 
 def test_proxy_id_uses_provider_first_double_underscore(server, monkeypatch):
     """Every non-virtual model id must use the `provider__model` form —
-    provider on the left, no spaces, no parens, no leading slash."""
+    provider on the left, no spaces, no parens, no leading slash, and at most
+    one `/` (multi-slash upstream ids are flattened)."""
     captured = _stub_response([
         "qwen2.5vl:3b",
         "llama3.2-3b-instruct",
@@ -52,6 +53,7 @@ def test_proxy_id_uses_provider_first_double_underscore(server, monkeypatch):
     )
 
     assert models, "expected the stubbed upstream to yield models"
+    by_upstream = {m["_upstream_id"]: m["id"] for m in models}
     for m in models:
         mid = m["id"]
         assert " " not in mid, f"display id contains a space: {mid!r}"
@@ -60,6 +62,69 @@ def test_proxy_id_uses_provider_first_double_underscore(server, monkeypatch):
             f"display id {mid!r} does not match expected `provider__model` shape"
         )
         assert mid.startswith("ollama__"), f"provider must come first: {mid!r}"
+        assert mid.count("/") <= 1, f"display id must carry at most one slash: {mid!r}"
+    # 0-slash and 1-slash upstreams are unchanged; the 2-slash one is flattened.
+    assert by_upstream["qwen2.5vl:3b"] == "ollama__qwen2.5vl:3b"
+    assert by_upstream["nested/path/model-x"] == "ollama__nested_path/model-x"
+    # The route still forwards under the original (un-flattened) upstream id.
+    nested = next(m for m in models if m["_upstream_id"] == "nested/path/model-x")
+    assert nested["_route"] == ("ollama", "nested/path/model-x")
+
+
+def test_flatten_display_model(server):
+    """_flatten_display_model collapses all but the last '/' into '_'."""
+    f = server._flatten_display_model
+    assert f("gpt-4o") == "gpt-4o"                       # 0 slashes
+    assert f("anthropic/claude-3.5") == "anthropic/claude-3.5"   # 1 slash unchanged
+    assert f("meta-llama/llama-3/instruct") == "meta-llama_llama-3/instruct"  # 2
+    assert f("a/b/c/d") == "a_b_c/d"                     # 3 slashes
+
+
+def test_resolver_resolves_flattened_multislash_via_cache(server):
+    """A flattened display id resolves to the original upstream via the cache."""
+    with server._model_route_cache_lock:
+        server._model_route_cache.clear()
+        server._model_route_cache["fakeprov__meta-llama_llama-3/instruct"] = (
+            "fakeprov", "meta-llama/llama-3/instruct",
+        )
+    provider_name, _cfg, upstream_model, err = server._resolve_provider(
+        "fakeprov__meta-llama_llama-3/instruct"
+    )
+    assert err is None, f"unexpected error: {err}"
+    assert provider_name == "fakeprov"
+    assert upstream_model == "meta-llama/llama-3/instruct"
+    with server._model_route_cache_lock:
+        server._model_route_cache.clear()
+
+
+def test_resolver_rebuilds_cache_for_cold_flattened_id(server, monkeypatch):
+    """On a cold cache miss for a flattened multi-slash id whose left token is a
+    configured provider, _resolve_provider rebuilds the route cache once and
+    retries so routing recovers the true upstream id."""
+    with server._model_route_cache_lock:
+        server._model_route_cache.clear()
+
+    calls = {"n": 0}
+
+    def _fake_rebuild(providers_cfg, timeout):
+        calls["n"] += 1
+        with server._model_route_cache_lock:
+            server._model_route_cache["fakeprov__meta-llama_llama-3/instruct"] = (
+                "fakeprov", "meta-llama/llama-3/instruct",
+            )
+        return []
+
+    monkeypatch.setattr(server, "_rebuild_route_cache", _fake_rebuild)
+
+    provider_name, _cfg, upstream_model, err = server._resolve_provider(
+        "fakeprov__meta-llama_llama-3/instruct"
+    )
+    assert calls["n"] == 1, "expected exactly one route-cache rebuild"
+    assert err is None, f"unexpected error: {err}"
+    assert provider_name == "fakeprov"
+    assert upstream_model == "meta-llama/llama-3/instruct"
+    with server._model_route_cache_lock:
+        server._model_route_cache.clear()
 
 
 def test_resolver_accepts_new_format(server, monkeypatch):
