@@ -83,6 +83,24 @@ client bugs:
 Putting the provider on the left mirrors the canonical `provider/model` slash
 form, so the two ids read consistently across logs, configs, and menus.
 
+**Single-slash flattening.** Some upstream ids contain *multiple* slashes
+(e.g. OpenRouter's `meta-llama/llama-3/instruct`). In the display form, all but
+the **last** slash are collapsed into `_`, so a display id always carries at most
+one `/`:
+
+| Upstream model (under `openrouter`)   | Display id                               |
+|---------------------------------------|------------------------------------------|
+| `gpt-4o`                              | `openrouter__gpt-4o`                     |
+| `anthropic/claude-3.5-sonnet`         | `openrouter__anthropic/claude-3.5-sonnet`|
+| `meta-llama/llama-3/instruct`         | `openrouter__meta-llama_llama-3/instruct`|
+
+This keeps the proxy grammar unambiguous — `__` always separates the provider
+and there is never more than a single `/` — which also matters for the
+per-provider virtual models below. Routing always forwards to the upstream under
+the **original** (un-flattened) id, and the **input** forms are unchanged: you can
+still send the canonical `provider/upstream` slash form with a multi-slash
+upstream (e.g. `openrouter/meta-llama/llama-3/instruct`).
+
 Clients may submit any of these four forms in `"model"` on chat/completions
 requests:
 
@@ -257,6 +275,56 @@ from the scraper (OpenRouter's `supported_parameters` / image modality) and the
 setup wizard's *Manage model tags → Tag model capabilities* menu — see
 [Configuration → model_capabilities](#model_capabilities) below. The legacy
 `llmproxy/...` input form (e.g. `llmproxy/tools/free`) is also accepted.
+
+### Per-provider virtual models
+
+The reasoning, capability, and `free` families above aggregate across **all**
+providers. To scope failover to a **single** provider, llmproxy also advertises
+per-provider virtual models of the form:
+
+```
+llmproxy__<provider>            # cycles through ALL of that provider's models
+llmproxy__<provider>/<dimension>
+```
+
+where `<dimension>` is one of `exploratory`, `standard`, `deep` (reasoning
+levels), `tools`, `vision` (capabilities), or `free`. For example, with a Google
+provider:
+
+| Virtual model name              | Selects                                                |
+|---------------------------------|--------------------------------------------------------|
+| `llmproxy__google`              | All of Google's models                                 |
+| `llmproxy__google/deep`         | Google models tagged `deep`                            |
+| `llmproxy__google/standard`     | Google models tagged `standard`                        |
+| `llmproxy__google/exploratory`  | Google models tagged `exploratory`                     |
+| `llmproxy__google/tools`        | Google models tagged `tools`                           |
+| `llmproxy__google/vision`       | Google models tagged `vision`                          |
+| `llmproxy__google/free`         | Google's free-tier models (capacity-aware, like `llmproxy__free`) |
+
+```bash
+# Deep reasoning, but only ever route to Google:
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "llmproxy__google/deep", "messages": [{"role": "user", "content": "Prove P≠NP"}]}'
+
+# Inspect which of Google's models back a per-provider virtual:
+curl http://localhost:8080/v1/models/llmproxy__google/free | jq '._candidates'
+```
+
+Eligibility: per-provider virtuals are advertised only for providers that are
+**enabled**, **non-local** (not `localhost` / `host.docker.internal` / `*.local`),
+and **not** opted out via `expose_to_virtual_models: false`. Each variant appears
+in `GET /v1/models` only when the provider actually has a backing model for that
+dimension. `llmproxy__<provider>/free` uses the same capacity-aware load
+balancing and usage tracking as `llmproxy__free`. The legacy `llmproxy/...` input
+form is also accepted.
+
+> **Precedence / naming note:** existing global virtual names always take
+> precedence. If you name a provider exactly `free`, `local`, `deep`, `standard`,
+> `exploratory`, `tools`, or `vision`, then that one colliding name (e.g.
+> `llmproxy__standard` or `llmproxy__standard/free`) resolves to the **global**
+> virtual; the provider's other per-provider variants (e.g.
+> `llmproxy__standard/deep`) still work.
 
 ---
 
