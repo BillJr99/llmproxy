@@ -30,7 +30,7 @@ import os
 import tempfile
 
 from . import __version__
-from .config import get_config_path, load_config
+from .config import get_config_path, heal_config, load_config, save_config
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -169,7 +169,19 @@ def main() -> None:
     port: int = int(server_cfg.get("port", 8080))
 
     config_path = get_config_path()
-    logging.getLogger("llmproxy").info("Config: %s", config_path)
+    log = logging.getLogger("llmproxy")
+    log.info("Config: %s", config_path)
+
+    # Backfill template-derived provider fields missing from older configs
+    # (e.g. models_url added after the config was first written). Auto-fixes
+    # are logged and persisted; fields we can't reconstruct are warned about.
+    # Heal a freshly-loaded copy so any --host/--port/--log-level CLI overrides
+    # applied to the in-memory server config above are not persisted to disk.
+    healed_config, healed, messages = heal_config(load_config(force_reload=True))
+    for level, text in messages:
+        getattr(log, level)(text)
+    if healed:
+        save_config(healed_config)
 
     # Attempt to import gunicorn; if available, use it for production robustness.
     # Fall back to the Flask dev server for simple / local use.

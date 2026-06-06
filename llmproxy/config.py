@@ -55,8 +55,11 @@ Schema:
 
 import json
 import os
+import re
 import traceback
 from pathlib import Path
+
+from . import providers as _providers
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -252,6 +255,138 @@ def parse_model_string(model_full: str) -> tuple[str, str]:
             f"'<provider>/<model>' convention."
         )
     return model_full[:sep], model_full[sep + 1:]
+
+
+# ---------------------------------------------------------------------------
+# Auto-heal — backfill template-derived fields missing from older configs
+# ---------------------------------------------------------------------------
+
+# Provider fields that carry a canonical value in the provider template and
+# whose absence breaks model discovery. These were added after the initial
+# release, so configs created earlier lack them. base_url / api_key are user
+# secrets and deliberately out of scope.
+_HEALABLE_FIELDS = ("models_url", "models_id_field", "models_keep_task")
+
+
+def _template_base_url_regex(template_base_url: str) -> re.Pattern:
+    """Compile a regex that matches a resolved base_url against a template.
+
+    Each ``{placeholder}`` in the template becomes a named capture group, so a
+    match both confirms the template and recovers the substituted values
+    (e.g. ``{account_id}``). Literal segments are escaped.
+    """
+    parts = re.split(r"(\{[a-zA-Z_]+\})", template_base_url)
+    pattern = ""
+    for part in parts:
+        m = re.fullmatch(r"\{([a-zA-Z_]+)\}", part)
+        if m:
+            pattern += f"(?P<{m.group(1)}>[^/]+)"
+        else:
+            pattern += re.escape(part)
+    return re.compile(f"^{pattern}/?$")
+
+
+def _match_template(provider_name: str, provider_cfg: dict, templates: dict) -> tuple[dict | None, dict]:
+    """Resolve which template a configured provider came from.
+
+    Returns ``(template, placeholder_values)``. Matching is two-tier:
+      1. By name — the config provider name equals a template key (the common
+         case; the wizard defaults the name to the template key).
+      2. By base_url — the provider's resolved base_url matches a template's
+         base_url pattern, which also recovers any ``{placeholder}`` values.
+
+    ``placeholder_values`` is empty for a name match (no recovery needed unless
+    base_url also matches, in which case it is populated).
+    """
+    base_url = (provider_cfg.get("base_url") or "").rstrip("/")
+
+    tmpl = templates.get(provider_name)
+    if tmpl is not None:
+        placeholders: dict = {}
+        tmpl_base = (tmpl.get("base_url") or "").rstrip("/")
+        if tmpl_base:
+            m = _template_base_url_regex(tmpl_base).match(base_url)
+            if m:
+                placeholders = m.groupdict()
+        return tmpl, placeholders
+
+    # Fallback: identify a renamed provider by its base_url shape.
+    if base_url:
+        for tmpl in templates.values():
+            tmpl_base = (tmpl.get("base_url") or "").rstrip("/")
+            if not tmpl_base:
+                continue
+            m = _template_base_url_regex(tmpl_base).match(base_url)
+            if m:
+                return tmpl, m.groupdict()
+    return None, {}
+
+
+def _reconstruct_field(field: str, template: dict, placeholders: dict) -> str | None:
+    """Reconstruct a healable field value from the template, or None if it
+    requires information we cannot recover without user input."""
+    value = template.get(field)
+    if not value:
+        return None
+    if field != "models_url":
+        # models_id_field / models_keep_task are static literals.
+        return value
+    # models_url may carry {account_id} / {gateway_id} placeholders that must be
+    # substituted with the same values resolved into the provider's base_url.
+    missing = re.findall(r"\{([a-zA-Z_]+)\}", value)
+    for name in missing:
+        if name not in placeholders:
+            return None  # can't fabricate the id; caller will warn.
+        value = value.replace(f"{{{name}}}", placeholders[name])
+    return value
+
+
+def heal_config(config: dict) -> tuple[dict, bool, list[tuple[str, str]]]:
+    """Backfill missing template-derived provider fields in *config*.
+
+    For each configured provider that matches a known provider template, fill
+    in any of the model-discovery fields (models_url / models_id_field /
+    models_keep_task) the template defines but the provider lacks. Existing
+    keys are never overwritten, so this is idempotent and safe.
+
+    Returns ``(config, changed, messages)`` where *changed* is True if any
+    field was added and *messages* is a list of ``(level, text)`` pairs with
+    *level* in {"info", "warning"} for the caller to log.
+    """
+    messages: list[tuple[str, str]] = []
+    changed = False
+
+    try:
+        templates = {t["key"]: t for t in _providers.get_provider_templates()}
+    except Exception as e:  # pragma: no cover - templates ship with the package
+        print(f"[config:heal_config] Could not load provider templates: {e}")
+        return config, False, messages
+
+    for name, provider_cfg in config.get("providers", {}).items():
+        if not isinstance(provider_cfg, dict):
+            continue
+        template, placeholders = _match_template(name, provider_cfg, templates)
+        if template is None:
+            continue
+        for field in _HEALABLE_FIELDS:
+            if field in provider_cfg or field not in template:
+                continue
+            value = _reconstruct_field(field, template, placeholders)
+            if value is None:
+                messages.append((
+                    "warning",
+                    f"Provider '{name}' is missing '{field}' and it cannot be "
+                    f"auto-healed; re-run 'llmproxy --setup' to repair it.",
+                ))
+                continue
+            provider_cfg[field] = value
+            changed = True
+            messages.append((
+                "info",
+                f"Auto-healed provider '{name}': added {field}={value}",
+            ))
+
+    return config, changed, messages
 
 
 # ---------------------------------------------------------------------------
