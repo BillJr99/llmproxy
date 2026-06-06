@@ -359,7 +359,10 @@ def heal_config(config: dict) -> tuple[dict, bool, list[tuple[str, str]]]:
     try:
         templates = {t["key"]: t for t in _providers.get_provider_templates()}
     except Exception as e:  # pragma: no cover - templates ship with the package
-        print(f"[config:heal_config] Could not load provider templates: {e}")
+        messages.append((
+            "warning",
+            f"Could not load provider templates; skipping config auto-heal: {e}",
+        ))
         return config, False, messages
 
     for name, provider_cfg in config.get("providers", {}).items():
@@ -369,7 +372,14 @@ def heal_config(config: dict) -> tuple[dict, bool, list[tuple[str, str]]]:
         if template is None:
             continue
         for field in _HEALABLE_FIELDS:
-            if field in provider_cfg or field not in template:
+            if field in provider_cfg:
+                continue
+            # Only heal when the template actually defines a usable value.
+            # providers.get_provider_templates() copies fields verbatim from
+            # providers.json, so a null/empty entry must be skipped silently
+            # rather than treated as a healable-but-unrecoverable field.
+            template_value = template.get(field)
+            if not isinstance(template_value, str) or not template_value:
                 continue
             value = _reconstruct_field(field, template, placeholders)
             if value is None:

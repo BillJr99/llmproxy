@@ -181,7 +181,15 @@ def main() -> None:
     for level, text in messages:
         getattr(log, level)(text)
     if healed:
-        save_config(healed_config)
+        if save_config(healed_config):
+            log.info("Persisted auto-healed config to %s", get_config_path())
+        else:
+            log.warning(
+                "Failed to persist auto-healed config to %s; the server will "
+                "run with the healed values in memory but the on-disk config "
+                "remains unhealed and model discovery may break on next start.",
+                get_config_path(),
+            )
 
     # Attempt to import gunicorn; if available, use it for production robustness.
     # Fall back to the Flask dev server for simple / local use.
