@@ -341,7 +341,11 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "<name>": {
       "base_url": "https://...",
       "api_key": "sk-...",
-      "model_filter": ["model-a", "model-b"]
+      "model_filter": ["model-a", "model-b"],
+
+      "models_url": "https://.../catalog/models",
+      "models_id_field": "name",
+      "models_keep_task": "Text Generation"
     }
   },
   "believed_free": [
@@ -375,7 +379,32 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
 provider prefix).  It is not set by default in `config.example.json`.  Set it to
 `null` or omit it to permit all models from that provider.  It can be used as a
 manual allowlist, or as a fallback model list for providers whose `/v1/models`
-endpoint does not work (e.g. Cloudflare Workers AI, Cloudflare AI Gateway).
+endpoint does not work (e.g. Cloudflare AI Gateway).
+
+The three `models_*` keys are **optional per-provider model-discovery
+overrides**, for providers that don't expose a standard OpenAI
+`GET <base_url>/models`:
+
+- **`models_url`** — fetch the model list from this exact URL instead of
+  `<base_url>/models`. Use it when the catalog lives at a different path than
+  the chat endpoint. For example, GitHub Models serves chat at
+  `https://models.github.ai/inference/chat/completions` but its catalog at
+  `https://models.github.ai/catalog/models`, and Cloudflare Workers AI has no
+  `GET /v1/models` — its catalog is at
+  `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/models/search`.
+- **`models_id_field`** — the field on each returned model object that holds the
+  usable upstream id (default `"id"`). Cloudflare's `models/search` puts the
+  `@cf/...` id in `"name"` and reserves `"id"` for an internal UUID, so set this
+  to `"name"`.
+- **`models_keep_task`** — when set, keep only models whose `task.name` matches
+  (case-insensitive). Cloudflare's catalog mixes Text Generation, embeddings,
+  and image tasks in one list; set this to `"Text Generation"` to keep only
+  chat-capable models.
+
+These overrides are part of the provider templates in
+[`llmproxy/providers.json`](llmproxy/providers.json), so the setup wizard writes
+them automatically when you add GitHub Models or Cloudflare Workers AI (with the
+`{account_id}` placeholder substituted into `models_url`).
 
 `believed_free` is an **optional** top-level array of model names that the
 `free` virtual model should include even when their ID doesn't contain the
@@ -467,17 +496,26 @@ The wizard currently offers ready-made templates for these providers:
 Any OpenAI-compatible provider can also be added manually via the "Add / edit a
 provider (manual)" menu option.
 
-> **Providers that do not support `GET /v1/models` (as of May 2026)**
-> Some providers return an error or non-JSON response for the `/models` endpoint.
-> For these, llmproxy synthesizes model entries from the provider's `model_filter`
-> when the fetch fails.  Set `model_filter` manually in your config for these
-> providers to enumerate the models you want available.
+> **Providers that do not support a standard `GET <base_url>/models` (as of June 2026)**
+> Some providers return an error or non-JSON response for the default `/models`
+> path. There are two ways to handle these:
 >
-> | Provider | Reason |
-> |---|---|
-> | **Cloudflare Workers AI** | Returns HTTP 405 — method not supported |
-> | **Cloudflare AI Gateway** | Returns HTTP 401 — no anonymous model enumeration |
-> | **Hugging Face Inference** | Returns HTML rather than JSON for `/v1/models` |
+> 1. **Point discovery at the real catalog** with the `models_url` /
+>    `models_id_field` / `models_keep_task` overrides (see
+>    [Schema](#schema)). The bundled templates for **GitHub Models** and
+>    **Cloudflare Workers AI** already do this, so their models are discovered
+>    live.
+> 2. **Synthesize from `model_filter`** — when no working catalog endpoint
+>    exists, set `model_filter` to the upstream ids you want and llmproxy
+>    advertises those when the `/models` fetch fails.
+>
+> | Provider | Default `/models` symptom | Handling |
+> |---|---|---|
+> | **GitHub Models** | HTTP 404 — catalog is at `/catalog/models`, not `/inference/models` | `models_url` → `https://models.github.ai/catalog/models` |
+> | **Cloudflare Workers AI** | HTTP 405 — no `GET /v1/models` | `models_url` → `…/ai/models/search`, `models_id_field: "name"`, `models_keep_task: "Text Generation"` |
+> | **Cloudflare AI Gateway** | HTTP 401 — gateway proxies inference only, no catalog | `model_filter` (synthesized); a 401 also means the API token is missing/under-scoped for Workers AI |
+> | **Hugging Face Inference** | Returns HTML rather than JSON for `/v1/models` | `model_filter` (synthesized) |
+> | **Open WebUI** (self-hosted, e.g. behind a custom domain) | HTTP 200 but HTML — the OpenAI API lives under `/api` | set `base_url` to `https://<host>/api` |
 
 ---
 
