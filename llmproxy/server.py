@@ -358,6 +358,31 @@ def _flatten_display_model(stripped: str) -> str:
     return stripped[:last].replace("/", "_") + "/" + stripped[last + 1:]
 
 
+def _describe_fetch_failure(url: str, resp: "requests.Response | None") -> str:
+    """
+    Build a secret-free diagnostic suffix for a failed /models fetch.
+
+    Includes the request URL and, when a response was received, the HTTP
+    status, the upstream Content-Type, and a short snippet of the response
+    body. Request headers (which carry the Authorization bearer token) are
+    never included, and the body snippet is truncated so we don't dump large
+    upstream payloads into the logs.
+    """
+    parts = [f" [url={url}"]
+    if resp is not None:
+        parts.append(f" status={resp.status_code}")
+        content_type = resp.headers.get("Content-Type", "")
+        if content_type:
+            parts.append(f" content_type={content_type}")
+        body = (resp.text or "").strip()
+        if body:
+            snippet = body[:200].replace("\n", " ")
+            suffix = "…" if len(body) > 200 else ""
+            parts.append(f" body={snippet!r}{suffix}")
+    parts.append("]")
+    return "".join(parts)
+
+
 def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int) -> list[dict]:
     """
     Fetch the model list from a single provider, apply any configured filter,
@@ -373,15 +398,36 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         "Content-Type": "application/json",
     }
 
+    resp = None
     try:
         resp = requests.get(url, headers=headers, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
-        raw_models: list[dict] = data.get("data") or data.get("result", [])
+        # Normalize the various shapes upstreams return for /models:
+        #   - OpenAI style: {"data": [...]}
+        #   - some gateways: {"result": [...]}
+        #   - Together and a few others return a bare JSON array: [...]
+        raw_models: list[dict]
+        if isinstance(data, list):
+            raw_models = data
+        elif isinstance(data, dict):
+            raw_models = data.get("data") or data.get("result") or []
+            if not isinstance(raw_models, list):
+                raise ValueError(
+                    f"unexpected 'data'/'result' type {type(raw_models).__name__}; "
+                    f"top-level keys: {sorted(data.keys())}"
+                )
+        else:
+            raise ValueError(
+                f"unexpected /models payload type {type(data).__name__}"
+            )
     except Exception as e:
         logger.warning(
-            "[server:_fetch_provider_models] provider=%s fetch failed: %s",
-            provider_name, e,
+            "[server:_fetch_provider_models] provider=%s fetch failed: %s: %s%s",
+            provider_name,
+            type(e).__name__,
+            e,
+            _describe_fetch_failure(url, resp),
         )
         model_filter = provider_cfg.get("model_filter")
         if not model_filter:

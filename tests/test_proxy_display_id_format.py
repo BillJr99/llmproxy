@@ -203,6 +203,57 @@ def test_resolver_still_accepts_legacy_paren_format(server, monkeypatch):
     assert upstream_model == "qwen2.5vl:3b"
 
 
+def test_bare_list_models_payload_is_accepted(server, monkeypatch):
+    """Some upstreams (e.g. Together) return /models as a bare JSON array
+    instead of `{"data": [...]}`. These must be parsed, not dropped with a
+    `'list' object has no attribute 'get'` error."""
+    class _R:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return [{"id": "meta-llama/Llama-3-8b", "object": "model"}]
+    monkeypatch.setattr(server.requests, "get", lambda *a, **kw: _R())
+
+    models = server._fetch_provider_models(
+        "together",
+        {"base_url": "http://upstream.example/v1", "api_key": "x"},
+        timeout=1,
+    )
+    assert models, "bare-list /models payload should yield models"
+    assert models[0]["_upstream_id"] == "meta-llama/Llama-3-8b"
+    assert models[0]["id"] == "together__meta-llama/Llama-3-8b"
+
+
+def test_fetch_failure_logs_status_and_body_without_secrets(server, monkeypatch, caplog):
+    """A failed /models fetch should log the HTTP status, content-type, and a
+    body snippet for diagnosis — but never the Authorization header / api_key."""
+    import requests as _requests
+
+    class _R:
+        status_code = 404
+        headers = {"Content-Type": "text/html"}
+        text = "<html><body>Not Found</body></html>"
+        def raise_for_status(self):
+            raise _requests.HTTPError("404 Client Error: Not Found", response=self)
+        def json(self): return {}
+    monkeypatch.setattr(server.requests, "get", lambda *a, **kw: _R())
+
+    with caplog.at_level("WARNING"):
+        models = server._fetch_provider_models(
+            "github",
+            {"base_url": "http://upstream.example/inference", "api_key": "super-secret-token"},
+            timeout=1,
+        )
+    assert models == []
+    text = caplog.text
+    assert "status=404" in text
+    assert "content_type=text/html" in text
+    assert "Not Found" in text
+    assert "url=http://upstream.example/inference/models" in text
+    # The bearer token must never leak into the logs.
+    assert "super-secret-token" not in text
+    assert "Authorization" not in text
+
+
 def test_virtual_ids_advertised_with_double_underscore(server):
     """Every virtual id in _VIRTUAL_MODELS that the server emits as primary
     (i.e. the NEW set) must start with `llmproxy__`, never `llmproxy/`."""
