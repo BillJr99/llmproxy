@@ -72,6 +72,93 @@ def test_get_provider_helper():
     assert config_mod.get_provider(cfg, "missing") is None
 
 
+def test_heal_adds_models_url_for_github():
+    cfg = {"providers": {"github": {
+        "base_url": "https://models.github.ai/inference",
+        "api_key": "ghp_x",
+        "model_filter": None,
+    }}}
+    cfg, changed, messages = config_mod.heal_config(cfg)
+    assert changed is True
+    assert cfg["providers"]["github"]["models_url"] == "https://models.github.ai/catalog/models"
+    assert any(level == "info" for level, _ in messages)
+
+
+def test_heal_substitutes_account_id_for_cloudflare():
+    cfg = {"providers": {"cloudflare-workers": {
+        "base_url": "https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1",
+        "api_key": "k",
+        "model_filter": None,
+    }}}
+    cfg, changed, _ = config_mod.heal_config(cfg)
+    prov = cfg["providers"]["cloudflare-workers"]
+    assert changed is True
+    assert prov["models_url"] == (
+        "https://api.cloudflare.com/client/v4/accounts/abc123/ai/models/search?per_page=100"
+    )
+    assert prov["models_id_field"] == "name"
+    assert prov["models_keep_task"] == "Text Generation"
+
+
+def test_heal_matches_renamed_provider_by_base_url():
+    cfg = {"providers": {"my-gh": {
+        "base_url": "https://models.github.ai/inference",
+        "api_key": "ghp_x",
+    }}}
+    cfg, changed, _ = config_mod.heal_config(cfg)
+    assert changed is True
+    assert cfg["providers"]["my-gh"]["models_url"] == "https://models.github.ai/catalog/models"
+
+
+def test_heal_warns_when_account_id_unrecoverable():
+    # A cloudflare-workers provider whose base_url doesn't carry a parseable
+    # account id: the static fields heal, but models_url needs {account_id}
+    # we can't recover, so it is warned about rather than fabricated.
+    cfg = {"providers": {"cloudflare-workers": {
+        "base_url": "https://custom.example.com/v1",
+        "api_key": "k",
+    }}}
+    cfg, _, messages = config_mod.heal_config(cfg)
+    prov = cfg["providers"]["cloudflare-workers"]
+    assert "models_url" not in prov
+    assert prov["models_id_field"] == "name"
+    assert any(level == "warning" and "models_url" in text for level, text in messages)
+
+
+def test_heal_never_overwrites_existing_field():
+    cfg = {"providers": {"github": {
+        "base_url": "https://models.github.ai/inference",
+        "api_key": "ghp_x",
+        "models_url": "https://my.custom/models",
+    }}}
+    cfg, changed, _ = config_mod.heal_config(cfg)
+    assert changed is False
+    assert cfg["providers"]["github"]["models_url"] == "https://my.custom/models"
+
+
+def test_heal_is_idempotent():
+    cfg = {"providers": {"github": {
+        "base_url": "https://models.github.ai/inference",
+        "api_key": "ghp_x",
+    }}}
+    cfg, changed1, _ = config_mod.heal_config(cfg)
+    assert changed1 is True
+    cfg, changed2, messages2 = config_mod.heal_config(cfg)
+    assert changed2 is False
+    assert messages2 == []
+
+
+def test_heal_ignores_unknown_provider():
+    cfg = {"providers": {"custom": {
+        "base_url": "https://api.unknown-vendor.example/v1",
+        "api_key": "k",
+    }}}
+    cfg, changed, messages = config_mod.heal_config(cfg)
+    assert changed is False
+    assert messages == []
+    assert "models_url" not in cfg["providers"]["custom"]
+
+
 def test_get_config_path_priority(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("LLMPROXY_CONFIG", str(tmp_path / "env.json"))
     # Explicit override wins over env var
