@@ -15,6 +15,7 @@ from .config import (
     DEFAULT_SERVER_CONFIG,
     RESERVED_PROVIDER_NAMES,
     get_config_path,
+    heal_config,
     load_config,
     save_config,
 )
@@ -928,9 +929,19 @@ def run_setup(config_path: str | None = None) -> None:
     print(f"  Config file: {_ok(str(resolved_path))}")
     print()
 
+    # Backfill template-derived provider fields missing from older configs
+    # (e.g. models_url). Auto-fixes are reported and folded into the pending
+    # changes so they persist on save; fields we can't reconstruct are warned
+    # about so the user can repair them by editing the relevant provider.
+    config, healed, heal_messages = heal_config(config)
+    for level, text in heal_messages:
+        print(_ok(f"  {text}") if level == "info" else _warn(f"  {text}"))
+    if heal_messages:
+        print()
+
     _show_summary(providers, server_cfg)
 
-    modified = False
+    modified = healed
 
     while True:
         print()
