@@ -456,8 +456,11 @@ def _fetch_provider_models_direct(providers: dict) -> list[tuple[str, str]]:
                 uid = m.get(id_field, "")
                 if not uid or (model_filter is not None and uid not in model_filter):
                     continue
-                if keep_task is not None and (m.get("task") or {}).get("name", "").lower() != keep_task.lower():
-                    continue
+                if keep_task is not None:
+                    task = m.get("task")
+                    task_name = task.get("name", "") if isinstance(task, dict) else ""
+                    if task_name.lower() != keep_task.lower():
+                        continue
                 results.append((provider_name, uid))
         except Exception as exc:
             print(_warn(f"  Could not reach '{provider_name}': {exc}"))

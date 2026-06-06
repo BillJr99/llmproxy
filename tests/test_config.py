@@ -159,6 +159,25 @@ def test_heal_ignores_unknown_provider():
     assert "models_url" not in cfg["providers"]["custom"]
 
 
+def test_heal_skips_null_template_field_without_warning(monkeypatch):
+    # A template that carries an explicit null/empty value for a healable field
+    # (copied verbatim from providers.json) must be skipped silently rather than
+    # warned about — there's nothing usable to backfill.
+    monkeypatch.setattr(config_mod._providers, "get_provider_templates", lambda: [
+        {"key": "nullprov", "base_url": "https://api.nullprov.example/v1",
+         "models_url": None, "models_id_field": ""},
+    ])
+    cfg = {"providers": {"nullprov": {
+        "base_url": "https://api.nullprov.example/v1",
+        "api_key": "k",
+    }}}
+    cfg, changed, messages = config_mod.heal_config(cfg)
+    assert changed is False
+    assert messages == []
+    assert "models_url" not in cfg["providers"]["nullprov"]
+    assert "models_id_field" not in cfg["providers"]["nullprov"]
+
+
 def test_get_config_path_priority(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("LLMPROXY_CONFIG", str(tmp_path / "env.json"))
     # Explicit override wins over env var

@@ -376,7 +376,9 @@ def _describe_fetch_failure(url: str, resp: "requests.Response | None") -> str:
             parts.append(f" content_type={content_type}")
         body = (resp.text or "").strip()
         if body:
-            snippet = body[:200].replace("\n", " ")
+            # Collapse every line-break flavour (LF, CR, CRLF) to a single
+            # space so multi-line bodies don't break log formatting.
+            snippet = " ".join(body[:200].splitlines())
             suffix = "…" if len(body) > 200 else ""
             parts.append(f" body={snippet!r}{suffix}")
     parts.append("]")
@@ -386,7 +388,8 @@ def _describe_fetch_failure(url: str, resp: "requests.Response | None") -> str:
 def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int) -> list[dict]:
     """
     Fetch the model list from a single provider, apply any configured filter,
-    and prefix each model ID with '<provider_name>/'.
+    and build a proxy model ID in the '<provider_name>__<upstream_model_id>'
+    format.
 
     Returns an empty list on any failure so that one bad provider does not
     prevent the aggregate response from including all healthy providers.
@@ -424,7 +427,15 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         if isinstance(data, list):
             raw_models = data
         elif isinstance(data, dict):
-            raw_models = data.get("data") or data.get("result") or []
+            # Pick the first key that is actually present rather than the first
+            # truthy value: an upstream that legitimately returns an empty
+            # {"data": []} must not fall through to "result".
+            if "data" in data:
+                raw_models = data["data"]
+            elif "result" in data:
+                raw_models = data["result"]
+            else:
+                raw_models = []
             if not isinstance(raw_models, list):
                 raise ValueError(
                     f"unexpected 'data'/'result' type {type(raw_models).__name__}; "
@@ -462,7 +473,8 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         # Cloudflare's catalog includes Text-to-Image and embedding tasks that
         # cannot serve chat/completions).
         if keep_task is not None:
-            task_name = (model.get("task") or {}).get("name", "")
+            task = model.get("task")
+            task_name = task.get("name", "") if isinstance(task, dict) else ""
             if task_name.lower() != keep_task.lower():
                 logger.info(
                     "  skipping %s/%s (task=%r != %r)",
