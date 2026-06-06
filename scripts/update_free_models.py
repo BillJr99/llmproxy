@@ -316,11 +316,25 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
     # Insert each sidecar provider with its placeholder key.
     for key in order:
         prov = sidecar["providers"][key]
-        providers_block[key] = {
+        block: dict = {
             "base_url": prov["base_url"],
             "api_key": _PLACEHOLDER_KEYS.get(key, "..."),
-            "model_filter": None,
+            # Providers that cannot serve a discovery endpoint advertise models
+            # from an example_model_filter; everyone else allows all (null).
+            "model_filter": list(prov["example_model_filter"])
+            if prov.get("example_model_filter") else None,
         }
+        # Carry forward optional model-discovery overrides (non-standard /models
+        # path, id field, or task filter) so the example documents the working
+        # config for providers like GitHub Models and Cloudflare Workers AI.
+        for field in ("models_url", "models_id_field", "models_keep_task"):
+            if prov.get(field):
+                block[field] = prov[field]
+        # A per-provider note (e.g. auth/credential gotchas) surfaces in the
+        # example as a leading "_note" key, mirroring the top-level convention.
+        if prov.get("_note"):
+            block = {"_note": prov["_note"], **block}
+        providers_block[key] = block
     # ollama is local-only — also a static example.
     providers_block["ollama"] = {
         "base_url": "http://localhost:11434/v1",

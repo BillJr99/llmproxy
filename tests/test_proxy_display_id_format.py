@@ -254,6 +254,71 @@ def test_fetch_failure_logs_status_and_body_without_secrets(server, monkeypatch,
     assert "Authorization" not in text
 
 
+def test_models_url_override_is_used_for_fetch(server, monkeypatch):
+    """When a provider sets models_url, that URL is fetched instead of
+    <base_url>/models (e.g. GitHub serves its catalog at a different path)."""
+    requested = {}
+
+    class _R:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return [{"id": "openai/gpt-4.1", "object": "model"}]
+    def _fake_get(url, *a, **kw):
+        requested["url"] = url
+        return _R()
+    monkeypatch.setattr(server.requests, "get", _fake_get)
+
+    models = server._fetch_provider_models(
+        "github",
+        {
+            "base_url": "https://models.github.ai/inference",
+            "api_key": "x",
+            "models_url": "https://models.github.ai/catalog/models",
+        },
+        timeout=1,
+    )
+    assert requested["url"] == "https://models.github.ai/catalog/models"
+    assert models and models[0]["_upstream_id"] == "openai/gpt-4.1"
+    assert models[0]["id"] == "github__openai/gpt-4.1"
+
+
+def test_models_id_field_and_keep_task_adapt_cloudflare_shape(server, monkeypatch):
+    """Cloudflare's models/search puts the usable id in 'name' (not 'id') and
+    mixes tasks. models_id_field + models_keep_task must read 'name' and drop
+    non-Text-Generation entries."""
+    class _R:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self):
+            return {"success": True, "result": [
+                {"id": "uuid-1", "name": "@cf/meta/llama-3.1-8b-instruct",
+                 "task": {"name": "Text Generation"}},
+                {"id": "uuid-2", "name": "@cf/baai/bge-base-en-v1.5",
+                 "task": {"name": "Text Embeddings"}},
+                {"id": "uuid-3", "name": "@cf/black-forest-labs/flux-1-schnell",
+                 "task": {"name": "Text-to-Image"}},
+            ]}
+    monkeypatch.setattr(server.requests, "get", lambda *a, **kw: _R())
+
+    models = server._fetch_provider_models(
+        "cloudflare-workers",
+        {
+            "base_url": "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1",
+            "api_key": "x",
+            "models_url": "https://api.cloudflare.com/client/v4/accounts/acct/ai/models/search",
+            "models_id_field": "name",
+            "models_keep_task": "Text Generation",
+        },
+        timeout=1,
+    )
+    # Only the Text Generation model survives; its upstream id is the 'name'.
+    upstream = [m["_upstream_id"] for m in models]
+    assert upstream == ["@cf/meta/llama-3.1-8b-instruct"]
+    # Routing keeps the true upstream id; the display id flattens extra slashes.
+    assert models[0]["_route"] == ("cloudflare-workers", "@cf/meta/llama-3.1-8b-instruct")
+    assert models[0]["id"] == "cloudflare-workers__@cf_meta/llama-3.1-8b-instruct"
+
+
 def test_virtual_ids_advertised_with_double_underscore(server):
     """Every virtual id in _VIRTUAL_MODELS that the server emits as primary
     (i.e. the NEW set) must start with `llmproxy__`, never `llmproxy/`."""

@@ -29,7 +29,8 @@
     "github": {
       "base_url": "https://models.github.ai/inference",
       "api_key": "ghp_...",
-      "model_filter": null
+      "model_filter": null,
+      "models_url": "https://models.github.ai/catalog/models"
     },
     "sambanova": {
       "base_url": "https://api.sambanova.ai/v1",
@@ -59,7 +60,10 @@
     "cloudflare-workers": {
       "base_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
       "api_key": "...",
-      "model_filter": null
+      "model_filter": null,
+      "models_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/models/search?per_page=100",
+      "models_id_field": "name",
+      "models_keep_task": "Text Generation"
     },
     "zhipu": {
       "base_url": "https://open.bigmodel.cn/api/paas/v4",
@@ -112,9 +116,14 @@
       "model_filter": null
     },
     "cloudflare-ai-gateway": {
+      "_note": "A 401 'Unauthorized' from /models means the API token is missing, invalid, or under-scoped for this gateway (needs Workers AI access; if the gateway has Authenticated Gateway enabled it also needs a cf-aig-authorization header). The gateway proxies inference only and has no GET /models endpoint, so models are advertised from model_filter below rather than discovered.",
       "base_url": "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai/v1",
       "api_key": "...",
-      "model_filter": null
+      "model_filter": [
+        "@cf/meta/llama-3.1-70b-instruct",
+        "@cf/meta/llama-3.1-8b-instruct",
+        "@cf/mistral/mistral-7b-instruct-v0.1"
+      ]
     },
     "vercel": {
       "base_url": "https://ai-gateway.vercel.sh/v1",

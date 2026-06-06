@@ -267,6 +267,7 @@
       "base_url": "https://models.github.ai/inference",
       "key_required": true,
       "key_hint": "Get a token at github.com/settings/tokens with the 'Models' permission (fine-grained: Models\u2192read)",
+      "models_url": "https://models.github.ai/catalog/models",
       "believed_free": [
         "github/openai/gpt-4o",
         "github/openai/gpt-4o-mini",
@@ -693,6 +694,9 @@
       "account_id_required": true,
       "account_id_label": "Cloudflare Account ID",
       "account_id_hint": "Find your account ID at dash.cloudflare.com (top-right corner)",
+      "models_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/models/search?per_page=100",
+      "models_id_field": "name",
+      "models_keep_task": "Text Generation",
       "believed_free": [
         "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct",
         "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct",
@@ -1005,6 +1009,12 @@
       "gateway_id_required": true,
       "gateway_id_label": "AI Gateway Name",
       "gateway_id_hint": "The name you gave your AI Gateway in the Cloudflare dashboard",
+      "_note": "A 401 'Unauthorized' from /models means the API token is missing, invalid, or under-scoped for this gateway (needs Workers AI access; if the gateway has Authenticated Gateway enabled it also needs a cf-aig-authorization header). The gateway proxies inference only and has no GET /models endpoint, so models are advertised from model_filter below rather than discovered.",
+      "example_model_filter": [
+        "@cf/meta/llama-3.1-70b-instruct",
+        "@cf/meta/llama-3.1-8b-instruct",
+        "@cf/mistral/mistral-7b-instruct-v0.1"
+      ],
       "believed_free": [
         "cloudflare-ai-gateway/@cf/meta/llama-3.1-70b-instruct",
         "cloudflare-ai-gateway/@cf/meta/llama-3.1-8b-instruct",

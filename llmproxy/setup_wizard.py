@@ -395,6 +395,21 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
         "api_key": api_key,
         "model_filter": None,
     }
+    # Carry forward optional model-discovery overrides for providers whose
+    # /models endpoint lives at a non-standard path / shape (e.g. GitHub's
+    # catalog, Cloudflare's models/search). Substitute the same account/gateway
+    # ids that were resolved into the base URL above.
+    if tmpl.get("models_url"):
+        models_url = tmpl["models_url"]
+        if tmpl.get("account_id_required"):
+            models_url = models_url.replace("{account_id}", account_id)
+        if tmpl.get("gateway_id_required"):
+            models_url = models_url.replace("{gateway_id}", gateway_id)
+        cfg["models_url"] = models_url
+    if tmpl.get("models_id_field"):
+        cfg["models_id_field"] = tmpl["models_id_field"]
+    if tmpl.get("models_keep_task"):
+        cfg["models_keep_task"] = tmpl["models_keep_task"]
     return provider_key, cfg
 
 
@@ -418,9 +433,15 @@ def _fetch_provider_models_direct(providers: dict) -> list[tuple[str, str]]:
         base_url = provider_cfg.get("base_url", "").rstrip("/")
         api_key = provider_cfg.get("api_key", "")
         model_filter = provider_cfg.get("model_filter")
+        # Honor the same per-provider discovery overrides the server uses, so
+        # providers with a non-standard catalog (GitHub, Cloudflare Workers AI)
+        # show up in the picker too.
+        url = provider_cfg.get("models_url") or f"{base_url}/models"
+        id_field = provider_cfg.get("models_id_field") or "id"
+        keep_task = provider_cfg.get("models_keep_task")
         try:
             resp = _requests.get(
-                f"{base_url}/models",
+                url,
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
@@ -429,10 +450,14 @@ def _fetch_provider_models_direct(providers: dict) -> list[tuple[str, str]]:
             )
             resp.raise_for_status()
             body = resp.json()
-            for m in (body.get("data") or body.get("result", [])):
-                uid = m.get("id", "")
-                if uid and (model_filter is None or uid in model_filter):
-                    results.append((provider_name, uid))
+            raw = body if isinstance(body, list) else (body.get("data") or body.get("result", []))
+            for m in raw:
+                uid = m.get(id_field, "")
+                if not uid or (model_filter is not None and uid not in model_filter):
+                    continue
+                if keep_task is not None and (m.get("task") or {}).get("name", "").lower() != keep_task.lower():
+                    continue
+                results.append((provider_name, uid))
         except Exception as exc:
             print(_warn(f"  Could not reach '{provider_name}': {exc}"))
             if model_filter:

@@ -392,7 +392,20 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
     prevent the aggregate response from including all healthy providers.
     """
     base_url = provider_cfg.get("base_url", "").rstrip("/")
-    url = f"{base_url}/models"
+    # Most providers list models at <base_url>/models. A few expose the catalog
+    # at a different path entirely (e.g. GitHub Models serves chat at
+    # /inference/chat/completions but the catalog at /catalog/models; Cloudflare
+    # Workers AI has no GET /v1/models and lists at /ai/models/search). Allow a
+    # per-provider override so those upstreams can still be discovered.
+    url = provider_cfg.get("models_url") or f"{base_url}/models"
+    # Field on each model object that carries the upstream model id. Defaults to
+    # the OpenAI "id"; Cloudflare's /ai/models/search puts the usable id (the
+    # "@cf/..." name) in "name" and reserves "id" for an internal UUID.
+    id_field = provider_cfg.get("models_id_field") or "id"
+    # Optional task filter: when set, keep only models whose task.name matches
+    # (case-insensitive). Cloudflare's catalog mixes Text Generation, embeddings,
+    # image, etc. into one list; this restricts it to chat-capable models.
+    keep_task = provider_cfg.get("models_keep_task")
     headers = {
         "Authorization": f"Bearer {provider_cfg.get('api_key', '')}",
         "Content-Type": "application/json",
@@ -405,8 +418,8 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         data = resp.json()
         # Normalize the various shapes upstreams return for /models:
         #   - OpenAI style: {"data": [...]}
-        #   - some gateways: {"result": [...]}
-        #   - Together and a few others return a bare JSON array: [...]
+        #   - Cloudflare / some gateways: {"result": [...]}
+        #   - Together, GitHub catalog, and others return a bare JSON array: [...]
         raw_models: list[dict]
         if isinstance(data, list):
             raw_models = data
@@ -437,14 +450,25 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
             "synthesizing %d model(s) from model_filter",
             provider_name, len(model_filter),
         )
-        raw_models = [{"id": uid, "object": "model"} for uid in model_filter]
+        raw_models = [{id_field: uid, "object": "model"} for uid in model_filter]
     model_filter = provider_cfg.get("model_filter")
 
     result = []
     for model in raw_models:
-        upstream_id: str = model.get("id", "")
+        upstream_id: str = model.get(id_field, "")
         if model_filter is not None and upstream_id not in model_filter:
             continue
+        # Drop models whose task doesn't match the configured filter (e.g.
+        # Cloudflare's catalog includes Text-to-Image and embedding tasks that
+        # cannot serve chat/completions).
+        if keep_task is not None:
+            task_name = (model.get("task") or {}).get("name", "")
+            if task_name.lower() != keep_task.lower():
+                logger.info(
+                    "  skipping %s/%s (task=%r != %r)",
+                    provider_name, upstream_id, task_name, keep_task,
+                )
+                continue
         # Skip embedding models — clients that validate modalities (e.g.
         # opencode) reject "embedding" as an output type, and these models
         # cannot be used for chat/completions anyway.  Check the modalities

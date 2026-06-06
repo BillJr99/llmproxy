@@ -37,6 +37,11 @@ _TEMPLATE_FIELDS = frozenset({
     "gateway_id_required",
     "gateway_id_label",
     "gateway_id_hint",
+    # Optional model-discovery overrides for providers whose /models endpoint
+    # is non-standard (different path, different id field, or mixed tasks).
+    "models_url",
+    "models_id_field",
+    "models_keep_task",
 })
 
 # Fields that belong to the free-tier metadata view.
