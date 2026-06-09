@@ -30,7 +30,13 @@ import os
 import tempfile
 
 from . import __version__
-from .config import get_config_path, heal_config, load_config, save_config
+from .config import (
+    get_config_path,
+    heal_config,
+    load_config,
+    resolve_env_refs,
+    save_config,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -192,8 +198,12 @@ def main() -> None:
     # Report the web admin UI status and warn about insecure exposure.
     admin_cfg = config.get("admin", {})
     if admin_cfg.get("enabled", True) is not False:
+        # Resolve the token the same way the admin API does (env override first,
+        # then a config value that may itself be a ${VAR} reference) so the log
+        # and the non-loopback warning reflect the effective auth state.
         token_set = bool(
-            os.environ.get("LLMPROXY_ADMIN_TOKEN") or admin_cfg.get("token")
+            os.environ.get("LLMPROXY_ADMIN_TOKEN")
+            or resolve_env_refs(admin_cfg.get("token"))
         )
         log.info(
             "Web admin UI enabled at http://%s:%d/admin (auth: %s)",

@@ -272,10 +272,10 @@ def _upstream_headers(provider_cfg: dict) -> dict:
     client-supplied headers are forwarded where the upstream is likely to
     consume them (e.g., HTTP-Referer for OpenRouter rate-limit attribution).
     """
-    headers = {
-        "Authorization": f"Bearer {provider_api_key(provider_cfg)}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
+    api_key = provider_api_key(provider_cfg)
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     for header in _FORWARDED_REQUEST_HEADERS - {"Content-Type"}:
         value = request.headers.get(header)
         if value:
@@ -412,10 +412,10 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
     # (case-insensitive). Cloudflare's catalog mixes Text Generation, embeddings,
     # image, etc. into one list; this restricts it to chat-capable models.
     keep_task = provider_cfg.get("models_keep_task")
-    headers = {
-        "Authorization": f"Bearer {provider_api_key(provider_cfg)}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
+    api_key = provider_api_key(provider_cfg)
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     resp = None
     try:
@@ -665,10 +665,11 @@ def _sync_local_provider_models_once() -> None:
         for provider_key, provider_cfg in local_providers.items():
             base_url = provider_base_url(provider_cfg)
             api_key = provider_api_key(provider_cfg)
+            local_headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
             try:
                 resp = requests.get(
                     f"{base_url}/models",
-                    headers={"Authorization": f"Bearer {api_key}"},
+                    headers=local_headers,
                     timeout=8,
                 )
                 resp.raise_for_status()
@@ -2181,9 +2182,8 @@ def passthrough(subpath: str) -> Response:
 
         base_url = provider_base_url(provider_cfg)
         url = f"{base_url}/{subpath}"
-        headers = {
-            "Authorization": f"Bearer {provider_api_key(provider_cfg)}",
-        }
+        api_key = provider_api_key(provider_cfg)
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         params = {k: v for k, v in request.args.items() if k != "provider"}
         try:
             resp = requests.request(

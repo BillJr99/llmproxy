@@ -98,3 +98,26 @@ def test_token_from_env_reference(monkeypatch, tmp_path):
     resp = c.get("/admin/api/config", headers={"X-Admin-Token": "viaref"},
                  environ_base={"REMOTE_ADDR": "8.8.8.8"})
     assert resp.status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# Reverse-proxy footgun: a loopback remote_addr with forwarding headers must
+# not be trusted as local when no token is configured.
+
+def test_forwarded_header_denied_without_token(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)  # remote_addr defaults to 127.0.0.1
+    resp = c.get("/admin/api/config", headers={"X-Forwarded-For": "8.8.8.8"})
+    assert resp.status_code == 403
+
+
+def test_real_ip_header_denied_without_token(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    resp = c.get("/admin/api/config", headers={"X-Real-IP": "8.8.8.8"})
+    assert resp.status_code == 403
+
+
+def test_forwarded_with_token_allowed(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path, admin_block={"enabled": True, "token": "s3cret"})
+    resp = c.get("/admin/api/config",
+                 headers={"X-Forwarded-For": "8.8.8.8", "X-Admin-Token": "s3cret"})
+    assert resp.status_code == 200

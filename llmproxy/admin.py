@@ -30,6 +30,7 @@ masked. ``${VAR}`` references are not secret and are returned as-is so the UI ca
 display and round-trip them.
 """
 
+import contextlib
 import hmac
 import ipaddress
 import os
@@ -40,6 +41,7 @@ from flask import Blueprint, jsonify, request, send_from_directory
 from . import providers as _providers
 from .config import (
     RESERVED_PROVIDER_NAMES,
+    get_config_path,
     get_provider,
     heal_config,
     load_config,
@@ -50,6 +52,16 @@ from .config import (
     value_has_env_ref,
 )
 
+try:
+    import fcntl  # POSIX advisory file locking
+except ImportError:  # pragma: no cover - non-POSIX (e.g. Windows)
+    fcntl = None
+
+# Headers a reverse proxy adds when forwarding a request. Their presence means
+# request.remote_addr is the proxy, not the real client, so a 127.0.0.1
+# remote_addr can no longer be trusted as "local" for the tokenless gate.
+_FORWARDING_HEADERS = ("X-Forwarded-For", "X-Real-IP", "Forwarded", "X-Forwarded-Host")
+
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static", "admin")
 
 bp = Blueprint(
@@ -59,10 +71,43 @@ bp = Blueprint(
     static_url_path="/admin/static",
 )
 
-# Serializes the read-modify-write cycle of config edits within a worker so two
-# concurrent admin requests cannot clobber each other's sub-tree updates. (Across
-# workers, save_config writes atomically and load_config re-reads on mtime change.)
+# Serializes the read-modify-write cycle of config edits. The threading lock
+# covers concurrent requests within one gunicorn worker; the fcntl advisory lock
+# (see _locked) covers concurrent requests across workers, so two workers cannot
+# each load an old snapshot, mutate different subtrees, and clobber each other on
+# save (lost updates).
 _write_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def _locked():
+    """Acquire the in-process lock and a cross-process advisory file lock around
+    a config read-modify-write. Falls back to the thread lock alone where fcntl
+    is unavailable (non-POSIX)."""
+    _write_lock.acquire()
+    try:
+        if fcntl is None:
+            yield
+            return
+        lock_path = str(get_config_path()) + ".lock"
+        try:
+            os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+            handle = open(lock_path, "w")
+        except OSError:
+            # If the lock file can't be created, degrade to the thread lock only
+            # rather than blocking all admin writes.
+            yield
+            return
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                handle.close()
+    finally:
+        _write_lock.release()
 
 # Provider fields the admin API accepts/persists. Anything else is ignored on
 # write so the UI cannot inject arbitrary keys.
@@ -159,15 +204,24 @@ def _require_auth():
             return None
         return jsonify({"error": "Missing or invalid admin token."}), 401
 
-    # No token configured: loopback-only.
-    if _is_loopback(request.remote_addr):
+    # No token configured: loopback-only. A request that arrived through a
+    # reverse proxy carries forwarding headers, in which case remote_addr is the
+    # proxy (often 127.0.0.1) and cannot be trusted as "local" — require a token
+    # instead of silently exposing the API to forwarded external clients.
+    forwarded = any(request.headers.get(h) for h in _FORWARDING_HEADERS)
+    if not forwarded and _is_loopback(request.remote_addr):
         return None
+    detail = (
+        " This request arrived via a reverse proxy (forwarding headers present);"
+        " set an admin token to allow proxied/remote access."
+        if forwarded else ""
+    )
     return (
         jsonify({
             "error": (
                 "Admin API is restricted to localhost. Set an admin token "
                 "(LLMPROXY_ADMIN_TOKEN env var or config['admin']['token']) to "
-                "allow remote access."
+                "allow remote access." + detail
             )
         }),
         403,
@@ -319,7 +373,7 @@ def api_put_server():
     if not isinstance(payload, dict):
         return _err("Request body must be a JSON object.")
 
-    with _write_lock:
+    with _locked():
         config = _load()
         server = dict(config.get("server", {}))
 
@@ -388,7 +442,7 @@ def api_create_provider():
     if name in RESERVED_PROVIDER_NAMES:
         return _err(f"'{name}' is a reserved provider name.", 409)
 
-    with _write_lock:
+    with _locked():
         config = _load()
         if get_provider(config, name) is not None:
             return _err(f"Provider '{name}' already exists.", 409)
@@ -409,7 +463,7 @@ def api_update_provider(name: str):
     if name in RESERVED_PROVIDER_NAMES:
         return _err(f"'{name}' is a reserved provider name.", 409)
 
-    with _write_lock:
+    with _locked():
         config = _load()
         existing = get_provider(config, name)
         if existing is None:
@@ -425,7 +479,7 @@ def api_update_provider(name: str):
 
 @bp.route("/admin/api/providers/<name>", methods=["DELETE"])
 def api_delete_provider(name: str):
-    with _write_lock:
+    with _locked():
         config = _load()
         if get_provider(config, name) is None:
             return _err(f"Unknown provider '{name}'.", 404)
@@ -490,7 +544,7 @@ def api_provider_from_template():
         if template.get(field):
             cfg[field] = _substitute_placeholders(template[field], subs)
 
-    with _write_lock:
+    with _locked():
         config = _load()
         if get_provider(config, name) is not None:
             return _err(f"Provider '{name}' already exists.", 409)
@@ -562,7 +616,7 @@ def _put_section(key: str, validate):
     error = validate(payload)
     if error:
         return _err(error)
-    with _write_lock:
+    with _locked():
         config = _load()
         config[key] = payload
         if not _save(config):
@@ -723,7 +777,7 @@ def _capability_models(capabilities: dict) -> set:
 
 @bp.route("/admin/api/heal", methods=["POST"])
 def api_heal():
-    with _write_lock:
+    with _locked():
         config = _load()
         healed, changed, messages = heal_config(config)
         if changed:

@@ -69,3 +69,34 @@ def test_on_disk_config_still_holds_reference(server_mod):
     cfg = server_mod.load_config()["providers"]["envprov"]
     assert cfg["base_url"] == "https://${UPSTREAM_HOST}/v1"
     assert cfg["api_key"] == "${UPSTREAM_KEY}"
+
+
+def test_fetch_models_omits_auth_header_when_no_key(server_mod, monkeypatch):
+    """A keyless (e.g. local) provider must not send 'Authorization: Bearer '."""
+    captured = {}
+
+    def fake_get(url, headers=None, timeout=None):
+        captured["headers"] = headers or {}
+        return _FakeResp()
+
+    monkeypatch.setattr(server_mod.requests, "get", fake_get)
+    cfg = {"base_url": "http://localhost:11434/v1", "model_filter": None}
+    server_mod._fetch_provider_models("local", cfg, timeout=5)
+    assert "Authorization" not in captured["headers"]
+
+
+def test_upstream_headers_omit_auth_when_no_key(server_mod):
+    with server_mod.app.test_request_context("/"):
+        headers = server_mod._upstream_headers({"base_url": "http://x/v1"})
+    assert "Authorization" not in headers
+
+    with server_mod.app.test_request_context("/"):
+        headers2 = server_mod._upstream_headers({"api_key": "k"})
+    assert headers2["Authorization"] == "Bearer k"
+
+
+def test_upstream_headers_resolve_env_key(server_mod, monkeypatch):
+    monkeypatch.setenv("UPSTREAM_KEY", "sk-runtime-secret")
+    with server_mod.app.test_request_context("/"):
+        headers = server_mod._upstream_headers({"api_key": "${UPSTREAM_KEY}"})
+    assert headers["Authorization"] == "Bearer sk-runtime-secret"

@@ -182,6 +182,12 @@
 "use strict";
 const $ = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+// Escape user-controlled strings before they go into innerHTML templates.
+// Provider names, base_urls, model ids, etc. all come from config/user input.
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c =>
+    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+}
 const TOKEN_KEY = "llmproxy_admin_token";
 
 let META = { valid_reasoning_levels: ["exploratory","standard","deep"], valid_capabilities: ["tools","vision","reasoning","json"], free_limit_keys: ["requests_per_minute","requests_per_day","tokens_per_minute","tokens_per_day"], reserved_provider_names: ["llmproxy"] };
@@ -253,16 +259,16 @@ $("#sv-save").addEventListener("click", async () => {
 let TEMPLATES = [];
 function renderTemplateSelect() {
   const sel = $("#tpl-select");
-  sel.innerHTML = TEMPLATES.map(t => `<option value="${t.key}">${t.display || t.key}</option>`).join("");
+  sel.innerHTML = TEMPLATES.map(t => `<option value="${esc(t.key)}">${esc(t.display || t.key)}</option>`).join("");
   renderTemplateExtra();
 }
 function currentTemplate() { return TEMPLATES.find(t => t.key === $("#tpl-select").value); }
 function renderTemplateExtra() {
   const t = currentTemplate(); const box = $("#tpl-extra"); box.innerHTML = "";
   if (!t) return;
-  if (t.account_id_required) box.innerHTML += `<label>${t.account_id_label || "Account ID"}</label><input type="text" id="tpl-account_id" placeholder="${t.account_id_hint||""}" />`;
-  if (t.gateway_id_required) box.innerHTML += `<label>${t.gateway_id_label || "Gateway ID"}</label><input type="text" id="tpl-gateway_id" placeholder="${t.gateway_id_hint||""}" />`;
-  if (t.key_hint) box.innerHTML += `<p class="muted">${t.key_hint}</p>`;
+  if (t.account_id_required) box.innerHTML += `<label>${esc(t.account_id_label || "Account ID")}</label><input type="text" id="tpl-account_id" placeholder="${esc(t.account_id_hint||"")}" />`;
+  if (t.gateway_id_required) box.innerHTML += `<label>${esc(t.gateway_id_label || "Gateway ID")}</label><input type="text" id="tpl-gateway_id" placeholder="${esc(t.gateway_id_hint||"")}" />`;
+  if (t.key_hint) box.innerHTML += `<p class="muted">${esc(t.key_hint)}</p>`;
 }
 $("#tpl-select").addEventListener("change", renderTemplateExtra);
 $("#tpl-add").addEventListener("click", async () => {
@@ -298,18 +304,18 @@ function renderProviderCard(name, p, isNew) {
   const keyPill = p.api_key_is_env ? `<span class="pill env">env</span>` : (p.api_key_set ? `<span class="pill">key set</span>` : `<span class="pill">no key</span>`);
   const baseEnvPill = p.base_url_is_env ? `<span class="pill env">env</span>` : "";
   card.innerHTML = `
-    <h3>${name} ${keyPill}</h3>
+    <h3>${esc(name)} ${keyPill}</h3>
     <label>Base URL ${baseEnvPill} <span class="muted">(literal or <code>\${ENV_VAR}</code>)</span></label>
-    <input type="text" data-f="base_url" value="${p.base_url ? String(p.base_url).replace(/"/g,'&quot;') : ""}" />
+    <input type="text" data-f="base_url" value="${esc(p.base_url || "")}" />
     <label>API key <span class="muted">(blank = keep current; paste a key or <code>\${ENV_VAR}</code>)</span></label>
-    <input type="text" data-f="api_key" placeholder="${p.api_key_set ? (p.api_key || '•••• (unchanged)') : 'no key'}" />
+    <input type="text" data-f="api_key" placeholder="${esc(p.api_key_set ? (p.api_key || '•••• (unchanged)') : 'no key')}" />
     <div class="row3">
-      <div><label>models_url</label><input type="text" data-f="models_url" value="${p.models_url||""}" /></div>
-      <div><label>models_id_field</label><input type="text" data-f="models_id_field" value="${p.models_id_field||""}" /></div>
-      <div><label>models_keep_task</label><input type="text" data-f="models_keep_task" value="${p.models_keep_task||""}" /></div>
+      <div><label>models_url</label><input type="text" data-f="models_url" value="${esc(p.models_url||"")}" /></div>
+      <div><label>models_id_field</label><input type="text" data-f="models_id_field" value="${esc(p.models_id_field||"")}" /></div>
+      <div><label>models_keep_task</label><input type="text" data-f="models_keep_task" value="${esc(p.models_keep_task||"")}" /></div>
     </div>
     <label>Model filter <span class="muted">(comma-separated upstream ids; blank = allow all)</span></label>
-    <input type="text" data-f="model_filter" value="${Array.isArray(p.model_filter)?p.model_filter.join(', '):''}" />
+    <input type="text" data-f="model_filter" value="${esc(Array.isArray(p.model_filter)?p.model_filter.join(', '):'')}" />
     <label class="switch" style="margin-top:12px"><input type="checkbox" data-f="expose_to_virtual_models" ${p.expose_to_virtual_models===false?"":"checked"} /> Expose to virtual endpoints</label>
     <div class="actions">
       <button class="btn primary" data-act="save">${isNew?"Create":"Save"}</button>
@@ -379,10 +385,10 @@ function renderModels() {
     const caps = CATS.model_capabilities[m] || [];
     const free = CATS.believed_free.includes(m);
     row.innerHTML = `
-      <code>${m}</code>
+      <code>${esc(m)}</code>
       <label class="switch"><input type="checkbox" data-free ${free?"checked":""}/> free</label>
-      <select data-lvl><option value="">— reasoning —</option>${META.valid_reasoning_levels.map(l=>`<option ${l===lvl?"selected":""}>${l}</option>`).join("")}</select>
-      <span class="inline">${META.valid_capabilities.map(c=>`<label class="switch"><input type="checkbox" data-cap="${c}" ${caps.includes(c)?"checked":""}/>${c}</label>`).join(" ")}</span>`;
+      <select data-lvl><option value="">— reasoning —</option>${META.valid_reasoning_levels.map(l=>`<option ${l===lvl?"selected":""}>${esc(l)}</option>`).join("")}</select>
+      <span class="inline">${META.valid_capabilities.map(c=>`<label class="switch"><input type="checkbox" data-cap="${esc(c)}" ${caps.includes(c)?"checked":""}/>${esc(c)}</label>`).join(" ")}</span>`;
     row.querySelector("[data-free]").addEventListener("change", e => {
       if (e.target.checked) { if (!CATS.believed_free.includes(m)) CATS.believed_free.push(m); }
       else CATS.believed_free = CATS.believed_free.filter(x => x !== m);
@@ -415,9 +421,9 @@ async function loadVirtual() {
     if (!r.virtual_models.length) { box.innerHTML = `<p class="muted">No virtual endpoints yet — tag some models first.</p>`; return; }
     box.innerHTML = r.virtual_models.map(v => `
       <div class="vm">
-        <div><code class="id">${v.id}</code></div>
-        <div class="muted">${v.description}</div>
-        <div>${(v.backing||[]).map(b=>`<span class="chip">${b}</span>`).join("") || '<span class="muted">—</span>'}</div>
+        <div><code class="id">${esc(v.id)}</code></div>
+        <div class="muted">${esc(v.description)}</div>
+        <div>${(v.backing||[]).map(b=>`<span class="chip">${esc(b)}</span>`).join("") || '<span class="muted">—</span>'}</div>
       </div>`).join("");
   } catch (e) { $("#vm-list").innerHTML = `<p class="muted">${e.message}</p>`; }
 }
