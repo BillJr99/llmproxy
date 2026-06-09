@@ -151,6 +151,17 @@ def _admin_block(config: dict) -> dict:
 
 
 def _admin_enabled(config: dict) -> bool:
+    """Whether the admin UI/API is enabled.
+
+    An ``LLMPROXY_ADMIN_ENABLED`` environment variable (set by the ``--admin`` /
+    ``--no-admin`` CLI flags) takes precedence over the config value, mirroring
+    how ``LLMPROXY_CONFIG`` propagates the ``--config`` override. This is what
+    makes the CLI toggle reach the blueprint, which reads config from disk on
+    every request rather than from the in-memory startup config.
+    """
+    env = os.environ.get("LLMPROXY_ADMIN_ENABLED")
+    if env is not None:
+        return env.strip().lower() not in ("0", "false", "no", "off", "")
     return _admin_block(config).get("enabled", True) is not False
 
 

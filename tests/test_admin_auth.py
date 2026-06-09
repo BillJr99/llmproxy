@@ -90,6 +90,23 @@ def test_disabled_admin_api_404(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# LLMPROXY_ADMIN_ENABLED env override (set by --admin / --no-admin) must reach
+# the blueprint, which reads config from disk per request.
+
+def test_env_disable_overrides_enabled_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("LLMPROXY_ADMIN_ENABLED", "0")
+    c = _client(monkeypatch, tmp_path, admin_block={"enabled": True})
+    assert c.get("/admin/api/config").status_code == 404
+    assert c.get("/admin").status_code == 404
+
+
+def test_env_enable_overrides_disabled_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("LLMPROXY_ADMIN_ENABLED", "1")
+    c = _client(monkeypatch, tmp_path, admin_block={"enabled": False})
+    assert c.get("/admin/api/config").status_code == 200
+
+
+# --------------------------------------------------------------------------- #
 # Config token may itself be an env reference
 
 def test_token_from_env_reference(monkeypatch, tmp_path):

@@ -96,14 +96,16 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="admin",
         action="store_true",
         default=None,
-        help="Enable the web admin UI at /admin (overrides config).",
+        help="Enable the web admin UI at /admin (sets LLMPROXY_ADMIN_ENABLED=1, "
+             "overriding config).",
     )
     admin_group.add_argument(
         "--no-admin",
         dest="admin",
         action="store_false",
         default=None,
-        help="Disable the web admin UI (overrides config).",
+        help="Disable the web admin UI (sets LLMPROXY_ADMIN_ENABLED=0, "
+             "overriding config).",
     )
     parser.add_argument(
         "--version",
@@ -179,7 +181,10 @@ def main() -> None:
     if args.log_level is not None:
         server_cfg["log_level"] = args.log_level
     if args.admin is not None:
-        config.setdefault("admin", {})["enabled"] = args.admin
+        # Propagate the toggle through the environment (like LLMPROXY_CONFIG for
+        # --config) rather than mutating the in-memory config, which the admin
+        # blueprint never reads — it reloads config from disk on every request.
+        os.environ["LLMPROXY_ADMIN_ENABLED"] = "1" if args.admin else "0"
 
     log_level = server_cfg.get("log_level", "INFO").upper()
     logging.basicConfig(
@@ -195,9 +200,12 @@ def main() -> None:
     log = logging.getLogger("llmproxy")
     log.info("Config: %s", config_path)
 
-    # Report the web admin UI status and warn about insecure exposure.
+    # Report the web admin UI status and warn about insecure exposure. Use the
+    # blueprint's own predicate (which honors LLMPROXY_ADMIN_ENABLED) so the log
+    # cannot diverge from what the server actually enforces per request.
+    from .admin import _admin_enabled
     admin_cfg = config.get("admin", {})
-    if admin_cfg.get("enabled", True) is not False:
+    if _admin_enabled(config):
         # Resolve the token the same way the admin API does (env override first,
         # then a config value that may itself be a ${VAR} reference) so the log
         # and the non-loopback warning reflect the effective auth state.
