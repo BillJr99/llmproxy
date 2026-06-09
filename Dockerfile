@@ -30,6 +30,14 @@
 # After setup, restart the running container to pick up host/port changes:
 #   docker restart llmproxy
 #
+# Web admin UI: available on the same published port at /admin (e.g.
+# http://localhost:8080/admin). The admin API serves loopback-only unless an
+# admin token is set; since the container binds 0.0.0.0, pass a token to use it
+# remotely:  -e LLMPROXY_ADMIN_TOKEN=choose-a-strong-token
+# Provider api_key / base_url may use ${VAR} env references (e.g.
+# "api_key": "${OPENAI_API_KEY}") resolved at request time, so pass secrets via
+# -e rather than baking them into the bind-mounted config.json.
+#
 # Named-volume alternative (config stays inside Docker, not on the host
 # filesystem — useful for CI or rootless environments). Mount over the
 # default config location under the non-root user's home:

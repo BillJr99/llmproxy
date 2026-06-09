@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>llmproxy · admin</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1c2430; --muted: #6b7685;
+    --border: #e3e7ec; --accent: #4f63d2; --accent-ink: #ffffff;
+    --ok: #1f9d57; --warn: #c2820a; --danger: #d24b4b; --chip: #eef1f8;
+    --shadow: 0 1px 2px rgba(20,30,48,.06), 0 4px 16px rgba(20,30,48,.06);
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11151b; --panel: #181d25; --ink: #e7ecf2; --muted: #93a0b0;
+      --border: #2a323d; --accent: #6c7ff0; --accent-ink: #ffffff;
+      --chip: #222a35; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.3);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header.top {
+    display: flex; align-items: center; gap: 14px; padding: 14px 22px;
+    background: var(--panel); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5;
+  }
+  header.top h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
+  header.top .brand { font-weight: 700; color: var(--accent); }
+  header.top .spacer { flex: 1; }
+  .tabbar { display: flex; gap: 4px; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  .tabbar button {
+    border: 0; background: none; color: var(--muted); padding: 12px 16px; font-size: 14px;
+    cursor: pointer; border-bottom: 2px solid transparent; font-weight: 600;
+  }
+  .tabbar button.active { color: var(--ink); border-bottom-color: var(--accent); }
+  main { max-width: 1040px; margin: 0 auto; padding: 24px 18px 80px; }
+  section.tab { display: none; }
+  section.tab.active { display: block; }
+  h2 { font-size: 16px; margin: 4px 0 14px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 18px; margin-bottom: 16px;
+  }
+  .card h3 { margin: 0 0 12px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin: 10px 0 4px; text-transform: uppercase; letter-spacing: .4px; }
+  input[type=text], input[type=password], input[type=number], select, textarea {
+    width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg); color: var(--ink); font: inherit;
+  }
+  textarea { resize: vertical; min-height: 64px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .row4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 720px) { .row, .row3, .row4 { grid-template-columns: 1fr; } }
+  button.btn {
+    border: 1px solid var(--border); background: var(--panel); color: var(--ink);
+    padding: 9px 14px; border-radius: 8px; cursor: pointer; font: inherit; font-weight: 600;
+  }
+  button.btn:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.danger { color: var(--danger); border-color: var(--danger); }
+  button.btn:disabled { opacity: .5; cursor: default; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; background: var(--chip); border-radius: 999px; padding: 3px 10px; font-size: 12px; margin: 2px; }
+  .chip button { border: 0; background: none; cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); font-weight: 700; }
+  .pill.env { color: var(--accent); }
+  .toast {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: var(--bg); padding: 10px 18px; border-radius: 8px;
+    box-shadow: var(--shadow); opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 50; max-width: 90vw;
+  }
+  .toast.show { opacity: 1; }
+  .toast.err { background: var(--danger); color: #fff; }
+  .inline { display: flex; align-items: center; gap: 8px; }
+  .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+  .grid-models { display: grid; gap: 8px; }
+  .model-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+  .model-row code { font-size: 13px; word-break: break-all; }
+  details summary { cursor: pointer; font-weight: 600; }
+  .vm { border-left: 3px solid var(--accent); padding-left: 12px; margin-bottom: 14px; }
+  .vm code.id { font-size: 14px; font-weight: 700; }
+  a { color: var(--accent); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1><span class="brand">llmproxy</span> admin</h1>
+  <div class="spacer"></div>
+  <span id="authState" class="pill">…</span>
+  <button class="btn" id="tokenBtn">Set token</button>
+</header>
+
+<nav class="tabbar">
+  <button data-tab="server" class="active">Server</button>
+  <button data-tab="providers">Providers</button>
+  <button data-tab="models">Models &amp; Categorizations</button>
+  <button data-tab="virtual">Virtual Endpoints</button>
+</nav>
+
+<main>
+  <!-- SERVER -->
+  <section class="tab active" id="tab-server">
+    <h2>Server settings</h2>
+    <div class="card">
+      <div class="row">
+        <div><label>Host</label><input type="text" id="sv-host" /></div>
+        <div><label>Port</label><input type="number" id="sv-port" /></div>
+      </div>
+      <div class="row3">
+        <div><label>Log level</label>
+          <select id="sv-log_level">
+            <option>DEBUG</option><option>INFO</option><option>WARNING</option><option>ERROR</option>
+          </select>
+        </div>
+        <div><label>Request timeout (s)</label><input type="number" id="sv-request_timeout" /></div>
+        <div><label>Stream timeout (s)</label><input type="number" id="sv-stream_timeout" /></div>
+      </div>
+      <div class="row">
+        <div><label>Response cache TTL (s)</label><input type="number" id="sv-response_cache_ttl" /></div>
+        <div><label>Models cache TTL (s)</label><input type="number" id="sv-models_cache_ttl" /></div>
+      </div>
+      <div class="actions"><button class="btn primary" id="sv-save">Save server settings</button></div>
+      <p class="muted">Host/port changes take effect on the next restart.</p>
+    </div>
+  </section>
+
+  <!-- PROVIDERS -->
+  <section class="tab" id="tab-providers">
+    <h2>Providers</h2>
+    <div class="card">
+      <h3>Add from template</h3>
+      <div class="row">
+        <div><label>Template</label><select id="tpl-select"></select></div>
+        <div><label>Name</label><input type="text" id="tpl-name" placeholder="(defaults to template key)" /></div>
+      </div>
+      <div id="tpl-extra"></div>
+      <div><label>API key (optional · paste a key or a <code>${ENV_VAR}</code> reference)</label>
+        <input type="text" id="tpl-key" placeholder="sk-…  or  ${OPENAI_API_KEY}" /></div>
+      <div class="actions">
+        <button class="btn primary" id="tpl-add">Add provider</button>
+        <button class="btn" id="prov-blank">Add blank provider</button>
+      </div>
+    </div>
+    <div id="provider-list"></div>
+  </section>
+
+  <!-- MODELS -->
+  <section class="tab" id="tab-models">
+    <h2>Models &amp; Categorizations</h2>
+    <div class="card">
+      <div class="inline" style="justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+        <div class="muted">Tag models to drive the <code>llmproxy__*</code> virtual endpoints. Discovery queries each provider's <code>/models</code>.</div>
+        <button class="btn" id="discover">Discover models</button>
+      </div>
+      <input type="text" id="model-filter" placeholder="Filter models…" style="margin-top:12px" />
+      <div id="model-grid" class="grid-models" style="margin-top:12px"></div>
+      <div class="actions"><button class="btn primary" id="save-cats">Save categorizations</button></div>
+    </div>
+  </section>
+
+  <!-- VIRTUAL -->
+  <section class="tab" id="tab-virtual">
+    <h2>Virtual endpoints (preview)</h2>
+    <div class="card">
+      <p class="muted">These are derived from your categorizations above — call them as a model id, e.g. <code>llmproxy__free</code>.</p>
+      <button class="btn" id="refresh-vm">Refresh</button>
+      <div id="vm-list" style="margin-top:14px"></div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $ = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+const TOKEN_KEY = "llmproxy_admin_token";
+
+let META = { valid_reasoning_levels: ["exploratory","standard","deep"], valid_capabilities: ["tools","vision","reasoning","json"], free_limit_keys: ["requests_per_minute","requests_per_day","tokens_per_minute","tokens_per_day"], reserved_provider_names: ["llmproxy"] };
+let CATS = { believed_free: [], model_reasoning: {}, model_capabilities: {}, free_limits: {} };
+let DISCOVERED = [];
+
+function toast(msg, isErr=false) {
+  const t = $("#toast"); t.textContent = msg; t.className = "toast show" + (isErr ? " err" : "");
+  setTimeout(() => t.className = "toast", 2600);
+}
+function token() { return sessionStorage.getItem(TOKEN_KEY) || ""; }
+function setAuthState(ok, note) {
+  const el = $("#authState");
+  el.textContent = note; el.style.color = ok ? "var(--ok)" : "var(--warn)";
+}
+
+async function api(path, opts={}) {
+  const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
+  const t = token();
+  if (t) headers["X-Admin-Token"] = t;
+  const res = await fetch("/admin/api" + path, Object.assign({ headers }, opts));
+  if (res.status === 401 || res.status === 403) {
+    setAuthState(false, "auth required");
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || "Authentication required — set an admin token.");
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ("Request failed (" + res.status + ")"));
+  return data;
+}
+
+// ---- Tabs ----
+$$(".tabbar button").forEach(b => b.addEventListener("click", () => {
+  $$(".tabbar button").forEach(x => x.classList.remove("active"));
+  b.classList.add("active");
+  $$("section.tab").forEach(s => s.classList.remove("active"));
+  $("#tab-" + b.dataset.tab).classList.add("active");
+  if (b.dataset.tab === "virtual") loadVirtual();
+}));
+
+// ---- Token ----
+$("#tokenBtn").addEventListener("click", () => {
+  const cur = token();
+  const v = prompt("Admin token (leave blank if running on localhost without a token):", cur);
+  if (v === null) return;
+  if (v) sessionStorage.setItem(TOKEN_KEY, v); else sessionStorage.removeItem(TOKEN_KEY);
+  bootstrap();
+});
+
+// ---- Server ----
+function fillServer(s) {
+  $("#sv-host").value = s.host ?? "";
+  $("#sv-port").value = s.port ?? "";
+  $("#sv-log_level").value = (s.log_level || "INFO").toUpperCase();
+  for (const f of ["request_timeout","stream_timeout","response_cache_ttl","models_cache_ttl"])
+    $("#sv-"+f).value = s[f] ?? "";
+}
+$("#sv-save").addEventListener("click", async () => {
+  const body = { host: $("#sv-host").value, log_level: $("#sv-log_level").value };
+  for (const f of ["port","request_timeout","stream_timeout","response_cache_ttl","models_cache_ttl"]) {
+    const v = $("#sv-"+f).value;
+    if (v !== "") body[f] = Number(v);
+  }
+  try { await api("/server", { method: "PUT", body: JSON.stringify(body) }); toast("Server settings saved"); }
+  catch (e) { toast(e.message, true); }
+});
+
+// ---- Providers ----
+let TEMPLATES = [];
+function renderTemplateSelect() {
+  const sel = $("#tpl-select");
+  sel.innerHTML = TEMPLATES.map(t => `<option value="${t.key}">${t.display || t.key}</option>`).join("");
+  renderTemplateExtra();
+}
+function currentTemplate() { return TEMPLATES.find(t => t.key === $("#tpl-select").value); }
+function renderTemplateExtra() {
+  const t = currentTemplate(); const box = $("#tpl-extra"); box.innerHTML = "";
+  if (!t) return;
+  if (t.account_id_required) box.innerHTML += `<label>${t.account_id_label || "Account ID"}</label><input type="text" id="tpl-account_id" placeholder="${t.account_id_hint||""}" />`;
+  if (t.gateway_id_required) box.innerHTML += `<label>${t.gateway_id_label || "Gateway ID"}</label><input type="text" id="tpl-gateway_id" placeholder="${t.gateway_id_hint||""}" />`;
+  if (t.key_hint) box.innerHTML += `<p class="muted">${t.key_hint}</p>`;
+}
+$("#tpl-select").addEventListener("change", renderTemplateExtra);
+$("#tpl-add").addEventListener("click", async () => {
+  const t = currentTemplate(); if (!t) return;
+  const body = { template_key: t.key, name: $("#tpl-name").value.trim(), api_key: $("#tpl-key").value.trim() };
+  if (t.account_id_required) body.account_id = ($("#tpl-account_id")||{}).value || "";
+  if (t.gateway_id_required) body.gateway_id = ($("#tpl-gateway_id")||{}).value || "";
+  try { await api("/providers/from-template", { method: "POST", body: JSON.stringify(body) }); toast("Provider added"); $("#tpl-name").value=""; $("#tpl-key").value=""; loadProviders(); }
+  catch (e) { toast(e.message, true); }
+});
+$("#prov-blank").addEventListener("click", () => {
+  const name = prompt("New provider name:"); if (!name) return;
+  if (META.reserved_provider_names.includes(name)) { toast("Reserved name", true); return; }
+  renderProviderCard(name, { base_url: "", api_key: "", api_key_set: false, model_filter: null }, true);
+  $("#prov-"+cssId(name)).scrollIntoView({ behavior: "smooth" });
+});
+
+function cssId(s) { return s.replace(/[^a-zA-Z0-9_-]/g, "_"); }
+
+async function loadProviders() {
+  const provs = await api("/providers");
+  $("#provider-list").innerHTML = "";
+  const names = Object.keys(provs).sort();
+  if (!names.length) $("#provider-list").innerHTML = `<p class="muted">No providers yet. Add one from a template above.</p>`;
+  for (const n of names) renderProviderCard(n, provs[n], false);
+}
+
+function renderProviderCard(name, p, isNew) {
+  const id = cssId(name);
+  const existing = $("#prov-"+id);
+  const card = document.createElement("div");
+  card.className = "card"; card.id = "prov-"+id;
+  const keyPill = p.api_key_is_env ? `<span class="pill env">env</span>` : (p.api_key_set ? `<span class="pill">key set</span>` : `<span class="pill">no key</span>`);
+  const baseEnvPill = p.base_url_is_env ? `<span class="pill env">env</span>` : "";
+  card.innerHTML = `
+    <h3>${name} ${keyPill}</h3>
+    <label>Base URL ${baseEnvPill} <span class="muted">(literal or <code>\${ENV_VAR}</code>)</span></label>
+    <input type="text" data-f="base_url" value="${p.base_url ? String(p.base_url).replace(/"/g,'&quot;') : ""}" />
+    <label>API key <span class="muted">(blank = keep current; paste a key or <code>\${ENV_VAR}</code>)</span></label>
+    <input type="text" data-f="api_key" placeholder="${p.api_key_set ? (p.api_key || '•••• (unchanged)') : 'no key'}" />
+    <div class="row3">
+      <div><label>models_url</label><input type="text" data-f="models_url" value="${p.models_url||""}" /></div>
+      <div><label>models_id_field</label><input type="text" data-f="models_id_field" value="${p.models_id_field||""}" /></div>
+      <div><label>models_keep_task</label><input type="text" data-f="models_keep_task" value="${p.models_keep_task||""}" /></div>
+    </div>
+    <label>Model filter <span class="muted">(comma-separated upstream ids; blank = allow all)</span></label>
+    <input type="text" data-f="model_filter" value="${Array.isArray(p.model_filter)?p.model_filter.join(', '):''}" />
+    <label class="switch" style="margin-top:12px"><input type="checkbox" data-f="expose_to_virtual_models" ${p.expose_to_virtual_models===false?"":"checked"} /> Expose to virtual endpoints</label>
+    <div class="actions">
+      <button class="btn primary" data-act="save">${isNew?"Create":"Save"}</button>
+      <button class="btn" data-act="test">Test connection</button>
+      <button class="btn danger" data-act="delete">Delete</button>
+    </div>`;
+  if (existing) existing.replaceWith(card); else $("#provider-list").appendChild(card);
+
+  const get = f => $(`[data-f="${f}"]`, card);
+  card.querySelector('[data-act="save"]').addEventListener("click", async () => {
+    const mf = get("model_filter").value.trim();
+    const body = {
+      name,
+      base_url: get("base_url").value.trim(),
+      models_url: get("models_url").value.trim(),
+      models_id_field: get("models_id_field").value.trim(),
+      models_keep_task: get("models_keep_task").value.trim(),
+      model_filter: mf ? mf.split(",").map(s=>s.trim()).filter(Boolean) : null,
+      expose_to_virtual_models: get("expose_to_virtual_models").checked,
+    };
+    const k = get("api_key").value.trim();
+    if (k || isNew) body.api_key = k;
+    try {
+      if (isNew) await api("/providers", { method: "POST", body: JSON.stringify(body) });
+      else await api("/providers/"+encodeURIComponent(name), { method: "PUT", body: JSON.stringify(body) });
+      toast("Saved "+name); loadProviders();
+    } catch (e) { toast(e.message, true); }
+  });
+  card.querySelector('[data-act="test"]').addEventListener("click", async () => {
+    if (isNew) { toast("Save the provider first", true); return; }
+    try { const r = await api("/providers/"+encodeURIComponent(name)+"/test", { method: "POST" });
+      toast(r.ok ? `OK — ${r.model_count} models` : "No models discovered", !r.ok); }
+    catch (e) { toast(e.message, true); }
+  });
+  card.querySelector('[data-act="delete"]').addEventListener("click", async () => {
+    if (isNew) { card.remove(); return; }
+    if (!confirm("Delete provider "+name+"?")) return;
+    try { await api("/providers/"+encodeURIComponent(name), { method: "DELETE" }); toast("Deleted "+name); loadProviders(); }
+    catch (e) { toast(e.message, true); }
+  });
+}
+
+// ---- Models & categorizations ----
+$("#discover").addEventListener("click", async () => {
+  toast("Discovering…");
+  try { const r = await api("/models"); DISCOVERED = r.models || []; renderModels(); toast(`Discovered ${DISCOVERED.length} models`); }
+  catch (e) { toast(e.message, true); }
+});
+$("#model-filter").addEventListener("input", renderModels);
+
+function modelUniverse() {
+  const set = new Set(DISCOVERED);
+  CATS.believed_free.forEach(m => set.add(m));
+  Object.keys(CATS.model_reasoning).forEach(m => set.add(m));
+  Object.keys(CATS.model_capabilities).forEach(m => set.add(m));
+  Object.keys(CATS.free_limits).forEach(m => { if (m !== "_note") set.add(m); });
+  return Array.from(set).sort();
+}
+function renderModels() {
+  const filter = $("#model-filter").value.toLowerCase();
+  const grid = $("#model-grid"); grid.innerHTML = "";
+  const models = modelUniverse().filter(m => m.toLowerCase().includes(filter));
+  if (!models.length) { grid.innerHTML = `<p class="muted">No models. Click “Discover models”, or add one to a category.</p>`; return; }
+  for (const m of models) {
+    const row = document.createElement("div"); row.className = "model-row";
+    const lvl = CATS.model_reasoning[m] || "";
+    const caps = CATS.model_capabilities[m] || [];
+    const free = CATS.believed_free.includes(m);
+    row.innerHTML = `
+      <code>${m}</code>
+      <label class="switch"><input type="checkbox" data-free ${free?"checked":""}/> free</label>
+      <select data-lvl><option value="">— reasoning —</option>${META.valid_reasoning_levels.map(l=>`<option ${l===lvl?"selected":""}>${l}</option>`).join("")}</select>
+      <span class="inline">${META.valid_capabilities.map(c=>`<label class="switch"><input type="checkbox" data-cap="${c}" ${caps.includes(c)?"checked":""}/>${c}</label>`).join(" ")}</span>`;
+    row.querySelector("[data-free]").addEventListener("change", e => {
+      if (e.target.checked) { if (!CATS.believed_free.includes(m)) CATS.believed_free.push(m); }
+      else CATS.believed_free = CATS.believed_free.filter(x => x !== m);
+    });
+    row.querySelector("[data-lvl]").addEventListener("change", e => {
+      if (e.target.value) CATS.model_reasoning[m] = e.target.value; else delete CATS.model_reasoning[m];
+    });
+    row.querySelectorAll("[data-cap]").forEach(cb => cb.addEventListener("change", e => {
+      const c = e.target.dataset.cap; const cur = new Set(CATS.model_capabilities[m] || []);
+      if (e.target.checked) cur.add(c); else cur.delete(c);
+      if (cur.size) CATS.model_capabilities[m] = Array.from(cur); else delete CATS.model_capabilities[m];
+    }));
+    grid.appendChild(row);
+  }
+}
+$("#save-cats").addEventListener("click", async () => {
+  try {
+    await api("/believed-free", { method: "PUT", body: JSON.stringify(CATS.believed_free) });
+    await api("/model-reasoning", { method: "PUT", body: JSON.stringify(CATS.model_reasoning) });
+    await api("/model-capabilities", { method: "PUT", body: JSON.stringify(CATS.model_capabilities) });
+    toast("Categorizations saved"); loadVirtual();
+  } catch (e) { toast(e.message, true); }
+});
+
+// ---- Virtual endpoints ----
+async function loadVirtual() {
+  try {
+    const r = await api("/virtual-models");
+    const box = $("#vm-list");
+    if (!r.virtual_models.length) { box.innerHTML = `<p class="muted">No virtual endpoints yet — tag some models first.</p>`; return; }
+    box.innerHTML = r.virtual_models.map(v => `
+      <div class="vm">
+        <div><code class="id">${v.id}</code></div>
+        <div class="muted">${v.description}</div>
+        <div>${(v.backing||[]).map(b=>`<span class="chip">${b}</span>`).join("") || '<span class="muted">—</span>'}</div>
+      </div>`).join("");
+  } catch (e) { $("#vm-list").innerHTML = `<p class="muted">${e.message}</p>`; }
+}
+$("#refresh-vm").addEventListener("click", loadVirtual);
+
+// ---- Bootstrap ----
+async function bootstrap() {
+  try {
+    const cfg = await api("/config");
+    META = Object.assign(META, {
+      valid_reasoning_levels: cfg.valid_reasoning_levels,
+      valid_capabilities: cfg.valid_capabilities,
+      free_limit_keys: cfg.free_limit_keys,
+      reserved_provider_names: cfg.reserved_provider_names,
+    });
+    CATS = {
+      believed_free: cfg.believed_free || [],
+      model_reasoning: cfg.model_reasoning || {},
+      model_capabilities: cfg.model_capabilities || {},
+      free_limits: cfg.free_limits || {},
+    };
+    setAuthState(true, cfg.admin.token_set ? "token auth" : "localhost");
+    fillServer(cfg.server || {});
+    TEMPLATES = (await api("/provider-templates")).templates;
+    renderTemplateSelect();
+    await loadProviders();
+    renderModels();
+  } catch (e) {
+    setAuthState(false, "auth required");
+    toast(e.message, true);
+  }
+}
+bootstrap();
+</script>
+</body>
+</html>

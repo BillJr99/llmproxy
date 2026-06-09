@@ -49,13 +49,28 @@ Schema:
     "log_level": "INFO",
     "request_timeout": 120,
     "stream_timeout": 300
-  }
-}
+  },
+  "admin": {                                      // optional; web admin UI at /admin
+    "enabled": true,                              // default true; serve the UI/API
+    "token": "${LLMPROXY_ADMIN_TOKEN}"            // optional bearer token. When unset,
+  }                                               // /admin is reachable from loopback
+}                                                 // only; when set, any origin that
+                                                  // presents the token is allowed.
+
+Environment-variable references
+-------------------------------
+The string fields ``api_key`` and ``base_url`` (and the admin ``token``) may
+contain ``${VAR}`` references, e.g. ``"api_key": "${OPENAI_API_KEY}"`` or
+``"base_url": "http://${OLLAMA_HOST}:11434/v1"``. References are resolved from
+the process environment at request time (see ``resolve_env_refs`` and the
+``provider_api_key`` / ``provider_base_url`` accessors), so secrets never need to
+be written literally into config.json.
 """
 
 import json
 import os
 import re
+import tempfile
 import traceback
 from pathlib import Path
 
@@ -103,6 +118,14 @@ DEFAULT_SERVER_CONFIG = {
     "stream_timeout": 300,
 }
 
+# Web admin UI defaults. The UI is enabled by default but, with no token set, is
+# reachable only from loopback (see llmproxy/admin.py). Setting a token allows
+# remote access for callers that present it.
+DEFAULT_ADMIN_CONFIG = {
+    "enabled": True,
+    "token": "",
+}
+
 DEFAULT_CONFIG: dict = {
     "providers": {},
     "believed_free": [],
@@ -110,6 +133,7 @@ DEFAULT_CONFIG: dict = {
     "model_capabilities": {},
     "free_limits": {},
     "server": dict(DEFAULT_SERVER_CONFIG),
+    "admin": dict(DEFAULT_ADMIN_CONFIG),
 }
 
 
@@ -189,8 +213,25 @@ def save_config(config: dict, config_path: str | None = None) -> bool:
     path = get_config_path(config_path)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(config, fh, indent=2)
+        # Write to a temp file in the same directory, then atomically replace the
+        # target. This prevents a crash or concurrent admin-UI/wizard write from
+        # truncating config.json and leaving an unparseable file behind.
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(config, fh, indent=2)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_name, path)
+        except Exception:
+            # Best-effort cleanup of the temp file on any failure.
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
         # Invalidate cache
         _cache = {}
         _cache_mtime = 0.0
@@ -255,6 +296,55 @@ def parse_model_string(model_full: str) -> tuple[str, str]:
             f"'<provider>/<model>' convention."
         )
     return model_full[:sep], model_full[sep + 1:]
+
+
+# ---------------------------------------------------------------------------
+# Environment-variable references — runtime resolution for secrets/endpoints
+# ---------------------------------------------------------------------------
+
+# A ${VAR} reference inside a string field (currently api_key and base_url).
+# References are resolved from os.environ at *consumption* time (see
+# provider_api_key / provider_base_url and their call sites in server.py), never
+# at load_config() time. This keeps the on-disk config — and everything the admin
+# UI / setup wizard read back — as the raw reference, so secrets never need to
+# live literally in config.json (set e.g. "api_key": "${OPENAI_API_KEY}").
+_ENV_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def resolve_env_refs(value):
+    """Substitute every ``${VAR}`` in *value* with ``os.environ[VAR]``.
+
+    Resolution happens at call time, so the same config picks up environment
+    changes without a rewrite. An unset variable resolves to the empty string.
+    Non-string values (and strings without a ``${`` marker) pass through
+    unchanged, so this is cheap and safe to call on any field.
+    """
+    if not isinstance(value, str) or "${" not in value:
+        return value
+    return _ENV_REF_RE.sub(lambda m: os.environ.get(m.group(1), ""), value)
+
+
+def provider_base_url(provider_cfg: dict) -> str:
+    """Return the provider's base_url with ``${VAR}`` refs resolved and no
+    trailing slash. Use this everywhere a request URL is built or a base_url is
+    inspected (e.g. localhost detection)."""
+    return (resolve_env_refs(provider_cfg.get("base_url")) or "").rstrip("/")
+
+
+def provider_api_key(provider_cfg: dict) -> str:
+    """Return the provider's api_key with ``${VAR}`` refs resolved. Use this
+    wherever the Authorization bearer token is built."""
+    return resolve_env_refs(provider_cfg.get("api_key")) or ""
+
+
+def value_has_env_ref(value) -> bool:
+    """True if *value* is a string containing at least one ``${VAR}`` reference.
+
+    The admin UI uses this to decide whether a field is a (non-secret) env
+    reference that can be shown verbatim, versus a literal secret that must be
+    masked.
+    """
+    return isinstance(value, str) and bool(_ENV_REF_RE.search(value))
 
 
 # ---------------------------------------------------------------------------

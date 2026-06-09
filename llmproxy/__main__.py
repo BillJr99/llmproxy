@@ -84,6 +84,21 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Print configured provider names and exit.",
     )
+    admin_group = parser.add_mutually_exclusive_group()
+    admin_group.add_argument(
+        "--admin",
+        dest="admin",
+        action="store_true",
+        default=None,
+        help="Enable the web admin UI at /admin (overrides config).",
+    )
+    admin_group.add_argument(
+        "--no-admin",
+        dest="admin",
+        action="store_false",
+        default=None,
+        help="Disable the web admin UI (overrides config).",
+    )
     parser.add_argument(
         "--version",
         action="version",
@@ -157,6 +172,8 @@ def main() -> None:
         server_cfg["port"] = args.port
     if args.log_level is not None:
         server_cfg["log_level"] = args.log_level
+    if args.admin is not None:
+        config.setdefault("admin", {})["enabled"] = args.admin
 
     log_level = server_cfg.get("log_level", "INFO").upper()
     logging.basicConfig(
@@ -171,6 +188,26 @@ def main() -> None:
     config_path = get_config_path()
     log = logging.getLogger("llmproxy")
     log.info("Config: %s", config_path)
+
+    # Report the web admin UI status and warn about insecure exposure.
+    admin_cfg = config.get("admin", {})
+    if admin_cfg.get("enabled", True) is not False:
+        token_set = bool(
+            os.environ.get("LLMPROXY_ADMIN_TOKEN") or admin_cfg.get("token")
+        )
+        log.info(
+            "Web admin UI enabled at http://%s:%d/admin (auth: %s)",
+            host, port, "token" if token_set else "localhost-only",
+        )
+        is_loopback = host in ("127.0.0.1", "::1", "localhost")
+        if not is_loopback and not token_set:
+            log.warning(
+                "Admin UI is bound to a non-loopback host (%s) without an admin "
+                "token; the admin API will refuse non-localhost requests. Set "
+                "LLMPROXY_ADMIN_TOKEN (or config['admin']['token']) to allow "
+                "remote admin access.",
+                host,
+            )
 
     # Backfill template-derived provider fields missing from older configs
     # (e.g. models_url added after the config was first written). Auto-fixes
