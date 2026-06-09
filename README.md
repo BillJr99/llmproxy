@@ -20,6 +20,8 @@ llmproxy/
 │   ├── config.py
 │   ├── server.py
 │   ├── setup_wizard.py
+│   ├── admin.py             ← web admin UI + config API (/admin, /admin/api/*)
+│   ├── static/admin/        ← self-contained single-page admin frontend
 │   ├── providers.py         ← loader for the JSON sidecar
 │   └── providers.json       ← single source of truth for ALL provider templates
 │                                (+ believed_free / model_reasoning / model_capabilities / free_limits)
@@ -519,6 +521,77 @@ provider (manual)" menu option.
 
 ---
 
+## Web admin UI
+
+Everything the setup wizard configures — server settings, providers (add / edit /
+delete, add-from-template, live model discovery), the model categorizations that
+drive the virtual endpoints (`believed_free`, `model_reasoning`,
+`model_capabilities`, `free_limits`), and a derived preview of the virtual
+endpoints — can also be managed from a web frontend served by the running proxy
+at **`/admin`** (same host and port as the API):
+
+```
+http://localhost:8080/admin
+```
+
+The UI is a self-contained single page (no build step, no external assets) and
+writes straight to `config.json` via a JSON API under `/admin/api/*`. Changes
+take effect without a restart (host/port changes excepted), because every worker
+re-reads the config file when it changes.
+
+### Security — localhost-only by default
+
+The admin **API** edits secrets, so it is locked down by default:
+
+* **No token configured (default):** `/admin/api/*` answers **only loopback
+  requests** (`127.0.0.1` / `::1`). The UI shell at `/admin` is still served (it
+  carries no secrets), but the data API refuses non-local callers.
+* **Token configured:** any origin that presents the token is allowed. Set it via
+  the `LLMPROXY_ADMIN_TOKEN` environment variable or `config["admin"]["token"]`
+  (which may itself be a `${VAR}` reference). The UI prompts for the token and
+  sends it as `Authorization: Bearer <token>` (or `X-Admin-Token`).
+
+API responses never return plaintext keys — literal secrets are masked
+(`sk-…1234`) while `${VAR}` references are shown verbatim (they are not secret).
+Submitting a blank API-key field leaves the stored key unchanged.
+
+Disable the UI entirely with `--no-admin` (or `config["admin"]["enabled"]: false`);
+force-enable with `--admin`. When the server binds a non-loopback host with no
+token set, startup logs a warning that remote admin access will be refused.
+
+```jsonc
+"admin": {
+  "enabled": true,
+  "token": "${LLMPROXY_ADMIN_TOKEN}"   // optional; unset ⇒ loopback-only
+}
+```
+
+## Environment-variable references
+
+The provider `api_key` and `base_url` fields (and the admin `token`) may contain
+`${VAR}` references that are resolved from the process environment **at request
+time** — so secrets never need to be written literally into `config.json`:
+
+```jsonc
+"providers": {
+  "openai": {
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "${OPENAI_API_KEY}"
+  },
+  "ollama": {
+    "base_url": "http://${OLLAMA_HOST}:11434/v1"
+  }
+}
+```
+
+An unset variable resolves to the empty string. This is ideal for Docker / cloud
+deployments: pass `-e OPENAI_API_KEY=…` to the container and keep the bind-mounted
+`config.json` free of credentials. The stored config keeps the raw `${VAR}` text
+(the admin UI and setup wizard show and edit the reference, not the resolved
+value); only outbound upstream requests see the resolved secret.
+
+---
+
 ## Keeping the free-models list current
 
 Provider free tiers change without notice. The free-tier fields in
@@ -838,6 +911,24 @@ docker run -d \
   --user $(id -u):$(id -g) \
   -v ~/.config/llmproxy:/config \
   -e LLMPROXY_CONFIG=/config/config.json \
+  --name llmproxy \
+  llmproxy
+```
+
+The [web admin UI](#web-admin-ui) is available on the same published port at
+`http://localhost:8080/admin`. Because the container binds `0.0.0.0`, set an
+admin token to allow access (the API otherwise serves loopback only), and use
+`${VAR}` references in `config.json` to keep credentials in the environment
+rather than the bind-mounted file:
+
+```bash
+docker run -d \
+  -p 8080:8080 \
+  --user $(id -u):$(id -g) \
+  -v ~/.config/llmproxy:/config \
+  -e LLMPROXY_CONFIG=/config/config.json \
+  -e LLMPROXY_ADMIN_TOKEN=choose-a-strong-token \
+  -e OPENAI_API_KEY=sk-… \
   --name llmproxy \
   llmproxy
 ```

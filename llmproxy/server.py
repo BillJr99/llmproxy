@@ -57,6 +57,9 @@ from .config import (
     load_config,
     model_is_allowed,
     parse_model_string,
+    provider_api_key,
+    provider_base_url,
+    resolve_env_refs,
     save_config,
 )
 
@@ -269,10 +272,10 @@ def _upstream_headers(provider_cfg: dict) -> dict:
     client-supplied headers are forwarded where the upstream is likely to
     consume them (e.g., HTTP-Referer for OpenRouter rate-limit attribution).
     """
-    headers = {
-        "Authorization": f"Bearer {provider_cfg['api_key']}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
+    api_key = provider_api_key(provider_cfg)
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     for header in _FORWARDED_REQUEST_HEADERS - {"Content-Type"}:
         value = request.headers.get(header)
         if value:
@@ -394,13 +397,13 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
     Returns an empty list on any failure so that one bad provider does not
     prevent the aggregate response from including all healthy providers.
     """
-    base_url = provider_cfg.get("base_url", "").rstrip("/")
+    base_url = provider_base_url(provider_cfg)
     # Most providers list models at <base_url>/models. A few expose the catalog
     # at a different path entirely (e.g. GitHub Models serves chat at
     # /inference/chat/completions but the catalog at /catalog/models; Cloudflare
     # Workers AI has no GET /v1/models and lists at /ai/models/search). Allow a
     # per-provider override so those upstreams can still be discovered.
-    url = provider_cfg.get("models_url") or f"{base_url}/models"
+    url = resolve_env_refs(provider_cfg.get("models_url")) or f"{base_url}/models"
     # Field on each model object that carries the upstream model id. Defaults to
     # the OpenAI "id"; Cloudflare's /ai/models/search puts the usable id (the
     # "@cf/..." name) in "name" and reserves "id" for an internal UUID.
@@ -409,10 +412,10 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
     # (case-insensitive). Cloudflare's catalog mixes Text Generation, embeddings,
     # image, etc. into one list; this restricts it to chat-capable models.
     keep_task = provider_cfg.get("models_keep_task")
-    headers = {
-        "Authorization": f"Bearer {provider_cfg.get('api_key', '')}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
+    api_key = provider_api_key(provider_cfg)
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     resp = None
     try:
@@ -649,7 +652,7 @@ def _sync_local_provider_models_once() -> None:
 
         local_providers = {
             name: cfg for name, cfg in providers.items()
-            if _is_local_url(cfg.get("base_url", ""))
+            if _is_local_url(provider_base_url(cfg))
         }
         if not local_providers:
             return
@@ -660,12 +663,13 @@ def _sync_local_provider_models_once() -> None:
         modified = False
 
         for provider_key, provider_cfg in local_providers.items():
-            base_url = provider_cfg.get("base_url", "").rstrip("/")
-            api_key = provider_cfg.get("api_key", "")
+            base_url = provider_base_url(provider_cfg)
+            api_key = provider_api_key(provider_cfg)
+            local_headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
             try:
                 resp = requests.get(
                     f"{base_url}/models",
-                    headers={"Authorization": f"Bearer {api_key}"},
+                    headers=local_headers,
                     timeout=8,
                 )
                 resp.raise_for_status()
@@ -811,7 +815,7 @@ def list_models() -> Response:
             "_note": "Virtual model: cycles through all models whose ID contains 'free' (or appears in config['believed_free']) until one succeeds.",
         })
     if any(
-        _is_local_url(cfg.get("base_url", ""))
+        _is_local_url(provider_base_url(cfg))
         for pn, _ in snapshot.values()
         if (cfg := get_provider(config, pn))
     ):
@@ -874,7 +878,7 @@ def list_models() -> Response:
     # with a global virtual name are skipped (global form takes precedence).
     for provider_name in sorted(providers):
         provider_cfg = providers[provider_name]
-        if _is_local_url(provider_cfg.get("base_url", "")):
+        if _is_local_url(provider_base_url(provider_cfg)):
             continue
         if not _provider_exposes_to_virtual_models(provider_cfg):
             continue
@@ -910,7 +914,7 @@ def list_models() -> Response:
         ):
             suffixes.append("believed_free")
         provider_cfg = get_provider(config, provider_name)
-        if provider_cfg and _is_local_url(provider_cfg.get("base_url", "")):
+        if provider_cfg and _is_local_url(provider_base_url(provider_cfg)):
             suffixes.append("local")
         if suffixes:
             model["name"] = model["name"] + " (" + ", ".join(suffixes) + ")"
@@ -1031,7 +1035,7 @@ def _proxy_request(
     timeout : int
         Request timeout in seconds.
     """
-    base_url = provider_cfg.get("base_url", "").rstrip("/")
+    base_url = provider_base_url(provider_cfg)
     url = f"{base_url}/{endpoint}"
     headers = _upstream_headers(provider_cfg)
 
@@ -1070,7 +1074,7 @@ def _proxy_streaming(
     reference to the Flask application context throughout the lifetime of the
     response, which is required when teardown hooks are present.
     """
-    base_url = provider_cfg.get("base_url", "").rstrip("/")
+    base_url = provider_base_url(provider_cfg)
     url = f"{base_url}/{endpoint}"
     headers = _upstream_headers(provider_cfg)
 
@@ -1377,7 +1381,7 @@ def _proxy_cycling_streaming(
 
     for provider_name, provider_cfg, upstream_model in candidates:
         upstream_payload = {**payload, "model": upstream_model}
-        base_url = provider_cfg.get("base_url", "").rstrip("/")
+        base_url = provider_base_url(provider_cfg)
         url = f"{base_url}/{endpoint}"
         headers = _upstream_headers(provider_cfg)
         logger.info("  [%s] trying %s/%s  [streaming]", label, provider_name, upstream_model)
@@ -1577,7 +1581,7 @@ def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
         if not _provider_exposes_to_virtual_models(provider_cfg):
             continue
         # Skip local providers — they belong to the /local family, not /free.
-        if _is_local_url(provider_cfg.get("base_url", "")):
+        if _is_local_url(provider_base_url(provider_cfg)):
             continue
         is_free = (
             "free" in upstream_id.lower()
@@ -1663,7 +1667,7 @@ def _get_local_model_candidates() -> list[tuple[str, dict, str]]:
             continue
         if not _provider_exposes_to_virtual_models(provider_cfg):
             continue
-        if _is_local_url(provider_cfg.get("base_url", "")):
+        if _is_local_url(provider_base_url(provider_cfg)):
             candidates.append((provider_name, provider_cfg, upstream_id))
     return candidates
 
@@ -1790,7 +1794,7 @@ def _split_per_provider_virtual(model_full: str) -> tuple[str, str] | None:
     provider_cfg = get_provider(config, provider_name)
     if not provider_cfg:
         return None
-    if _is_local_url(provider_cfg.get("base_url", "")):
+    if _is_local_url(provider_base_url(provider_cfg)):
         return None
     if not _provider_exposes_to_virtual_models(provider_cfg):
         return None
@@ -2176,11 +2180,10 @@ def passthrough(subpath: str) -> Response:
         if not provider_cfg:
             return _error(f"Unknown provider '{provider_name}'.", status=404)
 
-        base_url = provider_cfg.get("base_url", "").rstrip("/")
+        base_url = provider_base_url(provider_cfg)
         url = f"{base_url}/{subpath}"
-        headers = {
-            "Authorization": f"Bearer {provider_cfg.get('api_key', '')}",
-        }
+        api_key = provider_api_key(provider_cfg)
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         params = {k: v for k, v in request.args.items() if k != "provider"}
         try:
             resp = requests.request(
@@ -2230,3 +2233,14 @@ def run_server(config_path: str | None = None) -> None:
     _rebuild_route_cache(providers_cfg, timeout)
 
     app.run(host=host, port=port, threaded=True, debug=False)
+
+
+# ---------------------------------------------------------------------------
+# Web admin UI / config API (/admin, /admin/api/*)
+# ---------------------------------------------------------------------------
+# Registered at import time so the blueprint is present whether the app is run
+# via gunicorn (which imports `app` directly) or the Flask dev server. The
+# blueprint's before_request guard enforces the localhost-only / token policy.
+from .admin import register_admin  # noqa: E402  (deferred to avoid import cycle)
+
+register_admin(app)
