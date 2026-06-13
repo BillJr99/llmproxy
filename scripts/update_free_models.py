@@ -33,10 +33,10 @@ import argparse
 import copy
 import json
 import sys
-from datetime import datetime, timezone
 from collections import defaultdict
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Allow `python scripts/update_free_models.py` from the repo root.
@@ -45,6 +45,8 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from llmproxy.config import (  # noqa: E402
     load_config as load_user_config,
+)
+from llmproxy.config import (  # noqa: E402
     load_probe_state,
     save_probe_state,
 )
@@ -659,8 +661,8 @@ def _probe_due(last_probe_at: str | None, frequency_days, now: datetime | None =
     except (TypeError, ValueError):
         return True, None
     if last.tzinfo is None:
-        last = last.replace(tzinfo=timezone.utc)
-    now = now or datetime.now(timezone.utc)
+        last = last.replace(tzinfo=UTC)
+    now = now or datetime.now(UTC)
     days_since = (now - last).total_seconds() / 86400.0
     return days_since >= freq, days_since
 
@@ -823,7 +825,7 @@ def main(argv: list[str] | None = None) -> int:
     # next invocation. Only on a real run where the probe was actually included.
     if "probe" in requested:
         save_probe_state(
-            {"last_probe_at": datetime.now(timezone.utc).isoformat()}, args.config
+            {"last_probe_at": datetime.now(UTC).isoformat()}, args.config
         )
 
     # Sync the user config even when the sidecar was unchanged — a stale config

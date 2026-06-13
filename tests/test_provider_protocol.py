@@ -8,7 +8,6 @@ from llmproxy.admin import _PROVIDER_PROTOCOLS, _clean_provider_payload
 from llmproxy.dialects import get_inbound, get_outbound
 from llmproxy.providers import get_provider_templates
 
-
 # --- protocol config plumbing ----------------------------------------------
 
 def test_admin_accepts_valid_protocol():

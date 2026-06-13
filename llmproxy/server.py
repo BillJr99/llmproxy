@@ -66,6 +66,7 @@ from .config import (
     resolve_env_refs,
     save_config,
 )
+from .dialects import get_inbound, get_outbound
 from .usage import (
     ModelUsage,
     compute_cost,
@@ -73,7 +74,6 @@ from .usage import (
     load_pricing_map,
     parse_stream_usage,
 )
-from .dialects import get_inbound, get_outbound
 
 # ---------------------------------------------------------------------------
 # Flask application
@@ -1436,8 +1436,7 @@ def _translated_stream_response(
                             captured.update(c["usage"])
                         yield c
 
-                for out_bytes in inbound.render_stream(teed(outbound.parse_stream(raw()))):
-                    yield out_bytes
+                yield from inbound.render_stream(teed(outbound.parse_stream(raw())))
         except requests.exceptions.Timeout:
             logger.error("[server:_translated_stream] provider=%s timed out", provider_name)
             yield b'data: {"error":{"message":"Upstream stream timed out."}}\n\n'

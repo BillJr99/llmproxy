@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-
 # --------------------------------------------------------------------------- #
 # Fake upstream
 # --------------------------------------------------------------------------- #
@@ -36,8 +35,7 @@ class _FakeResp:
         return self._body
 
     def iter_content(self, chunk_size=None):
-        for c in (self._chunks if self._chunks is not None else [self._body]):
-            yield c
+        yield from (self._chunks if self._chunks is not None else [self._body])
 
     def close(self):
         pass

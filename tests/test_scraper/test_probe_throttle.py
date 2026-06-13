@@ -3,14 +3,14 @@ and the probe-state cache helpers (llmproxy.config)."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from llmproxy.config import get_probe_state_path, load_probe_state, save_probe_state
 from scripts.update_free_models import _probe_due
 
 
 def _iso(days_ago: float) -> str:
-    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+    return (datetime.now(UTC) - timedelta(days=days_ago)).isoformat()
 
 
 # --- _probe_due -------------------------------------------------------------
@@ -55,7 +55,7 @@ def test_invalid_timestamp_is_due():
 
 
 def test_naive_timestamp_treated_as_utc():
-    naive = (datetime.now(timezone.utc) - timedelta(days=0.1)).replace(tzinfo=None).isoformat()
+    naive = (datetime.now(UTC) - timedelta(days=0.1)).replace(tzinfo=None).isoformat()
     due, _ = _probe_due(naive, 1)
     assert due is False
 
@@ -70,7 +70,7 @@ def test_non_numeric_frequency_defaults_to_always_due():
 def test_probe_state_roundtrip(tmp_path):
     cfg = str(tmp_path / "config.json")
     assert load_probe_state(cfg) == {}
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(UTC).isoformat()
     assert save_probe_state({"last_probe_at": ts}, cfg) is True
     assert get_probe_state_path(cfg) == tmp_path / "probe_state.json"
     assert load_probe_state(cfg) == {"last_probe_at": ts}

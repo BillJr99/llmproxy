@@ -25,7 +25,6 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Iterator
 
-
 # ---------------------------------------------------------------------------
 # SSE helpers
 # ---------------------------------------------------------------------------
@@ -87,7 +86,7 @@ def sse_data(obj) -> bytes:
 def sse_event(event: str, obj) -> bytes:
     """Encode a named SSE frame (``event: <type>`` + ``data: {json}``)."""
     return (
-        f"event: {event}\n".encode("utf-8")
+        f"event: {event}\n".encode()
         + b"data: " + json.dumps(obj, separators=(",", ":")).encode("utf-8")
         + b"\n\n"
     )
