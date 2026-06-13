@@ -928,9 +928,36 @@ def _run_free_models_update(config: dict, config_path: str | None) -> bool:
     finally:
         stream.flush()
     after = sidecar_path.read_bytes() if sidecar_path.exists() else b""
+    providers_text: str | None = None
+    example_text: str | None = None
     if after != before:
+        # Sidecar persisted normally (writable deployment).
         logger.info("[startup-update] providers.json changed")
-        _maybe_open_providers_pr(config, sidecar_path)
+        providers_text = after.decode("utf-8")
+        example_file = os.path.join(repo_root, "config.example.json")
+        if os.path.exists(example_file):
+            with open(example_file, encoding="utf-8") as fh:
+                example_text = fh.read()
+    else:
+        # Bundled copy unchanged. On a read-only image the updater mirrors the
+        # computed artifacts to the (writable) user-config dir; use those so a
+        # PR can still be opened even though providers.json couldn't be persisted.
+        try:
+            from .config import get_config_path
+            fb_dir = get_config_path(config_path).parent
+            fb_providers = fb_dir / "providers.json"
+            if fb_providers.exists() and fb_providers.read_bytes() != before:
+                providers_text = fb_providers.read_text(encoding="utf-8")
+                fb_example = fb_dir / "config.example.json"
+                if fb_example.exists():
+                    example_text = fb_example.read_text(encoding="utf-8")
+                logger.info("[startup-update] providers.json changed "
+                            "(computed; bundled copy is read-only)")
+        except Exception as exc:  # noqa: BLE001 — fallback detection is best-effort
+            logger.warning("[startup-update] fallback sidecar check failed: %s", exc)
+
+    if providers_text is not None:
+        _maybe_open_providers_pr(config, providers_text, example_text)
     else:
         logger.info("[startup-update] providers.json unchanged")
     logger.info("[startup-update] complete")
@@ -982,9 +1009,13 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
     threading.Thread(target=_run, daemon=True, name="startup-tasks").start()
 
 
-def _maybe_open_providers_pr(config: dict, sidecar_path) -> None:
+def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: str | None = None) -> None:
     """When config['pr_providers_list'] is true, open a PR with the refreshed
     providers.json (+ config.example.json) against the configured base branch.
+
+    *providers_text* / *example_text* are the computed file contents — passed in
+    rather than read from disk, so a read-only deployment that couldn't persist
+    the bundled copies can still open the PR from the in-memory/mirrored result.
 
     Uses the GitHub API directly (see github_pr.py) — it never touches the local
     git checkout. Requires a token (GITHUB_TOKEN / GH_TOKEN env, or
@@ -1022,12 +1053,9 @@ def _maybe_open_providers_pr(config: dict, sidecar_path) -> None:
     base = config.get("pr_providers_base", "main")
     branch = config.get("pr_providers_branch", "llmproxy-auto/providers")
 
-    files = {"llmproxy/providers.json": sidecar_path.read_text(encoding="utf-8")}
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    example = os.path.join(repo_root, "config.example.json")
-    if os.path.exists(example):
-        with open(example, encoding="utf-8") as fh:
-            files["config.example.json"] = fh.read()
+    files = {"llmproxy/providers.json": providers_text}
+    if example_text is not None:
+        files["config.example.json"] = example_text
 
     logger.info("[providers-pr] opening PR against %s/%s (%s)…", owner, repo, base)
     try:

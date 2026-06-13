@@ -113,3 +113,23 @@ def test_probe_timestamp_recorded_when_sidecar_write_fails(tmp_path, monkeypatch
     assert rc == 0  # the run completed despite the read-only sidecar
     state = load_probe_state(str(cfg))
     assert "last_probe_at" in state  # throttle timestamp persisted to the bind mount
+
+
+def test_sidecar_mirrored_to_config_dir_when_readonly(tmp_path, monkeypatch):
+    """When the bundled providers.json is read-only, the computed providers.json
+    and config.example.json are mirrored to the user-config dir so a read-only
+    deployment can still review them / open a providers PR."""
+    import scripts.update_free_models as ufm
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"providers": {}}))
+    monkeypatch.setattr(ufm, "apply_updates", lambda *a, **k: True)
+    monkeypatch.setattr(ufm, "DATA_PATH", _ReadOnlyPath())
+
+    ufm.main(["--source", "probe", "--config", str(cfg)])
+
+    mirrored_providers = tmp_path / "providers.json"
+    mirrored_example = tmp_path / "config.example.json"
+    assert mirrored_providers.exists() and mirrored_example.exists()
+    assert "providers" in json.loads(mirrored_providers.read_text())
+    assert "providers" in json.loads(mirrored_example.read_text())
