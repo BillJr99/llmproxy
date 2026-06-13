@@ -2493,7 +2493,13 @@ def _virtual_model_hint(model_full: str) -> str:
     return ""
 
 
-def _proxy_endpoint(endpoint: str, inbound: str = "openai") -> Response:
+def _proxy_endpoint(
+    endpoint: str,
+    inbound: str = "openai",
+    *,
+    model_override: str | None = None,
+    stream_override: bool | None = None,
+) -> Response:
     """
     Generic handler that routes a POST request to the correct upstream provider.
 
@@ -2518,6 +2524,13 @@ def _proxy_endpoint(endpoint: str, inbound: str = "openai") -> Response:
 
     inbound_adapter = get_inbound(inbound)
     payload = inbound_adapter.to_canonical_request(raw_body)
+
+    # Dialects that carry the model id / stream flag outside the JSON body
+    # (e.g. Gemini puts them in the URL path) override them here.
+    if model_override is not None:
+        payload["model"] = model_override
+    if stream_override is not None:
+        payload["stream"] = stream_override
 
     model_full: str = payload.get("model", "")
     if not model_full:
@@ -2657,7 +2670,12 @@ def anthropic_count_tokens() -> Response:
     body = request.get_json(force=True, silent=True)
     if body is None:
         return _error("Request body must be valid JSON.", status=400)
-    payload = get_inbound("anthropic").to_canonical_request(body)
+    return jsonify({"input_tokens": _estimate_tokens("anthropic", body)})
+
+
+def _estimate_tokens(dialect: str, body: dict) -> int:
+    """Heuristic token estimate (~4 chars/token) over a request's text."""
+    payload = get_inbound(dialect).to_canonical_request(body)
     chars = 0
     for msg in payload.get("messages", []):
         content = msg.get("content")
@@ -2665,7 +2683,28 @@ def anthropic_count_tokens() -> Response:
             chars += len(content)
         elif isinstance(content, list):
             chars += sum(len(p.get("text", "")) for p in content if isinstance(p, dict))
-    return jsonify({"input_tokens": max(1, chars // 4)})
+    return max(1, chars // 4)
+
+
+@app.route("/v1beta/models/<path:model_action>", methods=["POST"])
+def gemini_generate(model_action: str) -> Response:
+    """Google Gemini generateContent API surface.
+
+    Routes ``/v1beta/models/{model}:generateContent`` (and
+    ``:streamGenerateContent`` / ``:countTokens``) so the Google GenAI SDK can
+    point at llmproxy. The model id is taken from the URL path and the streaming
+    flag from the method verb; both are injected into the canonical request.
+    """
+    model, _, verb = model_action.rpartition(":")
+    if not model or not verb:
+        return _error("Expected /v1beta/models/<model>:<method>.", status=404)
+    if verb == "countTokens":
+        body = request.get_json(force=True, silent=True) or {}
+        return jsonify({"totalTokens": _estimate_tokens("gemini", body)})
+    return _proxy_endpoint(
+        "chat/completions", inbound="gemini",
+        model_override=model, stream_override=verb.startswith("stream"),
+    )
 
 
 @app.route("/v1/embeddings", methods=["POST"])

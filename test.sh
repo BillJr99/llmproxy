@@ -240,6 +240,40 @@ else
   fi
 fi
 
+# ── Gemini generateContent family ───────────────────────────────────────────
+# llmproxy also speaks the Gemini dialect inbound: the model rides in the URL
+# path and streaming uses :streamGenerateContent. CHAT_MODEL (a /v1/models id
+# such as provider__model or llmproxy__free) carries no slash, so it slots
+# straight into the path.
+hdr "Gemini /v1beta/models/{model}:generateContent"
+if [ -z "$CHAT_MODEL" ]; then
+  skip "no usable model for Gemini generateContent"
+else
+  echo "  ${DIM}model: ${CHAT_MODEL}${RST}"
+  code=$(req POST "/v1beta/models/${CHAT_MODEL}:generateContent" "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"Reply with exactly: pong\"}]}],\"generationConfig\":{\"maxOutputTokens\":16}}")
+  text=$(jqr '.candidates[0].content.parts[0].text')
+  if ok2xx "$code" && { [ "$HAVE_JQ" -eq 0 ] || grep -q '"candidates"' "$BODY"; }; then
+    pass "generateContent → $code ${DIM}($(echo "${text:-ok}" | head -c 40))${RST}"
+  else
+    fail "generateContent → $code $(head -c 200 "$BODY")"
+  fi
+
+  code=$(req POST "/v1beta/models/${CHAT_MODEL}:countTokens" "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"how many tokens is this\"}]}]}")
+  n=$(jqr '.totalTokens')
+  if ok2xx "$code" && { [ "$HAVE_JQ" -eq 0 ] || [ -n "$n" ]; }; then
+    pass "countTokens → $code ${DIM}(${n:-?} tokens)${RST}"
+  else
+    warn "countTokens → $code"
+  fi
+
+  out=$(curl -sS -N -X POST "${BASE_URL}/v1beta/models/${CHAT_MODEL}:streamGenerateContent?alt=sse" \
+        -H 'Content-Type: application/json' "${AUTH[@]}" \
+        -d "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"count: 1 2 3\"}]}],\"generationConfig\":{\"maxOutputTokens\":16}}" \
+        2>/dev/null | head -c 4000)
+  if echo "$out" | grep -q '"candidates"'; then pass "streamGenerateContent emitted Gemini SSE chunks"
+  else fail "streamGenerateContent produced no Gemini SSE chunks"; fi
+fi
+
 # ── error handling ──────────────────────────────────────────────────────────
 hdr "Error handling"
 code=$(req POST /v1/chat/completions '{"messages":[{"role":"user","content":"hi"}]}')

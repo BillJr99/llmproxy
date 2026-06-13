@@ -344,10 +344,13 @@ which dialect a client or upstream uses.
 | --- | --- | --- |
 | **OpenAI** | `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/embeddings` | The original surface. Streaming via SSE. |
 | **Anthropic** | `POST /v1/messages`, `POST /v1/messages/count_tokens` | Point an Anthropic SDK at llmproxy. Streaming emits the Anthropic event format (`message_start`, `content_block_delta`, …). |
+| **Gemini** | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens` | Point the Google GenAI SDK at llmproxy. The model id rides in the URL path; streaming emits Gemini `GenerateContentResponse` SSE chunks. |
 
-Both surfaces accept any model id llmproxy knows — direct (`provider__model`) **and**
+All three surfaces accept any model id llmproxy knows — direct (`provider__model`) **and**
 the virtual models (`llmproxy__free`, `llmproxy__deep`, …). So an Anthropic SDK call
 with `model="llmproxy__free"` is routed and load-balanced exactly like the OpenAI path.
+(xAI/Grok, Mistral, Groq, DeepSeek, etc. are OpenAI- and/or Anthropic-compatible, so they
+need no separate inbound surface — use the OpenAI or Anthropic endpoints for them.)
 
 ```python
 # Anthropic SDK pointed at llmproxy — works with streaming and tools

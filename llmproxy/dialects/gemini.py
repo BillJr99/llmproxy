@@ -12,7 +12,14 @@ import time
 from collections.abc import Iterable, Iterator
 
 from ..config import provider_api_key
-from .base import OutboundAdapter, iter_sse_events, register_outbound
+from .base import (
+    InboundAdapter,
+    OutboundAdapter,
+    iter_sse_events,
+    register_inbound,
+    register_outbound,
+    sse_data,
+)
 
 _FINISH_MAP = {
     "STOP": "stop",
@@ -20,6 +27,15 @@ _FINISH_MAP = {
     "SAFETY": "content_filter",
     "RECITATION": "content_filter",
     "OTHER": "stop",
+}
+
+# OpenAI finish_reason -> Gemini finishReason (inbound rendering).
+_FINISH_MAP_OUT = {
+    "stop": "STOP",
+    "length": "MAX_TOKENS",
+    "tool_calls": "STOP",
+    "content_filter": "SAFETY",
+    None: "STOP",
 }
 
 
@@ -219,3 +235,179 @@ class GeminiOutbound(OutboundAdapter):
 
 
 register_outbound(GeminiOutbound())
+
+
+# ---------------------------------------------------------------------------
+# Gemini generateContent (request)  ->  canonical OpenAI   [inbound]
+# ---------------------------------------------------------------------------
+
+def _gemini_to_openai_request(body: dict) -> dict:
+    messages: list[dict] = []
+    system = body.get("systemInstruction") or body.get("system_instruction")
+    if system:
+        text = "".join(p.get("text", "") for p in system.get("parts", []))
+        if text:
+            messages.append({"role": "system", "content": text})
+
+    for content in body.get("contents", []):
+        gem_role = content.get("role", "user")
+        text_parts: list[str] = []
+        tool_calls: list[dict] = []
+        tool_msgs: list[dict] = []
+        for part in content.get("parts", []):
+            if "text" in part:
+                text_parts.append(part["text"])
+            elif "functionCall" in part:
+                fc = part["functionCall"]
+                tool_calls.append({
+                    "id": f"call_{fc.get('name', 'fn')}",
+                    "type": "function",
+                    "function": {
+                        "name": fc.get("name"),
+                        "arguments": json.dumps(fc.get("args", {}), separators=(",", ":")),
+                    },
+                })
+            elif "functionResponse" in part:
+                fr = part["functionResponse"]
+                tool_msgs.append({
+                    "role": "tool",
+                    "tool_call_id": f"call_{fr.get('name', 'fn')}",
+                    "name": fr.get("name"),
+                    "content": json.dumps(fr.get("response", {}), separators=(",", ":")),
+                })
+        if gem_role == "model":
+            m: dict = {"role": "assistant", "content": "".join(text_parts) or None}
+            if tool_calls:
+                m["tool_calls"] = tool_calls
+            messages.append(m)
+        else:
+            if text_parts:
+                messages.append({"role": "user", "content": "".join(text_parts)})
+            messages.extend(tool_msgs)
+
+    payload: dict = {"messages": messages}
+    gen = body.get("generationConfig") or body.get("generation_config") or {}
+    if gen.get("maxOutputTokens") is not None:
+        payload["max_tokens"] = gen["maxOutputTokens"]
+    if gen.get("temperature") is not None:
+        payload["temperature"] = gen["temperature"]
+    if gen.get("topP") is not None:
+        payload["top_p"] = gen["topP"]
+    if gen.get("stopSequences"):
+        payload["stop"] = gen["stopSequences"]
+    tools: list[dict] = []
+    for tool in body.get("tools") or []:
+        for decl in tool.get("functionDeclarations", []):
+            tools.append({"type": "function", "function": {
+                "name": decl.get("name"),
+                "description": decl.get("description", ""),
+                "parameters": decl.get("parameters", {"type": "object", "properties": {}}),
+            }})
+    if tools:
+        payload["tools"] = tools
+    return payload
+
+
+def _openai_to_gemini_response(data: dict) -> dict:
+    choice = (data.get("choices") or [{}])[0]
+    message = choice.get("message", {})
+    parts: list[dict] = []
+    if message.get("content"):
+        parts.append({"text": message["content"]})
+    for tc in message.get("tool_calls") or []:
+        fn = tc.get("function", {})
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except (ValueError, TypeError):
+            args = {}
+        parts.append({"functionCall": {"name": fn.get("name"), "args": args}})
+    usage = data.get("usage") or {}
+    out = {
+        "candidates": [{
+            "content": {"role": "model", "parts": parts},
+            "finishReason": _FINISH_MAP_OUT.get(choice.get("finish_reason"), "STOP"),
+            "index": 0,
+        }],
+        "usageMetadata": {
+            "promptTokenCount": usage.get("prompt_tokens", 0),
+            "candidatesTokenCount": usage.get("completion_tokens", 0),
+            "totalTokenCount": usage.get("total_tokens", 0),
+        },
+    }
+    if data.get("model"):
+        out["modelVersion"] = data["model"]
+    return out
+
+
+class GeminiInbound(InboundAdapter):
+    """Inbound Google Gemini generateContent surface.
+
+    Exposed at /v1beta/models/{model}:generateContent (+ :streamGenerateContent,
+    :countTokens), so the Google GenAI SDK can point at llmproxy. The model id is
+    carried in the URL path, so the route injects it into the canonical payload.
+    """
+
+    name = "gemini"
+
+    def to_canonical_request(self, body: dict) -> dict:
+        return _gemini_to_openai_request(body)
+
+    def render_response(self, canonical: bytes) -> bytes:
+        try:
+            data = json.loads(canonical)
+        except (ValueError, TypeError):
+            return canonical
+        if "error" in data and "choices" not in data:
+            return canonical
+        return json.dumps(_openai_to_gemini_response(data)).encode("utf-8")
+
+    def render_stream(self, chunks):
+        tool_acc: dict[int, dict] = {}
+        finish = None
+        usage: dict | None = None
+        model = ""
+        for chunk in chunks:
+            if chunk is None:
+                break
+            model = chunk.get("model") or model
+            if chunk.get("usage"):
+                usage = chunk["usage"]
+            choice = (chunk.get("choices") or [{}])[0]
+            delta = choice.get("delta") or {}
+            if choice.get("finish_reason"):
+                finish = choice["finish_reason"]
+            content = delta.get("content")
+            if content:
+                yield sse_data({"candidates": [{
+                    "content": {"role": "model", "parts": [{"text": content}]}, "index": 0}]})
+            for tc in delta.get("tool_calls") or []:
+                acc = tool_acc.setdefault(tc.get("index", 0), {"name": None, "args": ""})
+                fn = tc.get("function") or {}
+                if fn.get("name"):
+                    acc["name"] = fn["name"]
+                if fn.get("arguments"):
+                    acc["args"] += fn["arguments"]
+        # Final chunk: any buffered tool calls, finishReason, and usage.
+        parts: list[dict] = []
+        for i in sorted(tool_acc):
+            acc = tool_acc[i]
+            try:
+                args = json.loads(acc["args"] or "{}")
+            except (ValueError, TypeError):
+                args = {}
+            parts.append({"functionCall": {"name": acc["name"], "args": args}})
+        final: dict = {"candidates": [{
+            "content": {"role": "model", "parts": parts},
+            "finishReason": _FINISH_MAP_OUT.get(finish, "STOP"), "index": 0}]}
+        if usage:
+            final["usageMetadata"] = {
+                "promptTokenCount": usage.get("prompt_tokens", 0),
+                "candidatesTokenCount": usage.get("completion_tokens", 0),
+                "totalTokenCount": usage.get("total_tokens", 0),
+            }
+        if model:
+            final["modelVersion"] = model
+        yield sse_data(final)
+
+
+register_inbound(GeminiInbound())

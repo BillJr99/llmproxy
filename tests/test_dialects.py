@@ -285,6 +285,54 @@ def test_anthropic_in_gemini_up_stream(monkeypatch, server):
 
 
 # --------------------------------------------------------------------------- #
+# gemini inbound (generateContent surface) -> openai upstream
+# --------------------------------------------------------------------------- #
+
+def test_gemini_in_openai_up_nonstream(monkeypatch, server):
+    captured = {}
+
+    def responder(url, body, stream):
+        captured["body"] = body
+        return _FakeResp(body=_OPENAI_RESP)
+
+    _set_post(monkeypatch, server, responder)
+    client = server.app.test_client()
+    r = client.post("/v1beta/models/oai/gpt-x:generateContent",
+                    json={"contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+                          "systemInstruction": {"parts": [{"text": "be brief"}]},
+                          "generationConfig": {"maxOutputTokens": 32}})
+    assert r.status_code == 200
+    data = r.get_json()
+    # Gemini-shaped response
+    assert data["candidates"][0]["content"]["parts"][0]["text"] == "hello world"
+    assert data["candidates"][0]["finishReason"] == "STOP"
+    assert data["usageMetadata"]["promptTokenCount"] == 5
+    # model came from the URL path (oai/gpt-x), resolved to upstream "gpt-x";
+    # system folded into the canonical request
+    assert captured["body"]["model"] == "gpt-x"
+    assert captured["body"]["messages"][0] == {"role": "system", "content": "be brief"}
+
+
+def test_gemini_in_openai_up_stream(monkeypatch, server):
+    _set_post(monkeypatch, server, lambda url, body, stream: _FakeResp(chunks=_OPENAI_STREAM, content_type="text/event-stream"))
+    client = server.app.test_client()
+    r = client.post("/v1beta/models/oai/gpt-x:streamGenerateContent?alt=sse",
+                    json={"contents": [{"role": "user", "parts": [{"text": "hi"}]}]})
+    body = r.get_data().decode()
+    # Rendered as Gemini SSE chunks
+    assert '"text":"Hel"' in body and '"text":"lo"' in body
+    assert '"finishReason":"STOP"' in body
+
+
+def test_gemini_count_tokens(monkeypatch, server):
+    client = server.app.test_client()
+    r = client.post("/v1beta/models/oai/gpt-x:countTokens",
+                    json={"contents": [{"role": "user", "parts": [{"text": "x" * 40}]}]})
+    assert r.status_code == 200
+    assert r.get_json()["totalTokens"] >= 1
+
+
+# --------------------------------------------------------------------------- #
 # count_tokens utility
 # --------------------------------------------------------------------------- #
 
