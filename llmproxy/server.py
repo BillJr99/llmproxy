@@ -308,7 +308,7 @@ def _log_request() -> None:
     g._start_time = time.monotonic()
     # Fire the optional startup updater once (covers gunicorn, which imports the
     # app object directly rather than calling run_server). No-op unless
-    # config['update_on_startup'] is true.
+    # config['update_free_on_startup'] is true.
     _run_startup_update_once()
     logger.info("→ %s %s", request.method, request.path)
 
@@ -794,7 +794,7 @@ def _sync_local_provider_models_once() -> None:
 
 
 def _run_startup_update_once(config_path: str | None = None) -> None:
-    """When config['update_on_startup'] is true, run the free-models updater once.
+    """When config['update_free_on_startup'] is true, run the free-models updater once.
 
     Spawns a background daemon thread so it never blocks request handling, and
     is guarded so it fires at most once per worker process. The updater refreshes
@@ -807,7 +807,7 @@ def _run_startup_update_once(config_path: str | None = None) -> None:
     believed_free models for cost (see scripts/sources/probe.py).
     """
     config = load_config()
-    if config.get("update_on_startup") is not True:
+    if config.get("update_free_on_startup") is not True:
         return
 
     global _startup_update_done

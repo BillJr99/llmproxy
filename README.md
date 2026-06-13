@@ -378,7 +378,7 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
 
   "probe_cost": false,
   "autoremove_believed_free": false,
-  "update_on_startup": false,
+  "update_free_on_startup": false,
 
   "server": {
     "host": "0.0.0.0",
@@ -577,13 +577,13 @@ Two opt-in, top-level config flags (both default `false`) let you keep
   place for you to review.
 
 <a name="update-on-startup"></a>
-### Running the updater on startup — `update_on_startup`
+### Running the updater on startup — `update_free_on_startup`
 
 Set the top-level flag to refresh free-tier data automatically when the server
 boots:
 
 ```json
-{ "update_on_startup": true }
+{ "update_free_on_startup": true }
 ```
 
 When `true`, the server runs `scripts/update_free_models.py` once per worker in a
@@ -800,7 +800,7 @@ empirical cost checks (see [Verifying free models are actually free](#cost-flags
   (default), the run prints the flagged models but makes no removal.
 
 You can also have the server run this updater on boot — see
-[`update_on_startup`](#update-on-startup).
+[`update_free_on_startup`](#update-on-startup).
 
 ### Syncing your live config (`--config PATH`)
 
