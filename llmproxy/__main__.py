@@ -265,6 +265,15 @@ def main() -> None:
             def load(self):
                 return self.application
 
+        # Fire the one-time startup tasks (warm the virtual-model route cache
+        # and, if enabled, run the free-models updater) inside each worker after
+        # it boots. The route cache is a per-process global, so a master-process
+        # call would not propagate to forked workers; post_worker_init runs in the
+        # worker. The task spawns its own daemon thread, so it never blocks boot.
+        def _post_worker_init(worker):  # noqa: ANN001 — gunicorn hook signature
+            from .server import _run_startup_tasks_once
+            _run_startup_tasks_once()
+
         workers = 2
         options = {
             "bind": f"{host}:{port}",
@@ -275,6 +284,7 @@ def main() -> None:
             "loglevel": log_level.lower(),
             "accesslog": "-",
             "worker_tmp_dir": _gunicorn_worker_tmp_dir(),
+            "post_worker_init": _post_worker_init,
         }
         logging.getLogger("llmproxy").info(
             "Starting with gunicorn — %s:%d (%d workers x 4 threads)",
@@ -286,6 +296,11 @@ def main() -> None:
         logging.getLogger("llmproxy").info(
             "gunicorn not found; using Flask development server — %s:%d", host, port
         )
+        # Eagerly warm the virtual-model route cache (and run the free-models
+        # updater if enabled) before serving, so virtual models are populated at
+        # startup rather than on the first /v1/models request.
+        from .server import _run_startup_tasks_once
+        _run_startup_tasks_once()
         app.run(host=host, port=port, threaded=True, debug=False)
 
 
