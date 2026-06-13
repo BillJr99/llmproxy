@@ -36,11 +36,14 @@ The server strips the provider prefix/suffix before forwarding each request
 to the appropriate upstream base URL.
 """
 
+import contextlib
 import datetime
 import hashlib
+import io
 import json
 import logging
 import random
+import re
 import threading
 import time
 import traceback
@@ -306,10 +309,11 @@ def _response_cache_put(key: str, content: bytes, status: int, content_type: str
 @app.before_request
 def _log_request() -> None:
     g._start_time = time.monotonic()
-    # Fire the optional startup updater once (covers gunicorn, which imports the
-    # app object directly rather than calling run_server). No-op unless
-    # config['update_believed_free_on_startup'] is true.
-    _run_startup_update_once()
+    # Fire the one-time startup tasks (warm the virtual-model route cache and,
+    # if enabled, run the free-models updater). This is a fallback safety net for
+    # deployments where the eager per-worker trigger in __main__ did not fire; it
+    # is a no-op after the first invocation.
+    _run_startup_tasks_once()
     logger.info("→ %s %s", request.method, request.path)
 
 
@@ -793,23 +797,150 @@ def _sync_local_provider_models_once() -> None:
     _t.Thread(target=_run, daemon=True, name="local-model-sync").start()
 
 
-def _run_startup_update_once(config_path: str | None = None) -> None:
-    """When config['update_believed_free_on_startup'] is true, run the free-models updater once.
+class _LineLoggingStream(io.TextIOBase):
+    """Write-only text stream that emits each completed line via a callback.
 
-    Spawns a background daemon thread so it never blocks request handling, and
-    is guarded so it fires at most once per worker process. The updater refreshes
-    the believed_free / free_limits / pricing data and syncs the user config; its
-    changes are picked up by the normal mtime-based config reload. If the updater
-    package isn't shipped in this deployment (e.g. a slim image without scripts/),
-    it logs a warning and does nothing.
+    Passed to contextlib.redirect_stdout so a subprocess-free script that reports
+    progress with print() has each line streamed to the server log in real time,
+    rather than buffered and dumped all at once when the script returns. ANSI
+    color codes are stripped before logging.
+    """
+
+    _ansi = re.compile(r"\x1b\[[0-9;]*m")
+
+    def __init__(self, log_fn: Callable[[str], None]) -> None:
+        self._log = log_fn
+        self._buf = ""
+
+    def write(self, s: str) -> int:  # noqa: D102
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            self._emit(line)
+        return len(s)
+
+    def _emit(self, line: str) -> None:
+        clean = self._ansi.sub("", line).rstrip()
+        if clean:
+            self._log(clean)
+
+    def flush(self) -> None:  # noqa: D102
+        if self._buf:
+            self._emit(self._buf)
+            self._buf = ""
+
+
+def _warm_route_cache_if_empty() -> None:
+    """Populate the virtual-model route cache from config, unless already warm.
+
+    Skips the rebuild when the cache is already populated (e.g. a /v1/models
+    request beat us to it) so the eager startup warm never clobbers an existing
+    cache nor issues a redundant upstream fetch. Mirrors the provider selection in
+    list_models() (reserved names skipped). Best-effort: failures are logged,
+    never raised.
+    """
+    with _model_route_cache_lock:
+        if _model_route_cache:
+            return
+    config = load_config()
+    providers_cfg = {
+        k: v for k, v in config.get("providers", {}).items()
+        if k not in RESERVED_PROVIDER_NAMES
+    }
+    if not providers_cfg:
+        return
+    timeout = config.get("server", {}).get("request_timeout", 120)
+    try:
+        _rebuild_route_cache(providers_cfg, timeout)
+    except Exception as exc:  # noqa: BLE001 — warming must never crash the worker
+        logger.warning("[startup] route-cache warm failed: %s", exc)
+
+
+def _run_free_models_update(config: dict, config_path: str | None) -> bool:
+    """Run scripts/update_free_models and stream its output to the server log.
+
+    Returns True if the updater actually ran (so the caller knows to refresh the
+    virtual-model cache afterwards), False if the updater package is unavailable.
+    The updater refreshes believed_free / free_limits / pricing in providers.json,
+    regenerates config.example.json, and syncs the user config; its changes are
+    picked up by the normal mtime-based config reload.
 
     When config['probe_cost'] is true the updater also actively probes
     believed_free models for cost (see scripts/sources/probe.py).
     """
-    config = load_config()
-    if config.get("update_believed_free_on_startup") is not True:
-        return
+    # The scraper lives in the repo-root `scripts/` package, which sits next to
+    # the installed `llmproxy/` package but may not be on sys.path (e.g. under
+    # gunicorn). Add the package's parent dir so `import scripts` resolves
+    # whenever scripts/ shipped alongside the package.
+    import os
+    import sys
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    try:
+        from scripts.update_free_models import main as _update_main
+    except Exception as exc:  # noqa: BLE001 — updater is optional at runtime
+        logger.warning(
+            "[startup-update] updater unavailable in this deployment "
+            "(scripts/ not found next to the package): %s", exc,
+        )
+        return False
+    argv: list[str] = []
+    path = config_path
+    if not path:
+        try:
+            from .config import get_config_path
+            path = str(get_config_path(None))
+        except Exception:  # noqa: BLE001
+            path = None
+    if path:
+        argv += ["--config", path]
+    logger.info("[startup-update] running update_free_models %s", argv or "(sidecar only)")
+    # Snapshot the sidecar so we can tell whether the scrape actually changed it
+    # (and therefore whether a PR is warranted).
+    from . import providers as _providers_mod
+    sidecar_path = _providers_mod.DATA_PATH
+    before = sidecar_path.read_bytes() if sidecar_path.exists() else b""
+    # Stream the updater's print() progress (providers.json / config.example.json
+    # writes, believed_free adds/removes, config sync) to the server log line by
+    # line so it is visible in docker logs as it happens.
+    stream = _LineLoggingStream(lambda line: logger.info("[startup-update] %s", line))
+    try:
+        with contextlib.redirect_stdout(stream):
+            _update_main(argv)
+    except SystemExit:
+        pass
+    except Exception as exc:  # noqa: BLE001 — never let a scrape failure crash the worker
+        logger.warning("[startup-update] failed: %s", exc)
+    finally:
+        stream.flush()
+    after = sidecar_path.read_bytes() if sidecar_path.exists() else b""
+    if after != before:
+        logger.info("[startup-update] providers.json changed")
+        _maybe_open_providers_pr(config, sidecar_path)
+    else:
+        logger.info("[startup-update] providers.json unchanged")
+    logger.info("[startup-update] complete")
+    return True
 
+
+def _run_startup_tasks_once(config_path: str | None = None) -> None:
+    """Run the one-time per-worker startup tasks in a background daemon thread.
+
+    The thread never blocks request handling and is guarded so it fires at most
+    once per worker process. It:
+
+      1. Warms the virtual-model route cache immediately, so GET /v1/models (and
+         virtual-model routing) work from the very first request rather than only
+         after a client has happened to hit /v1/models.
+      2. When config['update_believed_free_on_startup'] is true, runs the
+         free-models updater (streaming its progress to the log).
+      3. Invalidates the cached /v1/models list after the updater runs, so the
+         synthetic 'free' virtual models are rebuilt from the freshly scraped
+         believed_free data instead of the pre-scrape snapshot. (The route cache
+         maps proxy id -> upstream model and does not depend on believed_free, so
+         it does not need rebuilding here.)
+    """
     global _startup_update_done
     with _startup_update_lock:
         if _startup_update_done:
@@ -817,68 +948,25 @@ def _run_startup_update_once(config_path: str | None = None) -> None:
         _startup_update_done = True
 
     def _run() -> None:
-        # The scraper lives in the repo-root `scripts/` package, which sits next
-        # to the installed `llmproxy/` package but may not be on sys.path (e.g.
-        # under gunicorn). Add the package's parent dir so `import scripts`
-        # resolves whenever scripts/ shipped alongside the package.
-        import os
-        import sys
-        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        if repo_root not in sys.path:
-            sys.path.insert(0, repo_root)
-        try:
-            from scripts.update_free_models import main as _update_main
-        except Exception as exc:  # noqa: BLE001 — updater is optional at runtime
-            logger.warning(
-                "[startup-update] updater unavailable in this deployment "
-                "(scripts/ not found next to the package): %s", exc,
-            )
-            return
-        argv: list[str] = []
-        path = config_path
-        if not path:
-            try:
-                from .config import get_config_path
-                path = str(get_config_path(None))
-            except Exception:  # noqa: BLE001
-                path = None
-        if path:
-            argv += ["--config", path]
-        logger.info("[startup-update] running update_free_models %s", argv or "(sidecar only)")
-        # Snapshot the sidecar so we can tell whether the scrape actually changed
-        # it (and therefore whether a PR is warranted).
-        from . import providers as _providers_mod
-        sidecar_path = _providers_mod.DATA_PATH
-        before = sidecar_path.read_bytes() if sidecar_path.exists() else b""
-        # The updater reports its progress (providers.json writes, believed_free
-        # adds/removes, config sync) via print(). Capture stdout and re-emit each
-        # line through the logger so those changes are visible in the server log.
-        import contextlib
-        import io
-        import re as _re
-        buf = io.StringIO()
-        try:
-            with contextlib.redirect_stdout(buf):
-                _update_main(argv)
-        except SystemExit:
-            pass
-        except Exception as exc:  # noqa: BLE001 — never let a scrape failure crash the worker
-            logger.warning("[startup-update] failed: %s", exc)
-        finally:
-            ansi = _re.compile(r"\x1b\[[0-9;]*m")
-            for line in buf.getvalue().splitlines():
-                clean = ansi.sub("", line).rstrip()
-                if clean:
-                    logger.info("[startup-update] %s", clean)
-        after = sidecar_path.read_bytes() if sidecar_path.exists() else b""
-        if after != before:
-            logger.info("[startup-update] providers.json changed")
-            _maybe_open_providers_pr(config, sidecar_path)
-        else:
-            logger.info("[startup-update] providers.json unchanged")
-        logger.info("[startup-update] complete")
+        # 1. Warm immediately so virtual models exist before the first request.
+        logger.info("[startup] warming virtual-model route cache…")
+        _warm_route_cache_if_empty()
 
-    threading.Thread(target=_run, daemon=True, name="startup-update").start()
+        # 2. Optionally run the free-models updater.
+        config = load_config()
+        if config.get("update_believed_free_on_startup") is not True:
+            return
+        ran = _run_free_models_update(config, config_path)
+
+        # 3. Drop the cached /v1/models list so the synthetic 'free' set is
+        #    rebuilt from the freshly-scraped believed_free on the next request.
+        if ran:
+            global _models_list_cache
+            with _models_list_cache_lock:
+                _models_list_cache = None
+            logger.info("[startup] virtual-model list cache invalidated after update")
+
+    threading.Thread(target=_run, daemon=True, name="startup-tasks").start()
 
 
 def _maybe_open_providers_pr(config: dict, sidecar_path) -> None:
@@ -2605,13 +2693,10 @@ def run_server(config_path: str | None = None) -> None:
     logger.info("llmproxy starting — providers: %s", list(providers_cfg) or ["(none — run --setup)"])
     logger.info("Listening on %s:%d", host, port)
 
-    # Pre-warm the model route cache so routing works even before the first
-    # /v1/models call (eliminates the cold-cache edge case for all clients).
-    timeout = server_cfg.get("request_timeout", 120)
-    _rebuild_route_cache(providers_cfg, timeout)
-
-    # Optional: refresh free-tier data via the scraper on startup (config flag).
-    _run_startup_update_once(config_path)
+    # Warm the virtual-model route cache (so routing works before the first
+    # /v1/models call) and, if enabled, run the free-models updater. Runs in a
+    # background daemon thread, guarded to fire once.
+    _run_startup_tasks_once(config_path)
 
     app.run(host=host, port=port, threaded=True, debug=False)
 
