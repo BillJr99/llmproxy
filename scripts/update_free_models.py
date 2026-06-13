@@ -355,7 +355,7 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         # Carry forward optional model-discovery overrides (non-standard /models
         # path, id field, or task filter) so the example documents the working
         # config for providers like GitHub Models and Cloudflare Workers AI.
-        for field in ("models_url", "models_id_field", "models_keep_task"):
+        for field in ("models_url", "models_id_field", "models_keep_task", "protocol"):
             if prov.get(field):
                 block[field] = prov[field]
         # A per-provider note (e.g. auth/credential gotchas) surfaces in the

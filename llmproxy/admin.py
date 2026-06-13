@@ -119,7 +119,11 @@ _PROVIDER_FIELDS = (
     "models_id_field",
     "models_keep_task",
     "expose_to_virtual_models",
+    "protocol",
 )
+
+# Upstream dialects llmproxy can translate to (see llmproxy/dialects/).
+_PROVIDER_PROTOCOLS = ("openai", "anthropic", "gemini")
 
 _SERVER_INT_FIELDS = (
     "port",
@@ -340,6 +344,15 @@ def _clean_provider_payload(payload: dict, existing: dict | None) -> tuple[dict 
         if not isinstance(val, bool):
             return None, "expose_to_virtual_models must be a boolean."
         cfg["expose_to_virtual_models"] = val
+
+    if "protocol" in payload:
+        val = payload["protocol"]
+        if val in (None, "", "openai"):
+            cfg.pop("protocol", None)  # openai is the default; keep configs clean
+        elif val in _PROVIDER_PROTOCOLS:
+            cfg["protocol"] = val
+        else:
+            return None, f"protocol must be one of {_PROVIDER_PROTOCOLS}."
 
     return cfg, None
 

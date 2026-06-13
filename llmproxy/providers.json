@@ -32,7 +32,19 @@
     "cloudflare-ai-gateway",
     "vercel",
     "venice",
-    "opencode-zen"
+    "opencode-zen",
+    "scaleway",
+    "ovhcloud",
+    "pollinations",
+    "nebius",
+    "novita",
+    "hyperbolic",
+    "deepinfra",
+    "llm7",
+    "chutes",
+    "meta-llama",
+    "anthropic",
+    "gemini"
   ],
   "providers": {
     "nous": {
@@ -1118,6 +1130,140 @@
       "base_url": "https://api.fireworks.ai/inference/v1",
       "key_required": true,
       "key_hint": "Get your API key at fireworks.ai/account/api-keys",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "scaleway": {
+      "display": "Scaleway Generative APIs",
+      "base_url": "https://api.scaleway.ai/v1",
+      "key_required": true,
+      "key_hint": "Create an API key in the Scaleway console → Generative APIs (free tier; EU-hosted Mistral/Llama/Qwen)",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "ovhcloud": {
+      "display": "OVHcloud AI Endpoints",
+      "base_url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+      "key_required": false,
+      "key_hint": "Optional — anonymous tier is free (2 req/min per IP/model). Create an API key at ovhcloud.com for higher limits.",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "pollinations": {
+      "display": "Pollinations (free, no key)",
+      "base_url": "https://text.pollinations.ai/openai",
+      "key_required": false,
+      "key_hint": "No API key required for basic use.",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "nebius": {
+      "display": "Nebius AI Studio",
+      "base_url": "https://api.studio.nebius.com/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at studio.nebius.com (free starter credits + low-cost open models)",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "novita": {
+      "display": "Novita AI",
+      "base_url": "https://api.novita.ai/v3/openai",
+      "key_required": true,
+      "key_hint": "Get your API key at novita.ai (free starter credit)",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "hyperbolic": {
+      "display": "Hyperbolic",
+      "base_url": "https://api.hyperbolic.xyz/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at app.hyperbolic.xyz/settings (free starter credit)",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "deepinfra": {
+      "display": "DeepInfra",
+      "base_url": "https://api.deepinfra.com/v1/openai",
+      "key_required": true,
+      "key_hint": "Get your API key at deepinfra.com/dash/api_keys",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "llm7": {
+      "display": "LLM7 (free, no key)",
+      "base_url": "https://api.llm7.io/v1",
+      "key_required": false,
+      "key_hint": "No API key required for basic use (free aggregator; lower reliability).",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "chutes": {
+      "display": "Chutes AI",
+      "base_url": "https://llm.chutes.ai/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at chutes.ai (free tier)",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "meta-llama": {
+      "display": "Meta Llama API",
+      "base_url": "https://api.llama.com/compat/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at llama.developer.meta.com (OpenAI-compatible preview)",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "anthropic": {
+      "display": "Anthropic (Claude, native Messages API)",
+      "base_url": "https://api.anthropic.com/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at console.anthropic.com (paid — no free tier)",
+      "protocol": "anthropic",
+      "_note": "Reached over Anthropic's native Messages API (x-api-key + anthropic-version). llmproxy translates OpenAI ⇄ Anthropic, so OpenAI clients can call Claude and Anthropic clients (/v1/messages) can call any provider. Models are advertised from model_filter (no OpenAI-shaped /models endpoint).",
+      "example_model_filter": [
+        "claude-opus-4-8",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+        "claude-fable-5"
+      ],
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "gemini": {
+      "display": "Google Gemini (native generateContent)",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "key_required": true,
+      "key_hint": "Get your API key at aistudio.google.com/apikey (free tier available)",
+      "protocol": "gemini",
+      "_note": "Reached over Gemini's native generateContent/streamGenerateContent API (x-goog-api-key). llmproxy translates OpenAI ⇄ Gemini. The OpenAI-compatible 'google' provider above is an alternative; this entry uses Gemini's native protocol. Models are advertised from model_filter.",
+      "example_model_filter": [
+        "gemini-2.5-pro",
+        "gemini-2.5-flash"
+      ],
       "believed_free": [],
       "model_reasoning": {},
       "free_limits": {},

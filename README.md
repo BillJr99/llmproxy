@@ -331,6 +331,53 @@ form is also accepted.
 
 ---
 
+## API dialects — OpenAI **and** Anthropic, in and out
+
+llmproxy speaks more than one API dialect on both edges. Internally everything is
+normalized to the OpenAI chat/completions schema, so all routing, virtual models,
+capability ordering, caching, and usage accounting work identically regardless of
+which dialect a client or upstream uses.
+
+### Inbound — what clients can speak
+
+| Surface | Endpoints | Notes |
+| --- | --- | --- |
+| **OpenAI** | `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/embeddings` | The original surface. Streaming via SSE. |
+| **Anthropic** | `POST /v1/messages`, `POST /v1/messages/count_tokens` | Point an Anthropic SDK at llmproxy. Streaming emits the Anthropic event format (`message_start`, `content_block_delta`, …). |
+
+Both surfaces accept any model id llmproxy knows — direct (`provider__model`) **and**
+the virtual models (`llmproxy__free`, `llmproxy__deep`, …). So an Anthropic SDK call
+with `model="llmproxy__free"` is routed and load-balanced exactly like the OpenAI path.
+
+```python
+# Anthropic SDK pointed at llmproxy — works with streaming and tools
+import anthropic
+client = anthropic.Anthropic(base_url="http://localhost:8080", api_key="unused")
+client.messages.create(model="llmproxy__free", max_tokens=256,
+                       messages=[{"role": "user", "content": "hi"}])
+```
+
+### Outbound — what upstreams can speak (`protocol`)
+
+A provider's optional `"protocol"` field selects how llmproxy talks to it:
+
+| `protocol` | Upstream call | Auth |
+| --- | --- | --- |
+| `openai` (default) | `{base_url}/chat/completions` | `Authorization: Bearer` |
+| `anthropic` | `{base_url}/messages` (native Messages API) | `x-api-key` + `anthropic-version` |
+| `gemini` | `{base_url}/models/{model}:generateContent` (+ `:streamGenerateContent`) | `x-goog-api-key` |
+
+This means the big providers can be added with just an API key — Anthropic (Claude) and
+Google Gemini over their **native** protocols, and OpenAI plus dozens of
+OpenAI-compatible gateways over the default. The `anthropic` and `gemini` provider
+templates ship in the setup wizard. Translation covers text, tool definitions/calls/
+results, and token usage, non-streaming and streaming, for **any inbound × upstream
+combination** (e.g. an Anthropic-SDK client can stream from a Gemini upstream).
+
+> Non-OpenAI upstreams advertise their models from `model_filter` (there is no
+> OpenAI-shaped `/v1/models` to discover). Best-effort: provider-specific extras
+> (Anthropic thinking/prompt-caching, Gemini safety settings) are not yet mapped.
+
 ## Configuration
 
 Config is stored at `~/.config/llmproxy/config.json` (or the path in
@@ -345,6 +392,8 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
       "base_url": "https://...",
       "api_key": "sk-...",
       "model_filter": ["model-a", "model-b"],
+
+      "protocol": "openai",
 
       "models_url": "https://.../catalog/models",
       "models_id_field": "name",
@@ -378,6 +427,7 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
 
   "probe_cost": false,
   "autoremove_believed_free": false,
+  "probe_frequency_days": 0,
   "update_believed_free_on_startup": false,
   "pr_providers_list": false,
 

@@ -42,6 +42,8 @@ _TEMPLATE_FIELDS = frozenset({
     "models_url",
     "models_id_field",
     "models_keep_task",
+    # Upstream dialect for non-OpenAI-compatible providers (anthropic/gemini).
+    "protocol",
 })
 
 # Fields that belong to the free-tier metadata view.
