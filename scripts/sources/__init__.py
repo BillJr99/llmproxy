@@ -10,6 +10,7 @@ from .community import CommunitySource
 from .fireworks import FireworksSource
 from .litellm_cost_map import LiteLLMCostMapSource
 from .openrouter import OpenRouterSource
+from .probe import ProbeSource
 from .together import TogetherSource
 
 ALL_SOURCES: dict[str, type[Source]] = {
@@ -19,7 +20,13 @@ ALL_SOURCES: dict[str, type[Source]] = {
     "litellm_cost_map": LiteLLMCostMapSource,
     "together": TogetherSource,
     "fireworks": FireworksSource,
+    # Active cost probe. Excluded from the default source set because it sends
+    # real requests; opt in via config probe_cost: true or --probe.
+    "probe": ProbeSource,
 }
+
+# Sources that must NOT run unless explicitly opted into (they spend real quota).
+OPT_IN_SOURCES: frozenset[str] = frozenset({"probe"})
 
 # Docs scrapers are registered separately so we can list them under --source docs.
 from .docs import DOCS_SOURCES  # noqa: E402
@@ -42,4 +49,4 @@ class _DocsAggregator(Source):
         return out
 
 
-__all__ = ["ALL_SOURCES", "Evidence", "Source"]
+__all__ = ["ALL_SOURCES", "OPT_IN_SOURCES", "Evidence", "Source"]

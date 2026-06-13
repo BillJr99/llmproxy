@@ -168,7 +168,7 @@ def test_failover_on_forced_tool_without_call(server, monkeypatch):
     payload = {"tools": [{"type": "function", "function": {"name": "x"}}], "tool_choice": "required"}
     resp = server._proxy_cycling_non_streaming(
         "chat/completions", "test", candidates, payload, 5,
-        on_success=lambda pn, um: succeeded.append((pn, um)),
+        on_success=lambda pn, um, body=None: succeeded.append((pn, um)),
     )
     assert calls == ["m1", "m2"]  # m1 failed the capability check, m2 tried
     assert succeeded == [("p2", "m2")]  # only the real success recorded
@@ -193,7 +193,7 @@ def test_returns_last_when_all_fail_forced_tool(server, monkeypatch):
     payload = {"tools": [{"type": "function"}], "tool_choice": "required"}
     resp = server._proxy_cycling_non_streaming(
         "chat/completions", "test", candidates, payload, 5,
-        on_success=lambda pn, um: succeeded.append((pn, um)),
+        on_success=lambda pn, um, body=None: succeeded.append((pn, um)),
     )
     assert resp.status_code == 200  # last 200 body returned
     assert succeeded == []  # never recorded a success

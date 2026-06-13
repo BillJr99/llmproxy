@@ -217,8 +217,12 @@ def test_provider_free_is_capacity_aware(server, monkeypatch):
         json={"model": "llmproxy__visible/free", "messages": [{"role": "user", "content": "hi"}]},
     )
     assert resp.status_code == 200
-    # capacity-aware path records usage on success
-    assert captured["on_success"] is server._record_usage
+    # capacity-aware path records usage on success: the hook is wired and
+    # invoking it records a request for the served model.
+    assert callable(captured["on_success"])
+    server._reset_usage()
+    captured["on_success"]("visible", "free-model", None)
+    assert server._get_usage_snapshot("visible/free-model") == (1, 1)
     assert {pn for pn, _, _ in captured["ordered"]} == {"visible"}
 
 

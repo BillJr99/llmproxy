@@ -128,3 +128,58 @@ def _to_float(v) -> float:
         return float(v)
     except (TypeError, ValueError):
         return float("inf")
+
+
+# ---------------------------------------------------------------------------
+# Pricing snapshot (per-token USD costs for runtime cost accounting)
+# ---------------------------------------------------------------------------
+# The same litellm map that flags zero-priced models also carries the actual
+# per-token prices for paid ones. We snapshot those into providers.json so the
+# proxy can price tokens offline (server.py / usage.py compute_cost), preferring
+# a provider-reported usage.cost when present and falling back to this map.
+
+
+def build_pricing_map(data: dict) -> dict[str, dict]:
+    """Build ``provider/model`` → {input_cost_per_token, output_cost_per_token}.
+
+    Keys are lowercased and mapped to llmproxy provider keys via PROVIDER_ALIASES.
+    Only chat-style models with at least one non-zero price are included (zero
+    cost is already captured by believed_free, and omitting it keeps the
+    snapshot compact).
+    """
+    out: dict[str, dict] = {}
+    for key, meta in data.items():
+        if not isinstance(meta, dict):
+            continue
+        litellm_provider = meta.get("litellm_provider")
+        provider_key = PROVIDER_ALIASES.get(litellm_provider or "")
+        if not provider_key:
+            continue
+        mode = meta.get("mode")
+        if mode and mode not in ("chat", "completion", "responses"):
+            continue
+        input_cost = meta.get("input_cost_per_token")
+        output_cost = meta.get("output_cost_per_token")
+        in_f = _to_float(input_cost)
+        out_f = _to_float(output_cost)
+        if in_f == float("inf") and out_f == float("inf"):
+            continue
+        in_val = 0.0 if in_f == float("inf") else in_f
+        out_val = 0.0 if out_f == float("inf") else out_f
+        if in_val == 0.0 and out_val == 0.0:
+            continue
+        bare = key
+        if "/" in key and key.split("/", 1)[0] == litellm_provider:
+            bare = key.split("/", 1)[1]
+        out[f"{provider_key}/{bare}".lower()] = {
+            "input_cost_per_token": in_val,
+            "output_cost_per_token": out_val,
+        }
+    return out
+
+
+def fetch_pricing_map(url: str = LITELLM_COST_MAP_URL) -> dict[str, dict]:
+    """Download the litellm cost map and return the pricing snapshot."""
+    resp = requests.get(url, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return build_pricing_map(resp.json())

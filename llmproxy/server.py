@@ -7,6 +7,8 @@ Implements the following OpenAI API endpoints:
   POST /v1/chat/completions        Proxy chat completions (streaming + non-streaming)
   POST /v1/completions             Proxy legacy completions
   POST /v1/embeddings              Proxy embeddings
+  GET  /v1/usage                   Token + cost accounting report
+  POST /v1/usage/reset             Clear usage counters (admin-gated)
   GET  /health                     Health check
 
 Model naming convention
@@ -34,7 +36,6 @@ The server strips the provider prefix/suffix before forwarding each request
 to the appropriate upstream base URL.
 """
 
-import collections
 import datetime
 import hashlib
 import json
@@ -62,6 +63,13 @@ from .config import (
     resolve_env_refs,
     save_config,
 )
+from .usage import (
+    ModelUsage,
+    compute_cost,
+    extract_usage,
+    load_pricing_map,
+    parse_stream_usage,
+)
 
 # ---------------------------------------------------------------------------
 # Flask application
@@ -80,6 +88,9 @@ _CAPABILITY_VIRTUALS: tuple[str, ...] = ("tools", "vision")
 _PER_PROVIDER_DIMENSIONS: tuple[str, ...] = (*_REASONING_LEVELS, *_CAPABILITY_VIRTUALS, "free")
 # Per-candidate timeout for virtual-model cycling so a slow upstream doesn't block all failover.
 _VIRTUAL_CANDIDATE_TIMEOUT: int = 60
+# Bytes of the streamed SSE response kept buffered so the final `usage` chunk can
+# be parsed for token/cost accounting without buffering the whole stream.
+_STREAM_TAIL_BYTES: int = 16384
 # Virtual models use the "llmproxy__" prefix (same double-underscore as the
 # provider display form) so strict clients accept them and they sort together.
 # The legacy "llmproxy/" prefix is kept in the membership set so pinned client
@@ -122,71 +133,121 @@ _models_list_cache_lock = threading.Lock()
 _DEFAULT_MODELS_CACHE_TTL = 60
 
 # ---------------------------------------------------------------------------
-# Per-model usage tracking (free-tier capacity-aware load balancing)
+# Per-model usage tracking (free-tier capacity-aware load balancing + accounting)
 # ---------------------------------------------------------------------------
 # In-memory only; resets on server restart.  Each gunicorn worker process
 # maintains its own counters — usage tracking is per-worker, not cross-process.
 # For cross-process accuracy, configure a single worker or use a shared store.
+# The pure counter / cost primitives live in usage.py so the scraper probe can
+# reuse them; this section wires them to the live config + believed_free set.
 
-
-def _today_start_ts() -> float:
-    """Unix timestamp for the start of today (local midnight)."""
-    return time.mktime(datetime.date.today().timetuple())
-
-
-class _ModelUsage:
-    """Thread-safe sliding-window request counter for one upstream model."""
-
-    __slots__ = ("_lock", "_minute_ts", "_day_count", "_day_start")
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._minute_ts: collections.deque = collections.deque()
-        self._day_count: int = 0
-        self._day_start: float = _today_start_ts()
-
-    def record(self) -> None:
-        now_mono = time.monotonic()
-        now_wall = time.time()
-        with self._lock:
-            if now_wall >= self._day_start + 86400:
-                self._day_start = _today_start_ts()
-                self._day_count = 0
-            self._day_count += 1
-            self._minute_ts.append(now_mono)
-
-    def snapshot(self) -> tuple[int, int]:
-        """Return (used_last_60s, used_today), pruning stale minute entries."""
-        now_mono = time.monotonic()
-        now_wall = time.time()
-        with self._lock:
-            if now_wall >= self._day_start + 86400:
-                return 0, 0
-            cutoff = now_mono - 60.0
-            while self._minute_ts and self._minute_ts[0] < cutoff:
-                self._minute_ts.popleft()
-            return len(self._minute_ts), self._day_count
-
-
-_usage_registry: dict[str, _ModelUsage] = {}
+_usage_registry: dict[str, ModelUsage] = {}
 _usage_registry_lock = threading.Lock()
+_usage_since: str = datetime.datetime.now(datetime.UTC).isoformat()
+
+# believed_free models that served a request reporting a non-zero cost. Surfaced
+# (not auto-removed) via GET /v1/usage so the operator can review them.
+_paid_free_flags: dict[str, dict] = {}
+_paid_free_lock = threading.Lock()
 
 
-def _record_usage(provider_name: str, upstream_model: str) -> None:
-    """Record one successful request for a free-tier model."""
-    key = f"{provider_name}/{upstream_model}".lower()
+def _get_or_create_tracker(key: str) -> ModelUsage:
     with _usage_registry_lock:
-        if key not in _usage_registry:
-            _usage_registry[key] = _ModelUsage()
-        tracker = _usage_registry[key]
-    tracker.record()
+        tracker = _usage_registry.get(key)
+        if tracker is None:
+            tracker = ModelUsage()
+            _usage_registry[key] = tracker
+    return tracker
+
+
+def _flag_paid_free(key: str, cost: float, source: str) -> None:
+    """Record (once-warned) that a believed-free model reported a cost."""
+    with _paid_free_lock:
+        entry = _paid_free_flags.get(key)
+        if entry is None:
+            _paid_free_flags[key] = {
+                "observed_cost": round(cost, 8),
+                "cost_source": source,
+                "samples": 1,
+            }
+            logger.warning(
+                "[usage] believed_free model %s reported a cost (%.8f, source=%s); "
+                "review whether it belongs in believed_free / the /free set.",
+                key, cost, source,
+            )
+        else:
+            entry["samples"] += 1
+            entry["observed_cost"] = round(max(entry["observed_cost"], cost), 8)
+
+
+def _record_usage(
+    provider_name: str,
+    upstream_model: str,
+    *,
+    usage: dict | None = None,
+    config: dict | None = None,
+    count_request: bool = True,
+) -> None:
+    """Record a served request and/or its token + cost usage.
+
+    *count_request* increments the request windows used by the free-tier load
+    balancer; the streaming path counts the request up front (no usage yet) and
+    calls again post-stream with ``count_request=False`` to add the token totals
+    parsed from the final SSE chunk.
+    """
+    key = f"{provider_name}/{upstream_model}".lower()
+    tracker = _get_or_create_tracker(key)
+
+    prompt = completion = total = 0
+    cost = 0.0
+    source: str | None = None
+    if usage:
+        prompt = usage.get("prompt_tokens", 0)
+        completion = usage.get("completion_tokens", 0)
+        total = usage.get("total_tokens", 0) or (prompt + completion)
+        cost, source = compute_cost(provider_name, upstream_model, usage, load_pricing_map())
+
+    tracker.record(
+        requests=1 if count_request else 0,
+        prompt=prompt, completion=completion, total=total,
+        cost=cost, cost_source=source,
+    )
+
+    if usage and cost > 0:
+        cfg = config if config is not None else load_config()
+        if _is_model_free(provider_name, upstream_model, cfg):
+            _flag_paid_free(key, cost, source or "unknown")
+
+
+def _record_stream_usage(provider_name: str, upstream_model: str, tail: bytes, config: dict | None) -> None:
+    """Parse the tail of a streamed response and record its tokens/cost (no request count)."""
+    usage = parse_stream_usage(tail)
+    if usage:
+        _record_usage(provider_name, upstream_model, usage=usage, config=config, count_request=False)
 
 
 def _get_usage_snapshot(key: str) -> tuple[int, int]:
-    """Return (used_last_60s, used_today) for the given provider/model key."""
+    """Return (requests_last_60s, requests_today) for the given provider/model key."""
     with _usage_registry_lock:
         tracker = _usage_registry.get(key)
     return tracker.snapshot() if tracker else (0, 0)
+
+
+def _get_token_snapshot(key: str) -> tuple[int, int]:
+    """Return (tokens_last_60s, tokens_today) for the given provider/model key."""
+    with _usage_registry_lock:
+        tracker = _usage_registry.get(key)
+    return tracker.token_snapshot() if tracker else (0, 0)
+
+
+def _reset_usage() -> None:
+    """Clear all in-memory usage counters and paid-free flags."""
+    global _usage_since
+    with _usage_registry_lock:
+        _usage_registry.clear()
+    with _paid_free_lock:
+        _paid_free_flags.clear()
+    _usage_since = datetime.datetime.now(datetime.UTC).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +256,10 @@ def _get_usage_snapshot(key: str) -> tuple[int, int]:
 # Tracks whether the one-time local model sync has run since startup.
 _local_sync_done: bool = False
 _local_sync_lock = threading.Lock()
+
+# Tracks whether the one-time startup run of update_free_models has fired.
+_startup_update_done: bool = False
+_startup_update_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Short-lived response cache (non-streaming only)
@@ -241,6 +306,10 @@ def _response_cache_put(key: str, content: bytes, status: int, content_type: str
 @app.before_request
 def _log_request() -> None:
     g._start_time = time.monotonic()
+    # Fire the optional startup updater once (covers gunicorn, which imports the
+    # app object directly rather than calling run_server). No-op unless
+    # config['update_believed_free_on_startup'] is true.
+    _run_startup_update_once()
     logger.info("→ %s %s", request.method, request.path)
 
 
@@ -724,6 +793,57 @@ def _sync_local_provider_models_once() -> None:
     _t.Thread(target=_run, daemon=True, name="local-model-sync").start()
 
 
+def _run_startup_update_once(config_path: str | None = None) -> None:
+    """When config['update_believed_free_on_startup'] is true, run the free-models updater once.
+
+    Spawns a background daemon thread so it never blocks request handling, and
+    is guarded so it fires at most once per worker process. The updater refreshes
+    the believed_free / free_limits / pricing data and syncs the user config; its
+    changes are picked up by the normal mtime-based config reload. If the updater
+    package isn't shipped in this deployment (e.g. a slim image without scripts/),
+    it logs a warning and does nothing.
+
+    When config['probe_cost'] is true the updater also actively probes
+    believed_free models for cost (see scripts/sources/probe.py).
+    """
+    config = load_config()
+    if config.get("update_believed_free_on_startup") is not True:
+        return
+
+    global _startup_update_done
+    with _startup_update_lock:
+        if _startup_update_done:
+            return
+        _startup_update_done = True
+
+    def _run() -> None:
+        try:
+            from scripts.update_free_models import main as _update_main
+        except Exception as exc:  # noqa: BLE001 — updater is optional at runtime
+            logger.warning("[startup-update] updater unavailable in this deployment: %s", exc)
+            return
+        argv: list[str] = []
+        path = config_path
+        if not path:
+            try:
+                from .config import get_config_path
+                path = str(get_config_path(None))
+            except Exception:  # noqa: BLE001
+                path = None
+        if path:
+            argv += ["--config", path]
+        logger.info("[startup-update] running update_free_models %s", argv or "(sidecar only)")
+        try:
+            _update_main(argv)
+            logger.info("[startup-update] complete")
+        except SystemExit:
+            pass
+        except Exception as exc:  # noqa: BLE001 — never let a scrape failure crash the worker
+            logger.warning("[startup-update] failed: %s", exc)
+
+    threading.Thread(target=_run, daemon=True, name="startup-update").start()
+
+
 def _infer_local_reasoning_level(model_id: str) -> str:
     """
     Infer exploratory / standard / deep for a locally-served model.
@@ -1065,6 +1185,7 @@ def _proxy_streaming(
     provider_cfg: dict,
     payload: dict,
     timeout: int,
+    config: dict | None = None,
 ) -> Response:
     """
     Forward a streaming request to the upstream and relay the raw SSE byte
@@ -1073,15 +1194,23 @@ def _proxy_streaming(
     The `stream_with_context` wrapper ensures that the generator holds a
     reference to the Flask application context throughout the lifetime of the
     response, which is required when teardown hooks are present.
+
+    When *config* is provided, the request is counted up front and the streamed
+    bytes are tee-ed so the final ``usage`` chunk can be recorded for accounting.
     """
     base_url = provider_base_url(provider_cfg)
     url = f"{base_url}/{endpoint}"
     headers = _upstream_headers(provider_cfg)
+    upstream_model = payload.get("model", "")
+
+    if config is not None and upstream_model:
+        _record_usage(provider_name, upstream_model, usage=None, config=config)
 
     logger.info("  upstream POST %s  model=%s  [streaming]", url, payload.get("model", "?"))
 
     @stream_with_context
     def generate():
+        tail = bytearray()
         try:
             with requests.post(
                 url,
@@ -1101,6 +1230,9 @@ def _proxy_streaming(
                             )
                             first = False
                         yield chunk
+                        tail += chunk
+                        if len(tail) > _STREAM_TAIL_BYTES:
+                            del tail[:-_STREAM_TAIL_BYTES]
         except requests.exceptions.Timeout:
             logger.error(
                 "[server:_proxy_streaming] provider=%s timed out", provider_name
@@ -1117,6 +1249,9 @@ def _proxy_streaming(
             yield (
                 f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
             )
+        finally:
+            if config is not None and upstream_model:
+                _record_stream_usage(provider_name, upstream_model, bytes(tail), config)
 
     return Response(generate(), content_type="text/event-stream")
 
@@ -1328,7 +1463,7 @@ def _proxy_cycling_non_streaming(
     candidates: list[tuple[str, dict, str]],
     payload: dict,
     timeout: int,
-    on_success: Callable[[str, str], None] | None = None,
+    on_success: Callable[..., None] | None = None,
 ) -> Response:
     """Try each candidate in order, returning the first success.
 
@@ -1337,6 +1472,9 @@ def _proxy_cycling_non_streaming(
     next candidate is tried, mirroring HTTP-error failover.  When every
     candidate is exhausted the last response is returned so the client still
     receives the real upstream body rather than a synthesized error.
+
+    ``on_success`` is invoked as ``on_success(provider, model, body)`` with the
+    successful response bytes so the caller can record token + cost usage.
     """
     candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
     last: Response | None = None
@@ -1353,7 +1491,7 @@ def _proxy_cycling_non_streaming(
                 last = resp
                 continue
             if on_success is not None:
-                on_success(provider_name, upstream_model)
+                on_success(provider_name, upstream_model, resp.get_data())
             return resp
         logger.warning(
             "  [%s] %s/%s returned %d, trying next", label, provider_name, upstream_model, resp.status_code
@@ -1368,13 +1506,18 @@ def _proxy_cycling_streaming(
     candidates: list[tuple[str, dict, str]],
     payload: dict,
     timeout: int,
-    on_success: Callable[[str, str], None] | None = None,
+    on_success: Callable[..., None] | None = None,
+    config: dict | None = None,
 ) -> Response:
     """
     Try each candidate in order.  Checks the HTTP status code before committing
     to stream the response so failed upstreams are skipped transparently.
     When all candidates fail the last upstream error body is returned so
     clients receive the same diagnostic information as the non-streaming path.
+
+    ``on_success`` is invoked (pre-stream) as ``on_success(provider, model)`` to
+    count the request for load balancing; token + cost totals are recorded
+    post-stream by tee-ing the SSE bytes and parsing the final ``usage`` chunk.
     """
     candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
     last_error: tuple[bytes, int, str] | None = None
@@ -1409,9 +1552,11 @@ def _proxy_cycling_streaming(
 
             captured_resp = resp
             captured_provider = provider_name
+            captured_model = upstream_model
 
             @stream_with_context
-            def generate(r=captured_resp, pn=captured_provider):
+            def generate(r=captured_resp, pn=captured_provider, um=captured_model):
+                tail = bytearray()
                 try:
                     with r:
                         first = True
@@ -1421,6 +1566,9 @@ def _proxy_cycling_streaming(
                                     logger.info("  upstream %d  first chunk: %s", r.status_code, chunk[:200])
                                     first = False
                                 yield chunk
+                                tail += chunk
+                                if len(tail) > _STREAM_TAIL_BYTES:
+                                    del tail[:-_STREAM_TAIL_BYTES]
                 except requests.exceptions.Timeout:
                     logger.error("[%s] provider=%s timed out mid-stream", label, pn)
                     yield b'data: {"error":{"message":"Upstream stream timed out."}}\n\n'
@@ -1428,6 +1576,8 @@ def _proxy_cycling_streaming(
                     logger.error("[%s] provider=%s mid-stream error: %s", label, pn, e)
                     msg = str(e).replace('"', "'")
                     yield f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
+                finally:
+                    _record_stream_usage(pn, um, bytes(tail), config)
 
             return Response(generate(), content_type="text/event-stream")
 
@@ -1488,10 +1638,11 @@ def _capacity_ordered_candidates(
         key = f"{pn}/{um}".lower()
         limits = free_limits.get(key, {})
         used_min, used_day = _get_usage_snapshot(key)
-        score = _capacity_score(used_min, used_day, limits)
+        used_tok_min, used_tok_day = _get_token_snapshot(key)
+        score = _capacity_score(used_min, used_day, limits, used_tok_min, used_tok_day)
         logger.debug(
-            "[capacity] %s/%s  score=%.3f  used_min=%d  used_day=%d",
-            pn, um, score, used_min, used_day,
+            "[capacity] %s/%s  score=%.3f  used_min=%d  used_day=%d  tok_min=%d  tok_day=%d",
+            pn, um, score, used_min, used_day, used_tok_min, used_tok_day,
         )
         scored.append(((pn, pc, um), score))
 
@@ -1562,6 +1713,22 @@ def _normalized_believed_free(config: dict) -> set[str]:
     return valid
 
 
+def _is_model_free(provider_name: str, upstream_id: str, config: dict) -> bool:
+    """True when a model is treated as free-tier: its upstream id contains 'free'
+    or it appears (bare or provider-qualified) in config['believed_free'].
+
+    Shared by the /free candidate selector and the runtime cost flagger so both
+    agree on what "free" means.
+    """
+    believed_free = _normalized_believed_free(config)
+    uid = upstream_id.lower()
+    return (
+        "free" in uid
+        or uid in believed_free
+        or f"{provider_name}/{upstream_id}".lower() in believed_free
+    )
+
+
 def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
     """(provider_name, provider_cfg, upstream_model) for every model whose upstream ID contains 'free' or appears in config['believed_free'].
 
@@ -1572,7 +1739,6 @@ def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
     runtime filter ensures /free never leaks a local model even before sync runs.
     """
     config = load_config()
-    believed_free = _normalized_believed_free(config)
     candidates = []
     for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
         provider_cfg = get_provider(config, provider_name)
@@ -1583,12 +1749,7 @@ def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
         # Skip local providers — they belong to the /local family, not /free.
         if _is_local_url(provider_base_url(provider_cfg)):
             continue
-        is_free = (
-            "free" in upstream_id.lower()
-            or upstream_id.lower() in believed_free
-            or f"{provider_name}/{upstream_id}".lower() in believed_free
-        )
-        if is_free:
+        if _is_model_free(provider_name, upstream_id, config):
             candidates.append((provider_name, provider_cfg, upstream_id))
     return candidates
 
@@ -1615,22 +1776,37 @@ def _get_normalized_free_limits(config: dict) -> dict[str, dict]:
     return result
 
 
-def _capacity_score(used_minute: int, used_day: int, limits: dict) -> float:
+def _capacity_score(
+    used_minute: int,
+    used_day: int,
+    limits: dict,
+    used_tokens_minute: int = 0,
+    used_tokens_day: int = 0,
+) -> float:
     """
     Return a capacity score in [0.0, 1.0]: higher = more remaining headroom.
-    Returns 1.0 (neutral) when neither rpm nor rpd is configured.
+    Returns 1.0 (neutral) when no rpm/rpd/tpm/tpd limit is configured.
     Returns 0.0 when any configured limit is at or exceeded.
-    Token limits (tpm/tpd) are stored for reference but not enforced here.
+
+    Token limits (tpm/tpd) are enforced the same way as request limits using
+    the tokens consumed by prior requests in the sliding/day windows. Configs
+    without token limits are unaffected (the token terms simply don't apply).
     """
     rpm = limits.get("requests_per_minute")
     rpd = limits.get("requests_per_day")
-    if not rpm and not rpd:
+    tpm = limits.get("tokens_per_minute")
+    tpd = limits.get("tokens_per_day")
+    if not rpm and not rpd and not tpm and not tpd:
         return 1.0
     scores: list[float] = []
     if rpm and rpm > 0:
         scores.append(max(0.0, (rpm - used_minute) / rpm))
     if rpd and rpd > 0:
         scores.append(max(0.0, (rpd - used_day) / rpd))
+    if tpm and tpm > 0:
+        scores.append(max(0.0, (tpm - used_tokens_minute) / tpm))
+    if tpd and tpd > 0:
+        scores.append(max(0.0, (tpd - used_tokens_day) / tpd))
     return min(scores) if scores else 1.0
 
 
@@ -2024,6 +2200,13 @@ def _proxy_endpoint(endpoint: str) -> Response:
     server_cfg = config.get("server", {})
     is_streaming: bool = payload.get("stream", False)
 
+    # Ask the upstream to emit a final usage chunk so streamed responses can be
+    # accounted (token/cost). Standard OpenAI option; opt out per-server via
+    # server.stream_include_usage=false if an upstream rejects it.
+    if is_streaming and endpoint == "chat/completions" and server_cfg.get("stream_include_usage", True):
+        if "stream_options" not in payload:
+            payload = {**payload, "stream_options": {"include_usage": True}}
+
     # Check the short-lived response cache for non-streaming requests.
     # Virtual cycling models bypass the cache so their load-spreading and
     # failover logic runs on every request rather than pinning to one upstream.
@@ -2049,10 +2232,16 @@ def _proxy_endpoint(endpoint: str) -> Response:
         if _is_free_virtual_model(model_full):
             free_limits = _get_normalized_free_limits(config)
             ordered = _capacity_ordered_candidates(candidates, free_limits)
-            on_success: Callable[[str, str], None] | None = _record_usage
         else:
             ordered = _cycling_candidates(candidates)
-            on_success = None
+
+        # Record token/cost (and request count) for every cycled candidate.
+        def on_success(pn: str, um: str, body=None) -> None:
+            _record_usage(
+                pn, um,
+                usage=extract_usage(body) if body is not None else None,
+                config=config,
+            )
         # Proactively prefer candidates that support the capabilities this
         # request needs (tools/vision/reasoning/json).  Stable, never drops
         # candidates, and a no-op when nothing is needed or no metadata exists.
@@ -2062,7 +2251,10 @@ def _proxy_endpoint(endpoint: str) -> Response:
         logger.info("  [%s] cycling through %d candidate(s)", model_full, len(ordered))
         if is_streaming:
             timeout = server_cfg.get("stream_timeout", 300)
-            return _proxy_cycling_streaming(endpoint, model_full, ordered, payload, timeout, on_success=on_success)
+            return _proxy_cycling_streaming(
+                endpoint, model_full, ordered, payload, timeout,
+                on_success=on_success, config=config,
+            )
         timeout = server_cfg.get("request_timeout", 120)
         resp = _proxy_cycling_non_streaming(endpoint, model_full, ordered, payload, timeout, on_success=on_success)
     else:
@@ -2075,9 +2267,13 @@ def _proxy_endpoint(endpoint: str) -> Response:
 
         if is_streaming:
             timeout = server_cfg.get("stream_timeout", 300)
-            return _proxy_streaming(endpoint, provider_name, provider_cfg, upstream_payload, timeout)
+            return _proxy_streaming(endpoint, provider_name, provider_cfg, upstream_payload, timeout, config=config)
         timeout = server_cfg.get("request_timeout", 120)
         resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, timeout)
+        # Account pinned (non-virtual) non-streaming requests too.
+        if 200 <= resp.status_code < 300:
+            _record_usage(provider_name, upstream_model,
+                          usage=extract_usage(resp.get_data()), config=config)
 
     # Store successful non-streaming responses in the short-lived cache.
     if cache_key is not None and 200 <= resp.status_code < 300:
@@ -2119,7 +2315,87 @@ def embeddings() -> Response:
     config = load_config()
     timeout = config.get("server", {}).get("request_timeout", 120)
     upstream_payload = {**payload, "model": upstream_model}
-    return _proxy_request("embeddings", provider_name, provider_cfg, upstream_payload, timeout)
+    resp = _proxy_request("embeddings", provider_name, provider_cfg, upstream_payload, timeout)
+    if 200 <= resp.status_code < 300:
+        _record_usage(provider_name, upstream_model,
+                      usage=extract_usage(resp.get_data()), config=config)
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# /v1/usage — token + cost accounting report
+# ---------------------------------------------------------------------------
+
+def _build_usage_report() -> dict:
+    """Snapshot the in-memory usage registry into a JSON-serializable report."""
+    config = load_config()
+    with _usage_registry_lock:
+        items = list(_usage_registry.items())
+
+    models: list[dict] = []
+    totals = {
+        "requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
+        "total_tokens": 0, "cost": 0.0,
+    }
+    for key, tracker in items:
+        snap = tracker.cost_snapshot()
+        tok_min, tok_day = tracker.token_snapshot()
+        provider_name, _, upstream_model = key.partition("/")
+        believed_free = bool(upstream_model) and _is_model_free(provider_name, upstream_model, config)
+        models.append({
+            "model": key,
+            "requests": snap["requests"],
+            "prompt_tokens": snap["prompt_tokens"],
+            "completion_tokens": snap["completion_tokens"],
+            "total_tokens": snap["total_tokens"],
+            "tokens_last_60s": tok_min,
+            "tokens_today": tok_day,
+            "cost": snap["cost"],
+            "cost_currency": "USD",
+            "cost_sources": snap["cost_sources"],
+            "believed_free": believed_free,
+            "unexpected_cost": believed_free and snap["cost"] > 0,
+        })
+        for field in ("requests", "prompt_tokens", "completion_tokens", "total_tokens", "cost"):
+            totals[field] += snap[field]
+    totals["cost"] = round(totals["cost"], 8)
+    models.sort(key=lambda m: m["model"])
+
+    with _paid_free_lock:
+        flagged = [
+            {"model": k, **v} for k, v in sorted(_paid_free_flags.items())
+        ]
+
+    return {
+        "object": "usage.report",
+        "since": _usage_since,
+        "models": models,
+        "totals": totals,
+        "flagged_paid_free_models": flagged,
+    }
+
+
+@app.route("/v1/usage", methods=["GET"])
+@app.route("/usage/stats", methods=["GET"])
+def usage_stats() -> Response:
+    """Report per-model and aggregate token + cost usage for this worker.
+
+    In-memory and per-process: under a multi-worker WSGI server each worker
+    reports only the requests it served. Resets on restart or POST /v1/usage/reset.
+    """
+    return jsonify(_build_usage_report())
+
+
+@app.route("/v1/usage/reset", methods=["POST"])
+def usage_reset() -> Response:
+    """Clear this worker's usage counters. Gated by the admin auth guard."""
+    from .admin import enforce_admin_auth  # local import: admin is wired after routes
+    auth_err = enforce_admin_auth()
+    if auth_err is not None:
+        body, status = auth_err
+        return make_response(body, status)
+    _reset_usage()
+    return jsonify({"object": "usage.reset", "ok": True, "since": _usage_since})
 
 
 # ---------------------------------------------------------------------------
@@ -2231,6 +2507,9 @@ def run_server(config_path: str | None = None) -> None:
     # /v1/models call (eliminates the cold-cache edge case for all clients).
     timeout = server_cfg.get("request_timeout", 120)
     _rebuild_route_cache(providers_cfg, timeout)
+
+    # Optional: refresh free-tier data via the scraper on startup (config flag).
+    _run_startup_update_once(config_path)
 
     app.run(host=host, port=port, threaded=True, debug=False)
 
