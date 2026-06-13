@@ -197,13 +197,14 @@ def _presented_token() -> str:
     return request.headers.get("X-Admin-Token", "").strip()
 
 
-@bp.before_request
-def _require_auth():
-    """Gate only the data API (/admin/api/*). The static shell is public."""
-    path = request.path or ""
-    if not path.startswith("/admin/api/"):
-        return None  # UI shell / static assets carry no secrets.
+def enforce_admin_auth():
+    """Apply the admin auth policy to the current request.
 
+    Returns ``None`` when the request is authorized, otherwise a
+    ``(json_response, status)`` tuple. Shared by the ``/admin/api/*`` guard and
+    other administrative mutations (e.g. POST /v1/usage/reset) so they enforce
+    the same token / loopback policy.
+    """
     config = load_config()
     if not _admin_enabled(config):
         return jsonify({"error": "Admin API is disabled."}), 404
@@ -237,6 +238,15 @@ def _require_auth():
         }),
         403,
     )
+
+
+@bp.before_request
+def _require_auth():
+    """Gate only the data API (/admin/api/*). The static shell is public."""
+    path = request.path or ""
+    if not path.startswith("/admin/api/"):
+        return None  # UI shell / static assets carry no secrets.
+    return enforce_admin_auth()
 
 
 # ---------------------------------------------------------------------------

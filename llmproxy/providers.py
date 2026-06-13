@@ -50,6 +50,8 @@ _FREE_INFO_FIELDS = ("believed_free", "model_reasoning", "model_capabilities", "
 VALID_REASONING_LEVELS = frozenset({"exploratory", "standard", "deep"})
 FREE_LIMIT_KEYS = ("requests_per_minute", "requests_per_day",
                    "tokens_per_minute", "tokens_per_day")
+# Per-token USD prices recorded in the top-level providers.json "pricing" block.
+PRICING_KEYS = ("input_cost_per_token", "output_cost_per_token")
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +107,30 @@ def get_provider_free_info(data: dict | None = None) -> dict[str, dict]:
         }
         for key, prov in d["providers"].items()
     }
+
+
+def get_pricing_map(data: dict | None = None) -> dict[str, tuple[float, float]]:
+    """Return the top-level ``pricing`` block as model_key → (input, output) per token.
+
+    The pricing block is written by the scraper (scripts/sources/litellm_cost_map.py)
+    and keyed by ``provider/model`` (lowercased). Missing/malformed entries are
+    skipped so a hand-edited providers.json can never raise here.
+    """
+    d = data if data is not None else _cached_data()
+    raw = d.get("pricing")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, tuple[float, float]] = {}
+    for key, val in raw.items():
+        if not isinstance(key, str) or not isinstance(val, dict):
+            continue
+        try:
+            in_cost = float(val.get("input_cost_per_token", 0) or 0)
+            out_cost = float(val.get("output_cost_per_token", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        out[key.lower()] = (in_cost, out_cost)
+    return out
 
 
 # ---------------------------------------------------------------------------

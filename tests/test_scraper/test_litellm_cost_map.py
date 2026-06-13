@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import responses
 
-from scripts.sources.litellm_cost_map import LITELLM_COST_MAP_URL, LiteLLMCostMapSource
+from scripts.sources.litellm_cost_map import (
+    LITELLM_COST_MAP_URL,
+    LiteLLMCostMapSource,
+    build_pricing_map,
+)
 
 
 @responses.activate
@@ -69,3 +74,18 @@ def test_all_evidence_medium_confidence(fixtures_dir: Path):
         assert e.is_free is True
         assert e.confidence == "medium"
         assert e.source == "litellm_cost_map"
+
+
+def test_build_pricing_map_keeps_paid_chat_models(fixtures_dir: Path):
+    data = json.loads((fixtures_dir / "litellm_cost_map.json").read_text())
+    pricing = build_pricing_map(data)
+    # Paid, mapped, chat model is priced.
+    assert "google/gemini-1.5-flash-002" in pricing
+    assert pricing["google/gemini-1.5-flash-002"] == {
+        "input_cost_per_token": 0.000000075,
+        "output_cost_per_token": 0.0000003,
+    }
+    # Zero-priced models are NOT in the pricing snapshot (covered by believed_free).
+    assert "groq/llama-3.1-8b-instant" not in pricing
+    # Unmapped provider (openai) is dropped.
+    assert not any(k.startswith("openai/") for k in pricing)

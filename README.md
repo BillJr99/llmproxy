@@ -19,15 +19,16 @@ llmproxy/
 │   ├── __main__.py
 │   ├── config.py
 │   ├── server.py
+│   ├── usage.py             ← token/cost accounting primitives (GET /v1/usage)
 │   ├── setup_wizard.py
 │   ├── admin.py             ← web admin UI + config API (/admin, /admin/api/*)
 │   ├── static/admin/        ← self-contained single-page admin frontend
 │   ├── providers.py         ← loader for the JSON sidecar
 │   └── providers.json       ← single source of truth for ALL provider templates
-│                                (+ believed_free / model_reasoning / model_capabilities / free_limits)
+│                                (+ believed_free / model_reasoning / model_capabilities / free_limits / pricing)
 ├── scripts/
 │   └── update_free_models.py ← scraper that keeps providers.json's free-tier fields current
-│       └── sources/         ← per-source plugins (openrouter, community, /models, docs)
+│       └── sources/         ← per-source plugins (openrouter, community, /models, docs, litellm, probe)
 ├── tests/                   ← pytest unit/integration suite
 ├── requirements.txt
 ├── requirements-dev.txt     ← pytest, ruff, responses (test-only deps)
@@ -366,13 +367,27 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "openrouter/qwen/qwen3-coder:free": ["tools", "reasoning"],
     "google/gemini-2.5-flash": ["tools", "vision", "json"]
   },
+  "free_limits": {
+    "groq/llama-3.1-8b-instant": {
+      "requests_per_minute": 30,
+      "requests_per_day": 14400,
+      "tokens_per_minute": 6000,
+      "tokens_per_day": 500000
+    }
+  },
+
+  "probe_cost": false,
+  "autoremove_believed_free": false,
+  "update_on_startup": false,
+
   "server": {
     "host": "0.0.0.0",
     "port": 8080,
     "log_level": "INFO",
     "request_timeout": 120,
     "stream_timeout": 300,
-    "response_cache_ttl": 120
+    "response_cache_ttl": 120,
+    "stream_include_usage": true
   }
 }
 ```
@@ -453,6 +468,131 @@ as before.  The field **auto-populates** from the scraper (OpenRouter's
 "Manage model tags → Tag model capabilities" menu.
 
 See `config.example.json` for a complete annotated example.
+
+<a name="free_limits"></a>
+### `free_limits` — capacity-aware free-tier load balancing
+
+`free_limits` is an **optional** top-level object mapping a
+`provider/upstream_model` key (lowercased) to that model's free-tier quota:
+
+```json
+"free_limits": {
+  "groq/llama-3.1-8b-instant": {
+    "requests_per_minute": 30,
+    "requests_per_day": 14400,
+    "tokens_per_minute": 6000,
+    "tokens_per_day": 500000
+  }
+}
+```
+
+When a `…/free` virtual model (`llmproxy__free`, `llmproxy__<level>/free`,
+`llmproxy__<provider>/free`, …) picks which backend to use, it scores each
+candidate by how much of its quota is still unused and prefers the one with the
+most headroom (weighted random, so load is still spread). **Both** request
+limits (`requests_per_minute` / `requests_per_day`) **and** token limits
+(`tokens_per_minute` / `tokens_per_day`) are now enforced — a model that has
+burned through its per-minute token budget is scored down and skipped just like
+one that hit its request cap, which keeps traffic inside the free tier for
+providers that meter by tokens. Any field set to `null` is ignored. Counters are
+in-memory and **per worker process** (see the note on multi-worker below).
+
+<a name="usage-accounting"></a>
+### Token + cost accounting — `GET /v1/usage`
+
+The proxy tracks tokens and dollar cost for every request it serves and exposes
+them on a read-only endpoint:
+
+```bash
+curl http://localhost:8080/v1/usage | jq
+```
+
+```json
+{
+  "object": "usage.report",
+  "since": "2026-06-13T10:00:00+00:00",
+  "models": [
+    {
+      "model": "groq/llama-3.1-8b-instant",
+      "requests": 412,
+      "prompt_tokens": 50231, "completion_tokens": 18044, "total_tokens": 68275,
+      "tokens_last_60s": 1203, "tokens_today": 68275,
+      "cost": 0.0, "cost_currency": "USD",
+      "cost_sources": {"provider": 0, "computed": 412, "unknown": 0},
+      "believed_free": true,
+      "unexpected_cost": false
+    }
+  ],
+  "totals": {"requests": 412, "prompt_tokens": 50231, "completion_tokens": 18044,
+             "total_tokens": 68275, "cost": 0.0},
+  "flagged_paid_free_models": []
+}
+```
+
+- **Token counts** come from the upstream `usage` block of each response
+  (streaming included — the proxy asks for a final usage chunk via
+  `stream_options.include_usage`; disable with `server.stream_include_usage:
+  false` if an upstream rejects it).
+- **Cost** is *hybrid*: the provider's own `usage.cost` is used when present
+  (e.g. OpenRouter, Vercel AI Gateway); otherwise it is computed from a
+  per-token `pricing` snapshot bundled into `llmproxy/providers.json` by the
+  scraper (`cost_sources` tells you which was used for how many requests).
+- **`flagged_paid_free_models`** lists any model in `believed_free` that served
+  a request reporting a **non-zero** cost. These are surfaced for review only —
+  the proxy never edits `believed_free` at runtime. Use this to spot a model
+  that has quietly left its free tier.
+
+`POST /v1/usage/reset` clears the counters for the current worker; it is gated by
+the same auth policy as the [admin API](#security--localhost-only-by-default)
+(loopback-only unless an admin token is set).
+
+> **Per-worker accounting.** Like the load-balancer counters, usage/cost is
+> in-memory and per worker process. Under a multi-worker gunicorn deployment each
+> worker reports only the requests it served, and the totals reset on restart.
+> Run a single worker if you need one consolidated view.
+
+<a name="cost-flags"></a>
+### Verifying free models are actually free
+
+Two opt-in, top-level config flags (both default `false`) let you keep
+`believed_free` honest:
+
+```json
+{
+  "probe_cost": false,
+  "autoremove_believed_free": false
+}
+```
+
+- **`probe_cost`** — when `true`, [`scripts/update_free_models.py`](#keeping-the-free-models-list-current)
+  actively probes each `believed_free` model with a tiny real chat request
+  (`max_tokens: 1`) using your configured API keys, inspects the returned
+  `usage`/cost, and flags any model that reports a cost. This spends a small
+  amount of quota, so it is off by default. (You can also trigger it for a single
+  run with the `--probe` flag.)
+- **`autoremove_believed_free`** — when `true`, the scraper **removes** any
+  model that probes (or prices) as non-free from `believed_free` (and therefore
+  from the `/free` virtual model). When `false` (default), such models are
+  reported in the scraper output and in `flagged_paid_free_models`, but left in
+  place for you to review.
+
+<a name="update-on-startup"></a>
+### Running the updater on startup — `update_on_startup`
+
+Set the top-level flag to refresh free-tier data automatically when the server
+boots:
+
+```json
+{ "update_on_startup": true }
+```
+
+When `true`, the server runs `scripts/update_free_models.py` once per worker in a
+background thread at startup (it never blocks request handling). It refreshes the
+`believed_free` / `free_limits` / `pricing` data and syncs your `config.json`;
+the changes are picked up by the normal config hot-reload. If `probe_cost` is
+also `true`, the startup run includes the active cost probe. Defaults to `false`.
+(If you run a slim deployment that doesn't ship the `scripts/` directory, the
+server logs a warning and skips the update.)
 
 ### Provider templates
 
@@ -611,7 +751,9 @@ for human review.
 | `openrouter` | high       | Hits `https://openrouter.ai/api/v1/models` and flags any model with `pricing.prompt == 0` as free. |
 | `docs`       | high       | Per-provider HTML scrapers for published rate-limit / free-tier pages (Google, Groq, Cerebras, Mistral, Cohere). Add more under `scripts/sources/docs/`. |
 | `api`        | medium     | Calls each provider's OpenAI-compatible `/v1/models` endpoint when `<PROVIDER>_API_KEY` is set in your environment. Used to detect *removals* (a believed-free model that's no longer listed). |
+| `litellm_cost_map` | medium | Reads the public [litellm](https://github.com/BerriAI/litellm) pricing map: flags zero-priced models as free **and** snapshots per-token prices for paid ones into the sidecar `pricing` block (used by the proxy to cost tokens offline — see [Token + cost accounting](#usage-accounting)). |
 | `community`  | low        | Pulls the [tashfeenahmed/freellmapi](https://github.com/tashfeenahmed/freellmapi) community list as a sanity signal. |
+| `probe`      | high · **opt-in** | Sends a tiny real chat request to each `believed_free` model and flags any that report a cost. Off by default; enable with `probe_cost: true` in `config.json` or the `--probe` flag. Spends a little quota. |
 
 ### Usage
 
@@ -637,7 +779,28 @@ python scripts/update_free_models.py --config ~/.config/llmproxy/config.json
 
 # Sync the config from the current sidecar without scraping
 python scripts/update_free_models.py --regen-config-only --config ~/.config/llmproxy/config.json
+
+# Actively probe believed_free models for cost (real requests; needs API keys).
+# Equivalent to setting "probe_cost": true in config.json.
+python scripts/update_free_models.py --probe --config ~/.config/llmproxy/config.json --dry-run
+python scripts/update_free_models.py --probe --probe-max 20 --probe-provider groq
 ```
+
+### Verifying free tiers and auto-removal (`probe_cost` / `autoremove_believed_free`)
+
+By default the scraper only *adds* high-confidence free models and *removes* ones
+that a trusted source contradicts. Two `config.json` flags extend this to
+empirical cost checks (see [Verifying free models are actually free](#cost-flags)):
+
+- **`probe_cost: true`** (or `--probe`) runs the `probe` source — a real
+  `max_tokens: 1` request to every `believed_free` model that has a configured
+  API key — and flags any that report a non-zero cost.
+- **`autoremove_believed_free: true`** lets those probe-flagged (and otherwise
+  non-free) models be removed from `believed_free` automatically. When `false`
+  (default), the run prints the flagged models but makes no removal.
+
+You can also have the server run this updater on boot — see
+[`update_on_startup`](#update-on-startup).
 
 ### Syncing your live config (`--config PATH`)
 

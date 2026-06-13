@@ -42,13 +42,16 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from llmproxy.config import load_config as load_user_config  # noqa: E402
 from llmproxy.providers import (  # noqa: E402
     DATA_PATH,
     FREE_LIMIT_KEYS,
     infer_reasoning_level,
     load_data,
 )
-from scripts.sources import ALL_SOURCES, Evidence  # noqa: E402
+from scripts.sources import ALL_SOURCES, OPT_IN_SOURCES, Evidence  # noqa: E402
+from scripts.sources.litellm_cost_map import fetch_pricing_map  # noqa: E402
+from scripts.sources.probe import ProbeSource  # noqa: E402
 
 CONFIG_EXAMPLE_PATH = REPO_ROOT / "config.example.json"
 
@@ -260,6 +263,26 @@ def apply_updates(sidecar: dict, updates: dict) -> bool:
                 del mc[mid]
                 changed = True
     return changed
+
+
+def _refresh_pricing(sidecar: dict) -> bool:
+    """Fetch the litellm per-token pricing snapshot into sidecar['pricing'].
+
+    Returns True if the block changed. Network/parse failures are non-fatal —
+    a stale pricing block is better than aborting the whole run.
+    """
+    try:
+        pricing = fetch_pricing_map()
+    except Exception as exc:  # noqa: BLE001
+        print(_warn(f"  pricing snapshot refresh failed: {exc}"))
+        return False
+    if not pricing:
+        return False
+    if sidecar.get("pricing") == pricing:
+        return False
+    sidecar["pricing"] = dict(sorted(pricing.items()))
+    print(_ok(f"  pricing snapshot: {len(pricing)} model(s)"))
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -573,10 +596,21 @@ def _sync_user_config(sidecar: dict, config_path: str, *, dry_run: bool) -> int:
 # CLI
 # ---------------------------------------------------------------------------
 
-def _run_source(source_name: str) -> tuple[str, bool, list[Evidence], str | None]:
-    cls = ALL_SOURCES[source_name]
+def _run_source(
+    source_name: str,
+    *,
+    config_path: str | None = None,
+    probe_max: int | None = None,
+    probe_provider: str | None = None,
+) -> tuple[str, bool, list[Evidence], str | None]:
     try:
-        evidence = cls().fetch() if isinstance(cls, type) else cls().fetch()
+        if source_name == "probe":
+            src = ProbeSource(config_path=config_path, max_models=probe_max,
+                              provider_filter=probe_provider)
+        else:
+            cls = ALL_SOURCES[source_name]
+            src = cls()
+        evidence = src.fetch()
     except Exception as exc:  # noqa: BLE001
         return source_name, False, [], str(exc)
     return source_name, True, evidence, None
@@ -584,12 +618,21 @@ def _run_source(source_name: str) -> tuple[str, bool, list[Evidence], str | None
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    default_sources = [s for s in ALL_SOURCES if s not in OPT_IN_SOURCES]
     ap.add_argument("--dry-run", action="store_true",
                     help="Print proposed changes without writing anything.")
     ap.add_argument("--provider",
                     help="Limit updates to a single provider (e.g. 'google').")
-    ap.add_argument("--source", default=",".join(ALL_SOURCES.keys()),
-                    help="Comma-separated source names (default: all).")
+    ap.add_argument("--source", default=",".join(default_sources),
+                    help="Comma-separated source names (default: all except opt-in probes).")
+    ap.add_argument("--probe", action="store_true",
+                    help="Actively probe believed_free models for cost (sends real "
+                         "requests; requires configured API keys). Also enabled by "
+                         "setting probe_cost: true in config.json.")
+    ap.add_argument("--probe-max", type=int, metavar="N",
+                    help="Probe at most N models (bounds spend).")
+    ap.add_argument("--probe-provider", metavar="NAME",
+                    help="Only probe models from this provider.")
     ap.add_argument("--regen-config-only", action="store_true",
                     help="Skip scraping; regenerate config.example.json from the current sidecar.")
     ap.add_argument("--config", metavar="PATH",
@@ -597,6 +640,14 @@ def main(argv: list[str] | None = None) -> int:
                          "(add new + remove no-longer-free) and model_reasoning (add-only) "
                          "from the updated sidecar. Limited to providers configured in that file.")
     args = ap.parse_args(argv)
+
+    # Read opt-in flags from the user config (probe_cost / autoremove_believed_free).
+    try:
+        user_cfg = load_user_config(args.config, force_reload=True)
+    except Exception:  # noqa: BLE001 — a missing/broken config must not break scraping
+        user_cfg = {}
+    probe_cost = bool(user_cfg.get("probe_cost", False)) or args.probe
+    autoremove = bool(user_cfg.get("autoremove_believed_free", False))
 
     if args.regen_config_only:
         write_config_example()
@@ -606,16 +657,25 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     requested = [s.strip() for s in args.source.split(",") if s.strip()]
+    if probe_cost and "probe" not in requested:
+        requested.append("probe")
     unknown = [s for s in requested if s not in ALL_SOURCES]
     if unknown:
         print(_err(f"Unknown source(s): {unknown}. Known: {sorted(ALL_SOURCES.keys())}"))
         return 2
 
     print(_h(f"\nFetching evidence from sources: {requested}"))
+    if "probe" in requested:
+        print(_warn("  ⚠  probe enabled — sending real requests to believed_free models "
+                    "(uses configured API keys / quota)."))
     all_evidence: list[Evidence] = []
     source_status: dict[str, bool] = {}
     with ThreadPoolExecutor(max_workers=min(5, len(requested))) as ex:
-        futures = {ex.submit(_run_source, s): s for s in requested}
+        futures = {
+            ex.submit(_run_source, s, config_path=args.config,
+                      probe_max=args.probe_max, probe_provider=args.probe_provider): s
+            for s in requested
+        }
         for fut in as_completed(futures):
             name, ok, evs, err = fut.result()
             source_status[name] = ok
@@ -624,6 +684,28 @@ def main(argv: list[str] | None = None) -> int:
                 all_evidence.extend(evs)
             else:
                 print(_err(f"  {name}: FAILED — {err}"))
+
+    # Probe-confirmed paid models. When autoremove_believed_free is off (the
+    # default), we report these but do NOT remove them from believed_free.
+    probe_paid = {
+        (ev.provider, ev.model_id)
+        for ev in all_evidence
+        if ev.source == "probe" and ev.is_free is False
+    }
+    if probe_paid:
+        print(_h("\n=== Probe flagged believed_free models reporting a cost ==="))
+        for _provider_name, model_id in sorted(probe_paid):
+            print(f"  {_warn('⚠')} {model_id}")
+        if autoremove:
+            print(_warn("  autoremove_believed_free=true → these will be removed."))
+        else:
+            print(_dim("  autoremove_believed_free=false → flagged only (not removed). "
+                       "Set it true in config.json to auto-remove."))
+        if not autoremove:
+            all_evidence = [
+                ev for ev in all_evidence
+                if not (ev.source == "probe" and ev.is_free is False)
+            ]
 
     # If only "api" succeeded for a provider, we trust /models presence as
     # ground truth for that provider.
@@ -643,6 +725,12 @@ def main(argv: list[str] | None = None) -> int:
 
     print_diff(updates, source_status)
 
+    # Refresh the per-token pricing snapshot (used by the proxy to cost tokens
+    # offline) whenever the litellm cost map ran cleanly.
+    pricing_changed = False
+    if source_status.get("litellm_cost_map") and not args.provider:
+        pricing_changed = _refresh_pricing(sidecar)
+
     if args.dry_run:
         # Reflect the would-be sidecar state in the user-config diff without
         # writing anything to the sidecar.
@@ -653,7 +741,7 @@ def main(argv: list[str] | None = None) -> int:
         print(_dim("\n(dry run — no files written)"))
         return 0
 
-    changed = apply_updates(sidecar, updates)
+    changed = apply_updates(sidecar, updates) or pricing_changed
     if changed:
         DATA_PATH.write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
         print(_ok(f"\nUpdated {DATA_PATH}"))
