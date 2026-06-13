@@ -73,6 +73,7 @@ from .usage import (
     load_pricing_map,
     parse_stream_usage,
 )
+from .dialects import get_inbound, get_outbound
 
 # ---------------------------------------------------------------------------
 # Flask application
@@ -349,11 +350,23 @@ def _upstream_headers(provider_cfg: dict) -> dict:
     api_key = provider_api_key(provider_cfg)
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+    headers.update(_forwarded_client_headers())
+    return headers
+
+
+def _forwarded_client_headers() -> dict:
+    """Selected client headers we relay upstream (OpenRouter attribution etc.).
+
+    Returns only the present subset of _FORWARDED_REQUEST_HEADERS; safe to call
+    only inside a request context. Outbound dialect adapters decide whether to
+    merge these (the OpenAI adapter does; native Anthropic/Gemini ignore them).
+    """
+    out: dict = {}
     for header in _FORWARDED_REQUEST_HEADERS - {"Content-Type"}:
         value = request.headers.get(header)
         if value:
-            headers[header] = value
-    return headers
+            out[header] = value
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1327,10 +1340,18 @@ def _proxy_request(
     provider_cfg: dict,
     payload: dict,
     timeout: int,
+    *,
+    outbound=None,
 ) -> Response:
     """
-    Forward a non-streaming request to the upstream provider and return its
-    response verbatim (status code, body, content-type).
+    Forward a non-streaming request to the upstream provider and return the
+    response in the **canonical OpenAI** representation (status code, body,
+    content-type).
+
+    The provider's ``protocol`` selects an outbound dialect adapter that builds
+    the native request and translates the native response back to canonical
+    OpenAI form. For the default ``openai`` protocol the adapter is the identity,
+    so the body is forwarded and returned verbatim — behavior is unchanged.
 
     Parameters
     ----------
@@ -1339,22 +1360,37 @@ def _proxy_request(
     provider_name : str
         Used only for error message attribution.
     provider_cfg : dict
-        Provider configuration (base_url, api_key).
+        Provider configuration (base_url, api_key, optional protocol).
     payload : dict
-        Request body to forward (with the upstream model ID already set).
+        Canonical OpenAI request body (with the upstream model ID already set).
     timeout : int
         Request timeout in seconds.
+    outbound : OutboundAdapter, optional
+        Override the adapter resolved from ``provider_cfg['protocol']``.
     """
     base_url = provider_base_url(provider_cfg)
-    url = f"{base_url}/{endpoint}"
-    headers = _upstream_headers(provider_cfg)
+    outbound = outbound or get_outbound(provider_cfg.get("protocol"))
+    url, headers, body = outbound.build_request(
+        endpoint, base_url, provider_cfg, payload,
+        stream=False, forwarded_headers=_forwarded_client_headers(),
+    )
 
     logger.info("  upstream POST %s  model=%s", url, payload.get("model", "?"))
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        resp = requests.post(url, headers=headers, json=body, timeout=timeout)
         logger.info("  upstream %d  %.0fms", resp.status_code, resp.elapsed.total_seconds() * 1000)
-        content_type = resp.headers.get("Content-Type", "application/json")
-        return Response(resp.content, status=resp.status_code, content_type=content_type)
+        if outbound.is_identity:
+            content = resp.content
+            content_type = resp.headers.get("Content-Type", "application/json")
+        else:
+            # Translate native success bodies to canonical OpenAI; leave upstream
+            # error bodies (4xx/5xx) intact so the client sees the real diagnostic.
+            content = (
+                outbound.translate_response(resp.content)
+                if 200 <= resp.status_code < 300 else resp.content
+            )
+            content_type = "application/json"
+        return Response(content, status=resp.status_code, content_type=content_type)
     except requests.exceptions.Timeout:
         return _error(
             f"Upstream provider '{provider_name}' timed out after {timeout}s.",
@@ -1369,6 +1405,54 @@ def _proxy_request(
 # Generic upstream proxy (streaming / SSE)
 # ---------------------------------------------------------------------------
 
+def _translated_stream_response(
+    upstream_resp,
+    outbound,
+    inbound,
+    provider_name: str,
+    upstream_model: str,
+    config: dict | None,
+) -> Response:
+    """Pipe a *non-identity* upstream SSE stream through the dialect adapters.
+
+    ``outbound.parse_stream`` turns the provider-native event stream into
+    canonical OpenAI chunk dicts; usage is tee'd off those canonical chunks; then
+    ``inbound.render_stream`` renders them into the client's dialect. The
+    canonical-in-the-middle design means any inbound × upstream combination works.
+    """
+    @stream_with_context
+    def generate(r=upstream_resp):
+        captured: dict = {}
+        try:
+            with r:
+                def raw():
+                    for chunk in r.iter_content(chunk_size=None):
+                        if chunk:
+                            yield chunk
+
+                def teed(canon):
+                    for c in canon:
+                        if isinstance(c, dict) and c.get("usage"):
+                            captured.update(c["usage"])
+                        yield c
+
+                for out_bytes in inbound.render_stream(teed(outbound.parse_stream(raw()))):
+                    yield out_bytes
+        except requests.exceptions.Timeout:
+            logger.error("[server:_translated_stream] provider=%s timed out", provider_name)
+            yield b'data: {"error":{"message":"Upstream stream timed out."}}\n\n'
+        except Exception as e:  # noqa: BLE001
+            logger.error("[server:_translated_stream] provider=%s: %s", provider_name, e)
+            traceback.print_exc()
+            msg = str(e).replace('"', "'")
+            yield f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
+        finally:
+            if config is not None and upstream_model and captured:
+                _record_usage(provider_name, upstream_model, usage=captured, config=config)
+
+    return Response(generate(), content_type="text/event-stream")
+
+
 def _proxy_streaming(
     endpoint: str,
     provider_name: str,
@@ -1376,21 +1460,29 @@ def _proxy_streaming(
     payload: dict,
     timeout: int,
     config: dict | None = None,
+    *,
+    outbound=None,
+    inbound=None,
 ) -> Response:
     """
-    Forward a streaming request to the upstream and relay the raw SSE byte
-    stream back to the client without buffering.
+    Forward a streaming request to the upstream and relay the SSE stream back to
+    the client.
 
-    The `stream_with_context` wrapper ensures that the generator holds a
-    reference to the Flask application context throughout the lifetime of the
-    response, which is required when teardown hooks are present.
+    When the outbound (provider protocol) and inbound (client dialect) adapters
+    are both identities — the common openai→openai case — the raw upstream bytes
+    are relayed without buffering or parsing, exactly as before. Otherwise the
+    stream is piped through the dialect adapters (canonical OpenAI in the middle).
 
-    When *config* is provided, the request is counted up front and the streamed
-    bytes are tee-ed so the final ``usage`` chunk can be recorded for accounting.
+    When *config* is provided, the request is counted up front and usage is
+    recorded post-stream.
     """
     base_url = provider_base_url(provider_cfg)
-    url = f"{base_url}/{endpoint}"
-    headers = _upstream_headers(provider_cfg)
+    outbound = outbound or get_outbound(provider_cfg.get("protocol"))
+    inbound = inbound or get_inbound("openai")
+    url, headers, body = outbound.build_request(
+        endpoint, base_url, provider_cfg, payload,
+        stream=True, forwarded_headers=_forwarded_client_headers(),
+    )
     upstream_model = payload.get("model", "")
 
     if config is not None and upstream_model:
@@ -1398,6 +1490,26 @@ def _proxy_streaming(
 
     logger.info("  upstream POST %s  model=%s  [streaming]", url, payload.get("model", "?"))
 
+    # Translation path: open eagerly so a pre-stream upstream error surfaces as a
+    # normal response, then pipe through the adapters.
+    if not (outbound.is_identity and inbound.is_identity):
+        try:
+            upstream_resp = requests.post(url, headers=headers, json=body, stream=True, timeout=timeout)
+        except requests.exceptions.Timeout:
+            return _error(f"Upstream provider '{provider_name}' timed out after {timeout}s.",
+                          status=504, code="timeout")
+        except Exception as e:  # noqa: BLE001
+            return _upstream_error(provider_name, e)
+        if upstream_resp.status_code >= 400:
+            content = upstream_resp.content
+            ct = upstream_resp.headers.get("Content-Type", "application/json")
+            upstream_resp.close()
+            return Response(content, status=upstream_resp.status_code, content_type=ct)
+        return _translated_stream_response(
+            upstream_resp, outbound, inbound, provider_name, upstream_model, config
+        )
+
+    # Identity fast path: raw passthrough, unchanged.
     @stream_with_context
     def generate():
         tail = bytearray()
@@ -1405,7 +1517,7 @@ def _proxy_streaming(
             with requests.post(
                 url,
                 headers=headers,
-                json=payload,
+                json=body,
                 stream=True,
                 timeout=timeout,
             ) as upstream_resp:
@@ -1698,6 +1810,8 @@ def _proxy_cycling_streaming(
     timeout: int,
     on_success: Callable[..., None] | None = None,
     config: dict | None = None,
+    *,
+    inbound=None,
 ) -> Response:
     """
     Try each candidate in order.  Checks the HTTP status code before committing
@@ -1705,21 +1819,29 @@ def _proxy_cycling_streaming(
     When all candidates fail the last upstream error body is returned so
     clients receive the same diagnostic information as the non-streaming path.
 
+    Each candidate's ``protocol`` selects its outbound adapter; ``inbound`` (the
+    client dialect, default openai) renders the canonical stream. When both are
+    identities the raw passthrough below is used unchanged.
+
     ``on_success`` is invoked (pre-stream) as ``on_success(provider, model)`` to
     count the request for load balancing; token + cost totals are recorded
-    post-stream by tee-ing the SSE bytes and parsing the final ``usage`` chunk.
+    post-stream.
     """
     candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
+    inbound = inbound or get_inbound("openai")
     last_error: tuple[bytes, int, str] | None = None
 
     for provider_name, provider_cfg, upstream_model in candidates:
         upstream_payload = {**payload, "model": upstream_model}
         base_url = provider_base_url(provider_cfg)
-        url = f"{base_url}/{endpoint}"
-        headers = _upstream_headers(provider_cfg)
+        outbound = get_outbound(provider_cfg.get("protocol"))
+        url, headers, body = outbound.build_request(
+            endpoint, base_url, provider_cfg, upstream_payload,
+            stream=True, forwarded_headers=_forwarded_client_headers(),
+        )
         logger.info("  [%s] trying %s/%s  [streaming]", label, provider_name, upstream_model)
         try:
-            resp = requests.post(url, headers=headers, json=upstream_payload, stream=True, timeout=candidate_timeout)
+            resp = requests.post(url, headers=headers, json=body, stream=True, timeout=candidate_timeout)
             if resp.status_code >= 400:
                 last_error = (
                     resp.content,
@@ -1739,6 +1861,12 @@ def _proxy_cycling_streaming(
             # capability ordering still steers streaming requests to capable models.
             if on_success is not None:
                 on_success(provider_name, upstream_model)
+
+            # Translation path: pipe the native stream through the adapters.
+            if not (outbound.is_identity and inbound.is_identity):
+                return _translated_stream_response(
+                    resp, outbound, inbound, provider_name, upstream_model, config
+                )
 
             captured_resp = resp
             captured_provider = provider_name
@@ -2365,9 +2493,15 @@ def _virtual_model_hint(model_full: str) -> str:
     return ""
 
 
-def _proxy_endpoint(endpoint: str) -> Response:
+def _proxy_endpoint(endpoint: str, inbound: str = "openai") -> Response:
     """
     Generic handler that routes a POST request to the correct upstream provider.
+
+    The ``inbound`` dialect (``openai`` for ``/v1/chat/completions``,
+    ``anthropic`` for ``/v1/messages``) is normalized to the canonical OpenAI
+    schema up front, so all routing, virtual-model, capability, caching, and
+    usage logic below operate on one representation. The canonical response (and
+    stream) is rendered back into the client's dialect at the boundary.
 
     Reads the 'model' field from the JSON body, resolves the provider, and
     delegates to the streaming or non-streaming proxy helper.  For non-streaming
@@ -2378,9 +2512,12 @@ def _proxy_endpoint(endpoint: str) -> Response:
     The special model names "free" and "local" cycle through all matching
     cached models until one returns a successful response.
     """
-    payload = request.get_json(force=True, silent=True)
-    if payload is None:
+    raw_body = request.get_json(force=True, silent=True)
+    if raw_body is None:
         return _error("Request body must be valid JSON.", status=400)
+
+    inbound_adapter = get_inbound(inbound)
+    payload = inbound_adapter.to_canonical_request(raw_body)
 
     model_full: str = payload.get("model", "")
     if not model_full:
@@ -2443,7 +2580,7 @@ def _proxy_endpoint(endpoint: str) -> Response:
             timeout = server_cfg.get("stream_timeout", 300)
             return _proxy_cycling_streaming(
                 endpoint, model_full, ordered, payload, timeout,
-                on_success=on_success, config=config,
+                on_success=on_success, config=config, inbound=inbound_adapter,
             )
         timeout = server_cfg.get("request_timeout", 120)
         resp = _proxy_cycling_non_streaming(endpoint, model_full, ordered, payload, timeout, on_success=on_success)
@@ -2457,15 +2594,26 @@ def _proxy_endpoint(endpoint: str) -> Response:
 
         if is_streaming:
             timeout = server_cfg.get("stream_timeout", 300)
-            return _proxy_streaming(endpoint, provider_name, provider_cfg, upstream_payload, timeout, config=config)
+            return _proxy_streaming(endpoint, provider_name, provider_cfg, upstream_payload,
+                                    timeout, config=config, inbound=inbound_adapter)
         timeout = server_cfg.get("request_timeout", 120)
         resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, timeout)
-        # Account pinned (non-virtual) non-streaming requests too.
+        # Account pinned (non-virtual) non-streaming requests too. Usage is read
+        # from the canonical (OpenAI-shaped) body before any inbound rendering.
         if 200 <= resp.status_code < 300:
             _record_usage(provider_name, upstream_model,
                           usage=extract_usage(resp.get_data()), config=config)
 
-    # Store successful non-streaming responses in the short-lived cache.
+    # Render the canonical response into the client's dialect (no-op for openai).
+    if not inbound_adapter.is_identity and 200 <= resp.status_code < 300:
+        resp = Response(
+            inbound_adapter.render_response(resp.get_data()),
+            status=resp.status_code,
+            content_type="application/json",
+        )
+
+    # Store successful non-streaming responses in the short-lived cache (rendered
+    # bytes, so a cache hit returns the correct dialect).
     if cache_key is not None and 200 <= resp.status_code < 300:
         _response_cache_put(cache_key, resp.get_data(), resp.status_code, resp.content_type, cache_ttl)
     return resp
@@ -2485,6 +2633,39 @@ def chat_completions() -> Response:
 def completions() -> Response:
     """Proxy legacy text completions."""
     return _proxy_endpoint("completions")
+
+
+@app.route("/v1/messages", methods=["POST"])
+def anthropic_messages() -> Response:
+    """Anthropic Messages API surface (supports streaming via Anthropic SSE).
+
+    The request is translated to canonical OpenAI form, routed exactly like
+    /v1/chat/completions (virtual models, capacity routing, native upstreams all
+    apply), and the response is rendered back into the Anthropic Messages shape.
+    """
+    return _proxy_endpoint("chat/completions", inbound="anthropic")
+
+
+@app.route("/v1/messages/count_tokens", methods=["POST"])
+def anthropic_count_tokens() -> Response:
+    """Approximate token count for the Anthropic Messages API.
+
+    llmproxy has no model-exact tokenizer, so this returns a heuristic estimate
+    (~4 characters/token over the rendered text) — enough for SDK clients that
+    call count_tokens before sending a request.
+    """
+    body = request.get_json(force=True, silent=True)
+    if body is None:
+        return _error("Request body must be valid JSON.", status=400)
+    payload = get_inbound("anthropic").to_canonical_request(body)
+    chars = 0
+    for msg in payload.get("messages", []):
+        content = msg.get("content")
+        if isinstance(content, str):
+            chars += len(content)
+        elif isinstance(content, list):
+            chars += sum(len(p.get("text", "")) for p in content if isinstance(p, dict))
+    return jsonify({"input_tokens": max(1, chars // 4)})
 
 
 @app.route("/v1/embeddings", methods=["POST"])
