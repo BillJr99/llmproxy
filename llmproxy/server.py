@@ -817,10 +817,22 @@ def _run_startup_update_once(config_path: str | None = None) -> None:
         _startup_update_done = True
 
     def _run() -> None:
+        # The scraper lives in the repo-root `scripts/` package, which sits next
+        # to the installed `llmproxy/` package but may not be on sys.path (e.g.
+        # under gunicorn). Add the package's parent dir so `import scripts`
+        # resolves whenever scripts/ shipped alongside the package.
+        import os
+        import sys
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
         try:
             from scripts.update_free_models import main as _update_main
         except Exception as exc:  # noqa: BLE001 — updater is optional at runtime
-            logger.warning("[startup-update] updater unavailable in this deployment: %s", exc)
+            logger.warning(
+                "[startup-update] updater unavailable in this deployment "
+                "(scripts/ not found next to the package): %s", exc,
+            )
             return
         argv: list[str] = []
         path = config_path
