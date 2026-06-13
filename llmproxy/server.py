@@ -817,10 +817,22 @@ def _run_startup_update_once(config_path: str | None = None) -> None:
         _startup_update_done = True
 
     def _run() -> None:
+        # The scraper lives in the repo-root `scripts/` package, which sits next
+        # to the installed `llmproxy/` package but may not be on sys.path (e.g.
+        # under gunicorn). Add the package's parent dir so `import scripts`
+        # resolves whenever scripts/ shipped alongside the package.
+        import os
+        import sys
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
         try:
             from scripts.update_free_models import main as _update_main
         except Exception as exc:  # noqa: BLE001 — updater is optional at runtime
-            logger.warning("[startup-update] updater unavailable in this deployment: %s", exc)
+            logger.warning(
+                "[startup-update] updater unavailable in this deployment "
+                "(scripts/ not found next to the package): %s", exc,
+            )
             return
         argv: list[str] = []
         path = config_path
@@ -833,15 +845,105 @@ def _run_startup_update_once(config_path: str | None = None) -> None:
         if path:
             argv += ["--config", path]
         logger.info("[startup-update] running update_free_models %s", argv or "(sidecar only)")
+        # Snapshot the sidecar so we can tell whether the scrape actually changed
+        # it (and therefore whether a PR is warranted).
+        from . import providers as _providers_mod
+        sidecar_path = _providers_mod.DATA_PATH
+        before = sidecar_path.read_bytes() if sidecar_path.exists() else b""
+        # The updater reports its progress (providers.json writes, believed_free
+        # adds/removes, config sync) via print(). Capture stdout and re-emit each
+        # line through the logger so those changes are visible in the server log.
+        import contextlib
+        import io
+        import re as _re
+        buf = io.StringIO()
         try:
-            _update_main(argv)
-            logger.info("[startup-update] complete")
+            with contextlib.redirect_stdout(buf):
+                _update_main(argv)
         except SystemExit:
             pass
         except Exception as exc:  # noqa: BLE001 — never let a scrape failure crash the worker
             logger.warning("[startup-update] failed: %s", exc)
+        finally:
+            ansi = _re.compile(r"\x1b\[[0-9;]*m")
+            for line in buf.getvalue().splitlines():
+                clean = ansi.sub("", line).rstrip()
+                if clean:
+                    logger.info("[startup-update] %s", clean)
+        after = sidecar_path.read_bytes() if sidecar_path.exists() else b""
+        if after != before:
+            logger.info("[startup-update] providers.json changed")
+            _maybe_open_providers_pr(config, sidecar_path)
+        else:
+            logger.info("[startup-update] providers.json unchanged")
+        logger.info("[startup-update] complete")
 
     threading.Thread(target=_run, daemon=True, name="startup-update").start()
+
+
+def _maybe_open_providers_pr(config: dict, sidecar_path) -> None:
+    """When config['pr_providers_list'] is true, open a PR with the refreshed
+    providers.json (+ config.example.json) against the configured base branch.
+
+    Uses the GitHub API directly (see github_pr.py) — it never touches the local
+    git checkout. Requires a token (GITHUB_TOKEN / GH_TOKEN env, or
+    config['pr_providers_token'] which may be a ${VAR} ref) and the target repo
+    as config['pr_providers_repo'] = "owner/repo". Base branch defaults to
+    "main" (config['pr_providers_base']); branch name to "llmproxy-auto/providers"
+    (config['pr_providers_branch']). Best-effort: every missing prerequisite or
+    API error is logged and skipped, never raised.
+    """
+    if config.get("pr_providers_list") is not True:
+        return
+    import os
+
+    from .github_pr import create_or_update_pr
+
+    token = (
+        os.environ.get("GITHUB_TOKEN")
+        or os.environ.get("GH_TOKEN")
+        or resolve_env_refs(config.get("pr_providers_token"))
+        or ""
+    )
+    if not token:
+        logger.warning(
+            "[providers-pr] pr_providers_list is on but no token found "
+            "(set GITHUB_TOKEN / GH_TOKEN env or config['pr_providers_token']); skipping PR."
+        )
+        return
+    slug = config.get("pr_providers_repo")
+    if not (isinstance(slug, str) and "/" in slug):
+        logger.warning(
+            "[providers-pr] set config['pr_providers_repo'] to \"owner/repo\" to open a PR; skipping."
+        )
+        return
+    owner, repo = slug.split("/", 1)
+    base = config.get("pr_providers_base", "main")
+    branch = config.get("pr_providers_branch", "llmproxy-auto/providers")
+
+    files = {"llmproxy/providers.json": sidecar_path.read_text(encoding="utf-8")}
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    example = os.path.join(repo_root, "config.example.json")
+    if os.path.exists(example):
+        with open(example, encoding="utf-8") as fh:
+            files["config.example.json"] = fh.read()
+
+    logger.info("[providers-pr] opening PR against %s/%s (%s)…", owner, repo, base)
+    try:
+        url = create_or_update_pr(
+            token=token, owner=owner, repo=repo, base=base, branch=branch,
+            files=files,
+            title="chore: automated providers.json refresh (llmproxy)",
+            body=(
+                "Automated `providers.json` refresh opened by a running llmproxy "
+                "deployment (`pr_providers_list`). Free-tier status is best-effort — "
+                "review the diff before merging."
+            ),
+        )
+        if url:
+            logger.info("[providers-pr] %s", url)
+    except Exception as exc:  # noqa: BLE001 — PR creation is best-effort
+        logger.warning("[providers-pr] failed to open PR: %s", exc)
 
 
 def _infer_local_reasoning_level(model_id: str) -> str:

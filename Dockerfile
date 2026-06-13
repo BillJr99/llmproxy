@@ -70,6 +70,10 @@ COPY llmproxy/ ./llmproxy/
 COPY llmproxy/setup.py .
 RUN pip install -e .
 
+# Ship the free-models scraper too, so update_believed_free_on_startup can run
+# it in-process. Optional at runtime — the server degrades gracefully if absent.
+COPY scripts/ ./scripts/
+
 # ── Run as a non-root user ────────────────────────────────────────────────
 # Create an unprivileged user (uid 1000) in the root group (gid 0) and make
 # the config + home directories group-writable. The image therefore runs as
@@ -81,8 +85,8 @@ RUN pip install -e .
 ENV HOME=/home/llmproxy
 RUN useradd --uid 1000 --gid 0 --create-home --home-dir "$HOME" llmproxy \
     && mkdir -p /config "$HOME/.config/llmproxy" \
-    && chgrp -R 0 /config "$HOME" \
-    && chmod -R g+rwX /config "$HOME"
+    && chgrp -R 0 /config "$HOME" /app \
+    && chmod -R g+rwX /config "$HOME" /app
 USER 1000:0
 
 # ── Expose the default listen port ────────────────────────────────────────

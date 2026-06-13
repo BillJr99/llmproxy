@@ -1,0 +1,70 @@
+name: Update providers.json
+
+# Keeps llmproxy/providers.json (and the regenerated config.example.json) current
+# by running the free-models scraper on a schedule and opening a pull request
+# against main whenever the data changes. It uses only the read-only sources
+# (provider docs, /models catalogs, OpenRouter, the litellm cost map, the
+# community list) — it never runs the opt-in `probe` source, so no real model
+# requests / quota are spent here.
+#
+# Toggle: set a repository variable PROVIDERS_AUTOUPDATE to "false" to disable the
+# scheduled run (Settings → Secrets and variables → Actions → Variables). It is
+# treated as enabled unless explicitly set to "false". You can always trigger a
+# run manually from the Actions tab (workflow_dispatch).
+
+on:
+  schedule:
+    # Mondays at 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    # Run on schedule only when not disabled; manual dispatch always runs.
+    if: github.event_name == 'workflow_dispatch' || vars.PROVIDERS_AUTOUPDATE != 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Refresh providers.json from sources (no model probing)
+        run: |
+          python scripts/update_free_models.py
+          echo "----- git status after scrape -----"
+          git status --porcelain llmproxy/providers.json config.example.json || true
+
+      - name: Open a pull request if anything changed
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore: refresh believed_free / free_limits / pricing in providers.json"
+          branch: chore/update-providers
+          delete-branch: true
+          title: "chore: automated providers.json refresh"
+          labels: automated, providers-data
+          add-paths: |
+            llmproxy/providers.json
+            config.example.json
+          body: |
+            Automated refresh of `llmproxy/providers.json` (and the regenerated
+            `config.example.json`) by the **Update providers.json** workflow.
+
+            Sources: provider docs, `/models` catalogs, OpenRouter, the litellm
+            cost map, and the community list. The opt-in `probe` source (which
+            sends real model requests) is **not** run here.
+
+            Review the diff before merging — free-tier status is best-effort and
+            changes without notice.

@@ -379,6 +379,7 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
   "probe_cost": false,
   "autoremove_believed_free": false,
   "update_believed_free_on_startup": false,
+  "pr_providers_list": false,
 
   "server": {
     "host": "0.0.0.0",
@@ -587,12 +588,66 @@ boots:
 ```
 
 When `true`, the server runs `scripts/update_free_models.py` once per worker in a
-background thread at startup (it never blocks request handling). It refreshes the
-`believed_free` / `free_limits` / `pricing` data and syncs your `config.json`;
-the changes are picked up by the normal config hot-reload. If `probe_cost` is
-also `true`, the startup run includes the active cost probe. Defaults to `false`.
-(If you run a slim deployment that doesn't ship the `scripts/` directory, the
-server logs a warning and skips the update.)
+background thread at startup (it never blocks request handling). It:
+
+- **rewrites `llmproxy/providers.json`** (the sidecar) with any `believed_free` /
+  `free_limits` / `pricing` changes, and regenerates `config.example.json`, and
+- **syncs your `config.json`** (`believed_free` / `free_limits` / `model_reasoning`),
+  which the proxy picks up via the normal config hot-reload.
+
+Every line the updater prints — including `Updated …/providers.json`, each
+`believed_free` add/remove, and `Synced free-tier sections into …` — is re-emitted
+through the server log with a `[startup-update]` prefix (at `INFO` level), so set
+`server.log_level` to `INFO` to watch it work. If `probe_cost` is also `true`, the
+startup run includes the active cost probe (and, with `autoremove_believed_free`,
+removes any model it finds is no longer free). Defaults to `false`.
+
+> The scraper lives in the repo-root `scripts/` package. The Docker image ships
+> it, and the server adds its parent directory to `sys.path` so the import works
+> under gunicorn. If a slimmed-down deployment omits `scripts/`, the server logs
+> `[startup-update] updater unavailable …` and skips the update. The sidecar
+> rewrite is **ephemeral in a container** (it lives in the image layer) — the
+> durable effect is the `config.json` sync on your mounted volume. To land sidecar
+> changes back in the repo, use the [CI auto-update workflow](#automated-providersjson-updates-ci).
+
+<a name="pr-providers-list"></a>
+### Proposing `providers.json` changes as a PR — `pr_providers_list`
+
+When `update_believed_free_on_startup` refreshes the sidecar (optionally with
+probing, if `probe_cost` / `autoremove_believed_free` are on), set this flag to
+have the running deployment open a **pull request** with the result instead of
+only keeping the change in its ephemeral local copy:
+
+```json
+{
+  "update_believed_free_on_startup": true,
+  "pr_providers_list": true,
+  "pr_providers_repo": "BillJr99/llmproxy"
+}
+```
+
+When `true` **and** the startup run actually changed `providers.json`, the server
+pushes `llmproxy/providers.json` + `config.example.json` to a branch and opens (or
+refreshes) a PR against the base branch — using the GitHub API directly, so it
+**never touches a local git checkout** and works even in a container with no
+`.git`. It logs `[providers-pr] opening PR …` and the resulting PR URL.
+
+Required / optional settings (all top-level):
+
+| Key | Required | Default | Meaning |
+|-----|----------|---------|---------|
+| `pr_providers_list` | — | `false` | Master switch. |
+| `pr_providers_repo` | **yes** | — | Target repo as `"owner/repo"`. |
+| `pr_providers_token` | yes¹ | — | GitHub token; may be a `${VAR}` ref. ¹Falls back to the `GITHUB_TOKEN` / `GH_TOKEN` environment variables. Needs `contents:write` + `pull_requests:write`. |
+| `pr_providers_base` | — | `"main"` | Base branch for the PR. |
+| `pr_providers_branch` | — | `"llmproxy-auto/providers"` | Head branch (force-updated each run; an open PR for it is reused). |
+
+If the token or `pr_providers_repo` is missing, the server logs a `[providers-pr]`
+warning and skips — it never fails the startup update. This is the **deployment**
+counterpart to the repo-level
+[CI auto-update workflow](#automated-providersjson-updates-ci): the workflow
+proposes PRs from a scheduled scrape, while `pr_providers_list` proposes them from
+a live deployment (which can additionally probe real model costs).
 
 ### Provider templates
 
@@ -844,6 +899,40 @@ CEREBRAS_API_KEY=csk-...    MISTRAL_API_KEY=...
 COHERE_API_KEY=...          SAMBANOVA_API_KEY=...
 ```
 (and so on — uppercase the provider key, replace `-` with `_`, append `_API_KEY`).
+
+<a name="automated-providersjson-updates-ci"></a>
+### Automated `providers.json` updates (CI → PR)
+
+A scheduled GitHub Actions workflow,
+[`.github/workflows/update-providers.yml`](.github/workflows/update-providers.yml),
+keeps the sidecar current **in the repository** without anyone running the
+scraper by hand. Once a week (and on demand via the Actions tab) it:
+
+1. runs `python scripts/update_free_models.py` with the default, read-only
+   sources — provider docs, `/models` catalogs, OpenRouter, the litellm cost
+   map, and the community list. It **does not** run the opt-in `probe` source,
+   so **no real model requests / quota are spent**;
+2. regenerates `config.example.json`; and
+3. if `llmproxy/providers.json` or `config.example.json` changed, opens (or
+   updates) a pull request against `main` on the `chore/update-providers`
+   branch — using [`peter-evans/create-pull-request`](https://github.com/peter-evans/create-pull-request).
+   When nothing changed, no PR is created. The run logs the `git status` diff
+   and the action logs whether a PR was opened.
+
+**Enabling / disabling.** A GitHub Action can't read your deployment's private
+`config.json`, so the on/off switch is a **repository variable** rather than a
+config flag: set `PROVIDERS_AUTOUPDATE` to `false` under *Settings → Secrets and
+variables → Actions → Variables* to disable the scheduled run (it is treated as
+enabled unless explicitly `false`). Manual `workflow_dispatch` runs always
+execute. The workflow needs `contents: write` and `pull-requests: write`
+permissions (already declared in the file); if your org disables PR creation by
+`GITHUB_TOKEN`, enable it under *Settings → Actions → General → Workflow
+permissions*.
+
+> This repo-level workflow and the server-side
+> [`update_believed_free_on_startup`](#update-on-startup) flag are complementary:
+> the workflow lands durable updates in the repo via reviewable PRs, while the
+> startup flag refreshes a running deployment's live config.
 
 ---
 
