@@ -8,6 +8,7 @@
     "OpenRouter /api/v1/models filtered by pricing.prompt == '0'"
   ],
   "provider_order": [
+    "openai",
     "nous",
     "nvidia",
     "google",
@@ -47,6 +48,16 @@
     "gemini"
   ],
   "providers": {
+    "openai": {
+      "display": "OpenAI",
+      "base_url": "https://api.openai.com/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at platform.openai.com/api-keys (paid — no free tier)",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
     "nous": {
       "display": "Nous Research (Hermes)",
       "base_url": "https://inference-api.nousresearch.com/v1",
