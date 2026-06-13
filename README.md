@@ -684,15 +684,30 @@ only keeping the change in its ephemeral local copy:
 {
   "update_believed_free_on_startup": true,
   "pr_providers_list": true,
-  "pr_providers_repo": "BillJr99/llmproxy"
+  "pr_providers_repo": "BillJr99/llmproxy",
+  "pr_providers_base": "main",
+  "pr_providers_branch": "llmproxy-auto/providers",
+  "pr_providers_token": "${GITHUB_TOKEN}"
 }
 ```
 
-When `true` **and** the startup run actually changed `providers.json`, the server
-pushes `llmproxy/providers.json` + `config.example.json` to a branch and opens (or
-refreshes) a PR against the base branch — using the GitHub API directly, so it
-**never touches a local git checkout** and works even in a container with no
-`.git`. It logs `[providers-pr] opening PR …` and the resulting PR URL.
+The GitHub token is required. Provide it either via the `pr_providers_token`
+config key (a literal token or a `${VAR}` reference, as above) **or** via the
+`GITHUB_TOKEN` / `GH_TOKEN` environment variable. It needs `contents:write` +
+`pull_requests:write` on the target repo.
+
+When `true` **and** the startup run produced a `providers.json` that differs from
+the bundled copy, the server pushes `llmproxy/providers.json` + `config.example.json`
+to a branch and opens (or refreshes) a PR against the base branch — using the
+GitHub API directly, so it **never touches a local git checkout** and works even
+in a container with no `.git`. It logs `[providers-pr] opening PR …` and the PR URL.
+
+This works **even when the bundled `providers.json` can't be saved locally** — e.g.
+on a read-only container image. In that case the updater mirrors the computed
+`providers.json` + `config.example.json` into the writable config directory (the
+container's `/config` bind mount) for review, and opens the PR from that computed
+content. (See also: the cost probe's `probe_frequency_days` throttle so a startup
+that probes + PRs doesn't spend quota or churn a PR on every restart.)
 
 Required / optional settings (all top-level):
 

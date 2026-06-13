@@ -3,6 +3,7 @@ and the probe-state cache helpers (llmproxy.config)."""
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 from llmproxy.config import get_probe_state_path, load_probe_state, save_probe_state
@@ -80,3 +81,55 @@ def test_probe_state_corrupt_returns_empty(tmp_path):
     cfg = str(tmp_path / "config.json")
     get_probe_state_path(cfg).write_text("{not json", encoding="utf-8")
     assert load_probe_state(cfg) == {}
+
+
+class _ReadOnlyPath:
+    """Stand-in for a sidecar on a read-only image layer."""
+
+    def write_text(self, *a, **k):
+        raise PermissionError("read-only image layer")
+
+    def __str__(self):
+        return "/app/llmproxy/providers.json"
+
+    __repr__ = __str__
+
+
+def test_probe_timestamp_recorded_when_sidecar_write_fails(tmp_path, monkeypatch):
+    """A read-only providers.json must not prevent the probe-throttle timestamp
+    (which lives next to the user config, e.g. /config/probe_state.json) from
+    advancing — regression for the container bind-mount case."""
+    import scripts.update_free_models as ufm
+
+    cfg = tmp_path / "config.json"   # stands in for /config/config.json
+    cfg.write_text(json.dumps({"providers": {}}))
+
+    # Force the run to reach the sidecar write and fail there.
+    monkeypatch.setattr(ufm, "apply_updates", lambda *a, **k: True)
+    monkeypatch.setattr(ufm, "DATA_PATH", _ReadOnlyPath())
+
+    rc = ufm.main(["--source", "probe", "--config", str(cfg)])
+
+    assert rc == 0  # the run completed despite the read-only sidecar
+    state = load_probe_state(str(cfg))
+    assert "last_probe_at" in state  # throttle timestamp persisted to the bind mount
+
+
+def test_sidecar_mirrored_to_config_dir_when_readonly(tmp_path, monkeypatch):
+    """When the bundled providers.json is read-only, the computed providers.json
+    and config.example.json are mirrored to the user-config dir so a read-only
+    deployment can still review them / open a providers PR."""
+    import scripts.update_free_models as ufm
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"providers": {}}))
+    monkeypatch.setattr(ufm, "apply_updates", lambda *a, **k: True)
+    monkeypatch.setattr(ufm, "DATA_PATH", _ReadOnlyPath())
+
+    ufm.main(["--source", "probe", "--config", str(cfg)])
+
+    mirrored_providers = tmp_path / "providers.json"
+    mirrored_example = tmp_path / "config.example.json"
+    assert mirrored_providers.exists() and mirrored_example.exists()
+    assert "providers" in json.loads(mirrored_providers.read_text())
+    assert "providers" in json.loads(mirrored_example.read_text())

@@ -441,6 +441,40 @@ def write_config_example(out: Path = CONFIG_EXAMPLE_PATH) -> None:
     out.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
 
 
+def sidecar_fallback_paths(config_path: str | None) -> tuple[Path, Path] | None:
+    """Return (providers.json, config.example.json) paths in the user-config dir.
+
+    These mirror the computed artifacts when the bundled, image-layer copies are
+    read-only — a writable location (e.g. the container's /config bind mount) a
+    read-only deployment can still review and open a providers PR from. Returns
+    None when no user config path is known (nowhere writable to fall back to).
+    """
+    if not config_path:
+        return None
+    cfg_dir = Path(config_path).parent
+    return cfg_dir / "providers.json", cfg_dir / "config.example.json"
+
+
+def _write_sidecar_fallback(sidecar: dict, config_path: str | None) -> None:
+    """Mirror the computed sidecar + config.example to the user-config dir."""
+    paths = sidecar_fallback_paths(config_path)
+    if paths is None:
+        return
+    providers_path, example_path = paths
+    try:
+        providers_path.parent.mkdir(parents=True, exist_ok=True)
+        providers_path.write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
+        example_path.write_text(
+            json.dumps(regenerate_config_example(sidecar), indent=2) + "\n", encoding="utf-8"
+        )
+        print(_warn(
+            f"Mirrored computed providers.json + config.example.json to "
+            f"{providers_path.parent} (review there / open a providers PR)."
+        ))
+    except OSError as e:
+        print(_warn(f"Could not mirror computed artifacts to the config dir: {e}"))
+
+
 # ---------------------------------------------------------------------------
 # User config.json sync  (--config)
 # ---------------------------------------------------------------------------
@@ -814,15 +848,31 @@ def main(argv: list[str] | None = None) -> int:
 
     changed = apply_updates(sidecar, updates) or pricing_changed
     if changed:
-        DATA_PATH.write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
-        print(_ok(f"\nUpdated {DATA_PATH}"))
-        write_config_example()
-        print(_ok(f"Regenerated {CONFIG_EXAMPLE_PATH}"))
+        try:
+            DATA_PATH.write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
+            print(_ok(f"\nUpdated {DATA_PATH}"))
+            write_config_example()
+            print(_ok(f"Regenerated {CONFIG_EXAMPLE_PATH}"))
+        except OSError as e:
+            # In a container the bundled sidecar (and config.example.json) live on
+            # a read-only image layer, so the scrape result can't be persisted
+            # there — that's expected and ephemeral. Don't abort: the user-config
+            # sync and the probe-throttle timestamp below still need to run.
+            print(_warn(
+                f"\nCould not persist {DATA_PATH} ({e}); continuing without "
+                "writing the sidecar (expected on a read-only image)."
+            ))
+            # Mirror the computed artifacts to the (writable) user-config dir so a
+            # read-only deployment can still review them and open a providers PR
+            # (pr_providers_list) from the running container.
+            _write_sidecar_fallback(sidecar, args.config)
     else:
         print(_dim("\nNo changes to apply."))
 
     # Record when the probe last ran so probe_frequency_days can throttle the
     # next invocation. Only on a real run where the probe was actually included.
+    # Done after (and independent of) the sidecar write above so a read-only
+    # providers.json can't prevent the throttle from advancing.
     if "probe" in requested:
         save_probe_state(
             {"last_probe_at": datetime.now(UTC).isoformat()}, args.config

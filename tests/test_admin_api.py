@@ -275,3 +275,58 @@ def test_provider_models_discovery(monkeypatch, cfg_path):
     resp = client.get("/admin/api/providers/openai/models")
     assert resp.status_code == 200
     assert resp.get_json()["models"] == ["openai__gpt-4o", "openai__gpt-4o-mini"]
+
+
+# --------------------------------------------------------------------------- #
+# Maintenance / automation settings
+
+def test_get_config_includes_maintenance(client):
+    body = client.get("/admin/api/config").get_json()
+    assert "maintenance" in body
+    m = body["maintenance"]
+    for k in ("probe_cost", "autoremove_believed_free", "update_believed_free_on_startup",
+              "pr_providers_list", "probe_frequency_days", "pr_providers_repo",
+              "pr_providers_token_set"):
+        assert k in m
+
+
+def test_put_maintenance_sets_flags(client, cfg_path):
+    resp = client.put("/admin/api/maintenance", json={
+        "probe_cost": True,
+        "autoremove_believed_free": True,
+        "update_believed_free_on_startup": True,
+        "probe_frequency_days": 7,
+        "pr_providers_list": True,
+        "pr_providers_repo": "BillJr99/llmproxy",
+        "pr_providers_base": "main",
+        "pr_providers_branch": "llmproxy-auto/providers",
+        "pr_providers_token": "ghp_secret",
+    })
+    assert resp.status_code == 200
+    saved = _read_config(cfg_path)
+    assert saved["probe_cost"] is True
+    assert saved["probe_frequency_days"] == 7
+    assert saved["pr_providers_repo"] == "BillJr99/llmproxy"
+    assert saved["pr_providers_token"] == "ghp_secret"
+    # Token is never echoed back verbatim
+    m = resp.get_json()["maintenance"]
+    assert m["pr_providers_token"] != "ghp_secret"
+    assert m["pr_providers_token_set"] is True
+
+
+def test_put_maintenance_blank_token_keeps_existing(client, cfg_path):
+    client.put("/admin/api/maintenance", json={"pr_providers_token": "ghp_keepme"})
+    client.put("/admin/api/maintenance", json={"pr_providers_list": True, "pr_providers_token": ""})
+    assert _read_config(cfg_path)["pr_providers_token"] == "ghp_keepme"
+
+
+def test_put_maintenance_rejects_bad_values(client):
+    assert client.put("/admin/api/maintenance", json={"probe_cost": "yes"}).status_code == 400
+    assert client.put("/admin/api/maintenance", json={"probe_frequency_days": -1}).status_code == 400
+    assert client.put("/admin/api/maintenance", json={"probe_frequency_days": "soon"}).status_code == 400
+
+
+def test_put_maintenance_token_env_ref_flagged(client):
+    resp = client.put("/admin/api/maintenance", json={"pr_providers_token": "${GH_PR_TOKEN}"})
+    m = resp.get_json()["maintenance"]
+    assert m["pr_providers_token_is_env"] is True

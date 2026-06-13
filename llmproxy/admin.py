@@ -374,6 +374,31 @@ def admin_index():
 # Config (read) + server settings
 # ---------------------------------------------------------------------------
 
+_MAINTENANCE_BOOL_FLAGS = (
+    "probe_cost",
+    "autoremove_believed_free",
+    "update_believed_free_on_startup",
+    "pr_providers_list",
+)
+_MAINTENANCE_STR_FIELDS = ("pr_providers_repo", "pr_providers_base", "pr_providers_branch")
+
+
+def _maintenance_view(config: dict) -> dict:
+    """The automation/maintenance flags, with the PR token masked like api_key."""
+    view: dict = {k: bool(config.get(k, False)) for k in _MAINTENANCE_BOOL_FLAGS}
+    try:
+        view["probe_frequency_days"] = int(config.get("probe_frequency_days", 0) or 0)
+    except (TypeError, ValueError):
+        view["probe_frequency_days"] = 0
+    for k in _MAINTENANCE_STR_FIELDS:
+        view[k] = config.get(k) or ""
+    tok = config.get("pr_providers_token")
+    view["pr_providers_token"] = _mask_secret(tok)
+    view["pr_providers_token_set"] = bool(tok)
+    view["pr_providers_token_is_env"] = value_has_env_ref(tok)
+    return view
+
+
 @bp.route("/admin/api/config", methods=["GET"])
 def api_get_config():
     config = _load()
@@ -394,6 +419,7 @@ def api_get_config():
             "enabled": admin.get("enabled", True) is not False,
             "token_set": bool(_admin_token(config)),
         },
+        "maintenance": _maintenance_view(config),
         "reserved_provider_names": sorted(RESERVED_PROVIDER_NAMES),
         "valid_reasoning_levels": sorted(_providers.VALID_REASONING_LEVELS),
         "valid_capabilities": sorted(_VALID_CAPABILITIES),
@@ -440,6 +466,60 @@ def api_put_server():
         if not _save(config):
             return _err("Failed to persist configuration.", 500)
     return jsonify({"server": server})
+
+
+@bp.route("/admin/api/maintenance", methods=["PUT"])
+def api_put_maintenance():
+    """Edit the top-level automation flags: the free-models updater / cost probe
+    (probe_cost, autoremove_believed_free, update_believed_free_on_startup,
+    probe_frequency_days) and the providers-PR settings (pr_providers_*).
+
+    The PR token is write-only: send a new value to set it, or omit/blank to keep
+    the current one (mirrors the api_key edit convention)."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _err("Request body must be a JSON object.")
+
+    with _locked():
+        config = _load()
+
+        for key in _MAINTENANCE_BOOL_FLAGS:
+            if key in payload:
+                if not isinstance(payload[key], bool):
+                    return _err(f"{key} must be a boolean.")
+                config[key] = payload[key]
+
+        if "probe_frequency_days" in payload:
+            try:
+                v = int(payload["probe_frequency_days"])
+            except (TypeError, ValueError):
+                return _err("probe_frequency_days must be an integer.")
+            if v < 0:
+                return _err("probe_frequency_days must be >= 0.")
+            config["probe_frequency_days"] = v
+
+        for key in _MAINTENANCE_STR_FIELDS:
+            if key in payload:
+                val = payload[key]
+                if val is None:
+                    val = ""
+                if not isinstance(val, str):
+                    return _err(f"{key} must be a string.")
+                config[key] = val.strip()
+
+        if "pr_providers_token" in payload:
+            tok = payload["pr_providers_token"]
+            if tok is None:
+                tok = ""
+            if not isinstance(tok, str):
+                return _err("pr_providers_token must be a string.")
+            if tok.strip():
+                config["pr_providers_token"] = tok.strip()
+            # blank -> keep the existing token
+
+        if not _save(config):
+            return _err("Failed to persist configuration.", 500)
+    return jsonify({"maintenance": _maintenance_view(config)})
 
 
 # ---------------------------------------------------------------------------
@@ -577,6 +657,10 @@ def api_provider_from_template():
     for field in ("models_url", "models_id_field", "models_keep_task"):
         if template.get(field):
             cfg[field] = _substitute_placeholders(template[field], subs)
+    # Native (non-OpenAI) upstreams carry a protocol so the proxy translates for
+    # them — without this, an Anthropic/Gemini template would be saved as openai.
+    if template.get("protocol") and template["protocol"] != "openai":
+        cfg["protocol"] = template["protocol"]
 
     with _locked():
         config = _load()
