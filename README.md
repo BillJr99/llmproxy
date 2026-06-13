@@ -561,7 +561,8 @@ Two opt-in, top-level config flags (both default `false`) let you keep
 ```json
 {
   "probe_cost": false,
-  "autoremove_believed_free": false
+  "autoremove_believed_free": false,
+  "probe_frequency_days": 0
 }
 ```
 
@@ -576,6 +577,14 @@ Two opt-in, top-level config flags (both default `false`) let you keep
   from the `/free` virtual model). When `false` (default), such models are
   reported in the scraper output and in `flagged_paid_free_models`, but left in
   place for you to review.
+- **`probe_frequency_days`** — throttles the probe so it runs at most once every
+  _N_ days, which matters when `probe_cost` is combined with
+  `update_believed_free_on_startup` (otherwise every server boot would spend
+  quota). `0` (default) probes on every run; `1` is at most once a day, `7` once a
+  week, etc. The last-run timestamp is cached in `probe_state.json` next to your
+  `config.json` (not in `config.json` itself). The throttle applies to both
+  `probe_cost: true` and the `--probe` flag; pass `--ignore-throttle` to
+  `update_free_models.py` to force a probe regardless of how recently one ran.
 
 <a name="update-on-startup"></a>
 ### Running the updater on startup — `update_believed_free_on_startup`
