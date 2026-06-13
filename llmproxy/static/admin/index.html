@@ -102,6 +102,7 @@
   <button data-tab="providers">Providers</button>
   <button data-tab="models">Models &amp; Categorizations</button>
   <button data-tab="virtual">Virtual Endpoints</button>
+  <button data-tab="automation">Automation</button>
 </nav>
 
 <main>
@@ -173,6 +174,35 @@
       <button class="btn" id="refresh-vm">Refresh</button>
       <div id="vm-list" style="margin-top:14px"></div>
     </div>
+  </section>
+
+  <!-- AUTOMATION -->
+  <section class="tab" id="tab-automation">
+    <h2>Automation &amp; maintenance</h2>
+    <div class="card">
+      <h3>Free-models updater &amp; cost probe</h3>
+      <label class="switch"><input type="checkbox" id="mt-update_believed_free_on_startup" /> Run the free-models updater on startup</label>
+      <label class="switch"><input type="checkbox" id="mt-probe_cost" /> Probe believed-free models for cost <span class="muted">(sends real requests using your keys)</span></label>
+      <label class="switch"><input type="checkbox" id="mt-autoremove_believed_free" /> Auto-remove models that probe/price as paid</label>
+      <div class="row">
+        <div><label>Probe frequency (days)</label><input type="number" id="mt-probe_frequency_days" min="0" /></div>
+      </div>
+      <p class="muted">0 = probe every run · 1 = at most daily · 7 = weekly. Last-run time is cached in <code>probe_state.json</code> next to your config.</p>
+    </div>
+    <div class="card">
+      <h3>Propose <code>providers.json</code> changes as a PR</h3>
+      <label class="switch"><input type="checkbox" id="mt-pr_providers_list" /> Open a PR with the refreshed providers.json on startup</label>
+      <div class="row">
+        <div><label>Target repo <span class="muted">(owner/repo)</span></label><input type="text" id="mt-pr_providers_repo" placeholder="BillJr99/llmproxy" /></div>
+        <div><label>Base branch</label><input type="text" id="mt-pr_providers_base" placeholder="main" /></div>
+      </div>
+      <div class="row">
+        <div><label>Head branch</label><input type="text" id="mt-pr_providers_branch" placeholder="llmproxy-auto/providers" /></div>
+        <div><label>GitHub token <span class="muted" id="mt-token-pill"></span></label><input type="text" id="mt-pr_providers_token" placeholder="ghp_…  or  ${GITHUB_TOKEN}" /></div>
+      </div>
+      <p class="muted">Token needs <code>contents:write</code> + <code>pull_requests:write</code>. Blank = keep the current token; falls back to the <code>GITHUB_TOKEN</code> / <code>GH_TOKEN</code> env var. Works even on a read-only image (mirrors the computed files to your config dir and opens the PR from there).</p>
+    </div>
+    <div class="actions"><button class="btn primary" id="mt-save">Save automation settings</button></div>
   </section>
 </main>
 
@@ -255,6 +285,30 @@ $("#sv-save").addEventListener("click", async () => {
   catch (e) { toast(e.message, true); }
 });
 
+// ---- Automation / maintenance ----
+const MT_BOOLS = ["update_believed_free_on_startup","probe_cost","autoremove_believed_free","pr_providers_list"];
+const MT_STRS = ["pr_providers_repo","pr_providers_base","pr_providers_branch"];
+function fillMaintenance(m) {
+  for (const k of MT_BOOLS) $("#mt-"+k).checked = !!m[k];
+  $("#mt-probe_frequency_days").value = m.probe_frequency_days ?? 0;
+  for (const k of MT_STRS) $("#mt-"+k).value = m[k] || "";
+  const pill = $("#mt-token-pill");
+  pill.textContent = m.pr_providers_token_is_env ? "· env ref set" : (m.pr_providers_token_set ? "· set" : "· not set");
+  pill.style.color = (m.pr_providers_token_is_env || m.pr_providers_token_set) ? "var(--accent)" : "var(--muted)";
+  $("#mt-pr_providers_token").placeholder = m.pr_providers_token_set ? "•••• (unchanged)  or  ${GITHUB_TOKEN}" : "ghp_…  or  ${GITHUB_TOKEN}";
+}
+$("#mt-save").addEventListener("click", async () => {
+  const body = { probe_frequency_days: Number($("#mt-probe_frequency_days").value || 0) };
+  for (const k of MT_BOOLS) body[k] = $("#mt-"+k).checked;
+  for (const k of MT_STRS) body[k] = $("#mt-"+k).value.trim();
+  const tok = $("#mt-pr_providers_token").value.trim();
+  if (tok) body.pr_providers_token = tok;
+  try {
+    await api("/maintenance", { method: "PUT", body: JSON.stringify(body) });
+    toast("Automation settings saved"); $("#mt-pr_providers_token").value = ""; bootstrap();
+  } catch (e) { toast(e.message, true); }
+});
+
 // ---- Providers ----
 let TEMPLATES = [];
 function renderTemplateSelect() {
@@ -298,6 +352,7 @@ async function loadProviders() {
 
 function renderProviderCard(name, p, isNew) {
   const id = cssId(name);
+  const proto = p.protocol || "openai";
   const existing = $("#prov-"+id);
   const card = document.createElement("div");
   card.className = "card"; card.id = "prov-"+id;
@@ -316,6 +371,12 @@ function renderProviderCard(name, p, isNew) {
     </div>
     <label>Model filter <span class="muted">(comma-separated upstream ids; blank = allow all)</span></label>
     <input type="text" data-f="model_filter" value="${esc(Array.isArray(p.model_filter)?p.model_filter.join(', '):'')}" />
+    <label>Protocol <span class="muted">(upstream dialect; native ones advertise models from the filter above)</span></label>
+    <select data-f="protocol">
+      <option value="openai" ${proto==="openai"?"selected":""}>openai — OpenAI-compatible (default)</option>
+      <option value="anthropic" ${proto==="anthropic"?"selected":""}>anthropic — native Messages API</option>
+      <option value="gemini" ${proto==="gemini"?"selected":""}>gemini — native generateContent</option>
+    </select>
     <label class="switch" style="margin-top:12px"><input type="checkbox" data-f="expose_to_virtual_models" ${p.expose_to_virtual_models===false?"":"checked"} /> Expose to virtual endpoints</label>
     <div class="actions">
       <button class="btn primary" data-act="save">${isNew?"Create":"Save"}</button>
@@ -334,6 +395,7 @@ function renderProviderCard(name, p, isNew) {
       models_id_field: get("models_id_field").value.trim(),
       models_keep_task: get("models_keep_task").value.trim(),
       model_filter: mf ? mf.split(",").map(s=>s.trim()).filter(Boolean) : null,
+      protocol: get("protocol").value,
       expose_to_virtual_models: get("expose_to_virtual_models").checked,
     };
     const k = get("api_key").value.trim();
@@ -447,6 +509,7 @@ async function bootstrap() {
     };
     setAuthState(true, cfg.admin.token_set ? "token auth" : "localhost");
     fillServer(cfg.server || {});
+    fillMaintenance(cfg.maintenance || {});
     TEMPLATES = (await api("/provider-templates")).templates;
     renderTemplateSelect();
     await loadProviders();
