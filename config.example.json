@@ -650,7 +650,7 @@
     ]
   },
   "free_limits": {
-    "_note": "Rate limits for capacity-aware load balancing on llmproxy/free and llmproxy/*/free endpoints. Tracked per-worker-process; resets on restart. Token limits (tpm/tpd) are stored for reference but not yet enforced. Check provider docs \u2014 limits change frequently.",
+    "_note": "Rate limits for capacity-aware load balancing on llmproxy/free and llmproxy/*/free endpoints. Tracked per-worker-process; resets on restart. Both request limits (rpm/rpd) and token limits (tpm/tpd) are enforced. Check provider docs \u2014 limits change frequently.",
     "nvidia/meta/llama-3.1-70b-instruct": {
       "requests_per_minute": 40,
       "requests_per_day": null,
@@ -892,6 +892,10 @@
       "tokens_per_day": null
     }
   },
+  "probe_cost": false,
+  "autoremove_believed_free": false,
+  "update_believed_free_on_startup": false,
+  "pr_providers_list": false,
   "server": {
     "host": "0.0.0.0",
     "port": 8080,

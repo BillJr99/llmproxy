@@ -390,9 +390,9 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         "_note": (
             "Rate limits for capacity-aware load balancing on llmproxy/free "
             "and llmproxy/*/free endpoints. Tracked per-worker-process; "
-            "resets on restart. Token limits (tpm/tpd) are stored for "
-            "reference but not yet enforced. Check provider docs — limits "
-            "change frequently."
+            "resets on restart. Both request limits (rpm/rpd) and token limits "
+            "(tpm/tpd) are enforced. Check provider docs — limits change "
+            "frequently."
         ),
         **free_limits,
     }
@@ -404,6 +404,17 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         "model_reasoning": model_reasoning,
         "model_capabilities": model_capabilities,
         "free_limits": free_limits_with_note,
+
+        # Opt-in maintenance flags (all default false). See the README:
+        # probe_cost / autoremove_believed_free → "Verifying free models are
+        # actually free"; update_believed_free_on_startup → "Running the updater
+        # on startup"; pr_providers_list → "Proposing providers.json changes as a
+        # PR from a running deployment".
+        "probe_cost": False,
+        "autoremove_believed_free": False,
+        "update_believed_free_on_startup": False,
+        "pr_providers_list": False,
+
         "server": server_block or {
             "host": "0.0.0.0",
             "port": 8080,
