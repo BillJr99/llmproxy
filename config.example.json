@@ -140,6 +140,78 @@
       "api_key": "opencode-...",
       "model_filter": null
     },
+    "scaleway": {
+      "base_url": "https://api.scaleway.ai/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "ovhcloud": {
+      "base_url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "pollinations": {
+      "base_url": "https://text.pollinations.ai/openai",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "nebius": {
+      "base_url": "https://api.studio.nebius.com/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "novita": {
+      "base_url": "https://api.novita.ai/v3/openai",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "hyperbolic": {
+      "base_url": "https://api.hyperbolic.xyz/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "deepinfra": {
+      "base_url": "https://api.deepinfra.com/v1/openai",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "llm7": {
+      "base_url": "https://api.llm7.io/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "chutes": {
+      "base_url": "https://llm.chutes.ai/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "meta-llama": {
+      "base_url": "https://api.llama.com/compat/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "anthropic": {
+      "_note": "Reached over Anthropic's native Messages API (x-api-key + anthropic-version). llmproxy translates OpenAI \u21c4 Anthropic, so OpenAI clients can call Claude and Anthropic clients (/v1/messages) can call any provider. Models are advertised from model_filter (no OpenAI-shaped /models endpoint).",
+      "base_url": "https://api.anthropic.com/v1",
+      "api_key": "...",
+      "model_filter": [
+        "claude-opus-4-8",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+        "claude-fable-5"
+      ],
+      "protocol": "anthropic"
+    },
+    "gemini": {
+      "_note": "Reached over Gemini's native generateContent/streamGenerateContent API (x-goog-api-key). llmproxy translates OpenAI \u21c4 Gemini. The OpenAI-compatible 'google' provider above is an alternative; this entry uses Gemini's native protocol. Models are advertised from model_filter.",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "api_key": "...",
+      "model_filter": [
+        "gemini-2.5-pro",
+        "gemini-2.5-flash"
+      ],
+      "protocol": "gemini"
+    },
     "ollama": {
       "base_url": "http://localhost:11434/v1",
       "api_key": "ollama",
@@ -894,6 +966,7 @@
   },
   "probe_cost": false,
   "autoremove_believed_free": false,
+  "probe_frequency_days": 0,
   "update_believed_free_on_startup": false,
   "pr_providers_list": false,
   "server": {

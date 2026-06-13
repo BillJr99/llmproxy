@@ -331,6 +331,56 @@ form is also accepted.
 
 ---
 
+## API dialects — OpenAI **and** Anthropic, in and out
+
+llmproxy speaks more than one API dialect on both edges. Internally everything is
+normalized to the OpenAI chat/completions schema, so all routing, virtual models,
+capability ordering, caching, and usage accounting work identically regardless of
+which dialect a client or upstream uses.
+
+### Inbound — what clients can speak
+
+| Surface | Endpoints | Notes |
+| --- | --- | --- |
+| **OpenAI** | `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/embeddings` | The original surface. Streaming via SSE. |
+| **Anthropic** | `POST /v1/messages`, `POST /v1/messages/count_tokens` | Point an Anthropic SDK at llmproxy. Streaming emits the Anthropic event format (`message_start`, `content_block_delta`, …). |
+| **Gemini** | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens` | Point the Google GenAI SDK at llmproxy. The model id rides in the URL path; streaming emits Gemini `GenerateContentResponse` SSE chunks. |
+
+All three surfaces accept any model id llmproxy knows — direct (`provider__model`) **and**
+the virtual models (`llmproxy__free`, `llmproxy__deep`, …). So an Anthropic SDK call
+with `model="llmproxy__free"` is routed and load-balanced exactly like the OpenAI path.
+(xAI/Grok, Mistral, Groq, DeepSeek, etc. are OpenAI- and/or Anthropic-compatible, so they
+need no separate inbound surface — use the OpenAI or Anthropic endpoints for them.)
+
+```python
+# Anthropic SDK pointed at llmproxy — works with streaming and tools
+import anthropic
+client = anthropic.Anthropic(base_url="http://localhost:8080", api_key="unused")
+client.messages.create(model="llmproxy__free", max_tokens=256,
+                       messages=[{"role": "user", "content": "hi"}])
+```
+
+### Outbound — what upstreams can speak (`protocol`)
+
+A provider's optional `"protocol"` field selects how llmproxy talks to it:
+
+| `protocol` | Upstream call | Auth |
+| --- | --- | --- |
+| `openai` (default) | `{base_url}/chat/completions` | `Authorization: Bearer` |
+| `anthropic` | `{base_url}/messages` (native Messages API) | `x-api-key` + `anthropic-version` |
+| `gemini` | `{base_url}/models/{model}:generateContent` (+ `:streamGenerateContent`) | `x-goog-api-key` |
+
+This means the big providers can be added with just an API key — Anthropic (Claude) and
+Google Gemini over their **native** protocols, and OpenAI plus dozens of
+OpenAI-compatible gateways over the default. The `anthropic` and `gemini` provider
+templates ship in the setup wizard. Translation covers text, tool definitions/calls/
+results, and token usage, non-streaming and streaming, for **any inbound × upstream
+combination** (e.g. an Anthropic-SDK client can stream from a Gemini upstream).
+
+> Non-OpenAI upstreams advertise their models from `model_filter` (there is no
+> OpenAI-shaped `/v1/models` to discover). Best-effort: provider-specific extras
+> (Anthropic thinking/prompt-caching, Gemini safety settings) are not yet mapped.
+
 ## Configuration
 
 Config is stored at `~/.config/llmproxy/config.json` (or the path in
@@ -345,6 +395,8 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
       "base_url": "https://...",
       "api_key": "sk-...",
       "model_filter": ["model-a", "model-b"],
+
+      "protocol": "openai",
 
       "models_url": "https://.../catalog/models",
       "models_id_field": "name",
@@ -378,6 +430,7 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
 
   "probe_cost": false,
   "autoremove_believed_free": false,
+  "probe_frequency_days": 0,
   "update_believed_free_on_startup": false,
   "pr_providers_list": false,
 
@@ -561,7 +614,8 @@ Two opt-in, top-level config flags (both default `false`) let you keep
 ```json
 {
   "probe_cost": false,
-  "autoremove_believed_free": false
+  "autoremove_believed_free": false,
+  "probe_frequency_days": 0
 }
 ```
 
@@ -576,6 +630,14 @@ Two opt-in, top-level config flags (both default `false`) let you keep
   from the `/free` virtual model). When `false` (default), such models are
   reported in the scraper output and in `flagged_paid_free_models`, but left in
   place for you to review.
+- **`probe_frequency_days`** — throttles the probe so it runs at most once every
+  _N_ days, which matters when `probe_cost` is combined with
+  `update_believed_free_on_startup` (otherwise every server boot would spend
+  quota). `0` (default) probes on every run; `1` is at most once a day, `7` once a
+  week, etc. The last-run timestamp is cached in `probe_state.json` next to your
+  `config.json` (not in `config.json` itself). The throttle applies to both
+  `probe_cost: true` and the `--probe` flag; pass `--ignore-throttle` to
+  `update_free_models.py` to force a probe regardless of how recently one ran.
 
 <a name="update-on-startup"></a>
 ### Running the updater on startup — `update_believed_free_on_startup`

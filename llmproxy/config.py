@@ -244,6 +244,60 @@ def save_config(config: dict, config_path: str | None = None) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Probe state (machine-managed cache, kept out of the user-edited config)
+# ---------------------------------------------------------------------------
+#
+# The cost probe (scripts/sources/probe.py) can be throttled to at most once
+# every ``probe_frequency_days``. The last-run timestamp is stored in a small
+# sibling cache file rather than in config.json so we don't churn the
+# hand-edited config (or sweep the timestamp into the providers-PR / sync flow).
+
+def get_probe_state_path(config_path: str | None = None) -> Path:
+    """Return the path to the probe-state cache file, a sibling of config.json."""
+    return get_config_path(config_path).parent / "probe_state.json"
+
+
+def load_probe_state(config_path: str | None = None) -> dict:
+    """Load the probe-state cache, returning {} when absent or unreadable."""
+    path = get_probe_state_path(config_path)
+    if not path.exists():
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:  # noqa: BLE001 — a corrupt cache must never break a run
+        print(f"[config:load_probe_state] Failed to load {path}: {e}")
+        return {}
+
+
+def save_probe_state(state: dict, config_path: str | None = None) -> bool:
+    """Persist the probe-state cache atomically (tempfile + rename)."""
+    path = get_probe_state_path(config_path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(state, fh, indent=2)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_name, path)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[config:save_probe_state] Failed to write {path}: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Provider helpers
 # ---------------------------------------------------------------------------
 

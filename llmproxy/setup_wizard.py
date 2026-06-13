@@ -411,6 +411,10 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
         cfg["models_id_field"] = tmpl["models_id_field"]
     if tmpl.get("models_keep_task"):
         cfg["models_keep_task"] = tmpl["models_keep_task"]
+    # Non-OpenAI upstreams (native Anthropic Messages, Gemini generateContent)
+    # carry a protocol so the proxy translates requests/responses for them.
+    if tmpl.get("protocol") and tmpl["protocol"] != "openai":
+        cfg["protocol"] = tmpl["protocol"]
     return provider_key, cfg
 
 

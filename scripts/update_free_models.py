@@ -36,13 +36,20 @@ import sys
 from collections import defaultdict
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Allow `python scripts/update_free_models.py` from the repo root.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from llmproxy.config import load_config as load_user_config  # noqa: E402
+from llmproxy.config import (  # noqa: E402
+    load_config as load_user_config,
+)
+from llmproxy.config import (  # noqa: E402
+    load_probe_state,
+    save_probe_state,
+)
 from llmproxy.providers import (  # noqa: E402
     DATA_PATH,
     FREE_LIMIT_KEYS,
@@ -350,7 +357,7 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         # Carry forward optional model-discovery overrides (non-standard /models
         # path, id field, or task filter) so the example documents the working
         # config for providers like GitHub Models and Cloudflare Workers AI.
-        for field in ("models_url", "models_id_field", "models_keep_task"):
+        for field in ("models_url", "models_id_field", "models_keep_task", "protocol"):
             if prov.get(field):
                 block[field] = prov[field]
         # A per-provider note (e.g. auth/credential gotchas) surfaces in the
@@ -409,9 +416,12 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         # probe_cost / autoremove_believed_free → "Verifying free models are
         # actually free"; update_believed_free_on_startup → "Running the updater
         # on startup"; pr_providers_list → "Proposing providers.json changes as a
-        # PR from a running deployment".
+        # PR from a running deployment". probe_frequency_days throttles the probe
+        # to at most once every N days (0 = every run); the last-run timestamp is
+        # cached in probe_state.json next to config.json.
         "probe_cost": False,
         "autoremove_believed_free": False,
+        "probe_frequency_days": 0,
         "update_believed_free_on_startup": False,
         "pr_providers_list": False,
 
@@ -627,6 +637,36 @@ def _run_source(
     return source_name, True, evidence, None
 
 
+def _probe_due(last_probe_at: str | None, frequency_days, now: datetime | None = None
+               ) -> tuple[bool, float | None]:
+    """Decide whether the cost probe is due to run.
+
+    Returns ``(due, days_since_last)``. The probe is due when:
+      * ``frequency_days`` is missing or <= 0 (no throttle — run every time), or
+      * there is no usable ``last_probe_at`` timestamp, or
+      * at least ``frequency_days`` have elapsed since the last probe.
+
+    ``days_since_last`` is ``None`` when there is no usable prior timestamp.
+    """
+    try:
+        freq = float(frequency_days or 0)
+    except (TypeError, ValueError):
+        freq = 0.0
+    if freq <= 0:
+        return True, None
+    if not last_probe_at:
+        return True, None
+    try:
+        last = datetime.fromisoformat(last_probe_at)
+    except (TypeError, ValueError):
+        return True, None
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=UTC)
+    now = now or datetime.now(UTC)
+    days_since = (now - last).total_seconds() / 86400.0
+    return days_since >= freq, days_since
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     default_sources = [s for s in ALL_SOURCES if s not in OPT_IN_SOURCES]
@@ -644,6 +684,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="Probe at most N models (bounds spend).")
     ap.add_argument("--probe-provider", metavar="NAME",
                     help="Only probe models from this provider.")
+    ap.add_argument("--ignore-throttle", action="store_true",
+                    help="Probe even if probe_frequency_days says it is too soon "
+                         "since the last probe (bypasses the throttle).")
     ap.add_argument("--regen-config-only", action="store_true",
                     help="Skip scraping; regenerate config.example.json from the current sidecar.")
     ap.add_argument("--config", metavar="PATH",
@@ -659,6 +702,23 @@ def main(argv: list[str] | None = None) -> int:
         user_cfg = {}
     probe_cost = bool(user_cfg.get("probe_cost", False)) or args.probe
     autoremove = bool(user_cfg.get("autoremove_believed_free", False))
+
+    # Throttle the probe to at most once every probe_frequency_days. The last-run
+    # timestamp lives in a sibling cache file (probe_state.json), not config.json.
+    # --ignore-throttle bypasses this; frequency 0 means "probe every time".
+    if probe_cost and not args.ignore_throttle:
+        state = load_probe_state(args.config)
+        due, days_since = _probe_due(
+            state.get("last_probe_at"), user_cfg.get("probe_frequency_days", 0)
+        )
+        if not due:
+            freq = user_cfg.get("probe_frequency_days", 0)
+            since = f"{days_since:.1f}" if days_since is not None else "?"
+            print(_warn(
+                f"  ⚠  probe throttled — last run was {since} day(s) ago, "
+                f"probe_frequency_days={freq}. Use --ignore-throttle to override."
+            ))
+            probe_cost = False
 
     if args.regen_config_only:
         write_config_example()
@@ -760,6 +820,13 @@ def main(argv: list[str] | None = None) -> int:
         print(_ok(f"Regenerated {CONFIG_EXAMPLE_PATH}"))
     else:
         print(_dim("\nNo changes to apply."))
+
+    # Record when the probe last ran so probe_frequency_days can throttle the
+    # next invocation. Only on a real run where the probe was actually included.
+    if "probe" in requested:
+        save_probe_state(
+            {"last_probe_at": datetime.now(UTC).isoformat()}, args.config
+        )
 
     # Sync the user config even when the sidecar was unchanged — a stale config
     # should still be reconciled against the current sidecar.
