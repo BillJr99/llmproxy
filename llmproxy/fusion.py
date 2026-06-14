@@ -46,6 +46,13 @@ _FUSION_DEFAULTS: dict = {
 # (and to be advertised in GET /v1/models). One model is not a deliberation.
 MIN_PANEL = 2
 
+# How many times an auto-selected panel (no explicit ``fusion.panel``) is rebuilt
+# from a freshly re-derived pool when a whole fan-out fails. The free and bare
+# pools re-randomize their ordering each call, so each attempt lands on a
+# different mix of models (and re-attempts transiently-failed ones) before the
+# request gives up with a 503. An explicit panel is honored as-is (one attempt).
+PANEL_SELECTION_ATTEMPTS = 3
+
 JUDGE_SYSTEM_PROMPT = (
     "You are an impartial judge in a multi-model deliberation. Several AI models "
     "were each given the same user request and answered independently. Their "

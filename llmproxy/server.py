@@ -3062,42 +3062,68 @@ def _proxy_fusion(
             traceback.print_exc()
             return cand, None
 
-    # Backfill failed slots from the rest of the pool so a few transient upstream
+    # One panel fan-out, with reserve backfill so a few transient upstream
     # failures (rate limits, blips) on the chosen members don't collapse the whole
     # panel — mirroring the resilient cycling of the plain /free route. ``reserve``
-    # is the ordered pool minus the initially-chosen members; each failed slot is
-    # retried with the next reserve candidate until the pool is exhausted.
-    chosen_keys = {f"{c[0]}/{c[2]}" for c in panel_cands}
-    reserve = [c for c in pool if f"{c[0]}/{c[2]}" not in chosen_keys]
+    # is the ordered pool minus the chosen members; each failed slot is retried
+    # with the next reserve candidate until the pool is exhausted.
+    def _run_panel(cands, candidate_pool):
+        chosen_keys = {f"{c[0]}/{c[2]}" for c in cands}
+        reserve = [c for c in candidate_pool if f"{c[0]}/{c[2]}" not in chosen_keys]
+        entries: list[dict] = []
+        used: list[str] = []
+        failed: list[dict] = []
+        success: list[tuple[tuple[str, dict, str], bytes]] = []
+        pending = list(cands)
+        while pending:
+            with ThreadPoolExecutor(max_workers=min(len(pending), 8)) as ex:
+                results = list(ex.map(_call_panel, pending))
+            failures = 0
+            for cand, resp in results:
+                pn, _pc, uid = cand
+                key = f"{pn}/{uid}"
+                if resp is not None and resp.status_code < 400:
+                    body = resp.get_data()
+                    text = _fusion.extract_message_text(body)
+                    if text.strip():
+                        _record_usage(pn, uid, usage=extract_usage(body), config=config)
+                        entries.append({"label": key, "content": text})
+                        used.append(key)
+                        success.append((cand, body))
+                        continue
+                    failed.append({"model": key, "reason": "empty response"})
+                else:
+                    status = resp.status_code if resp is not None else "exception"
+                    failed.append({"model": key, "reason": f"status {status}"})
+                failures += 1
+            # Pull one replacement per failed slot from the reserve (if any remain).
+            pending = [reserve.pop(0) for _ in range(min(failures, len(reserve)))]
+        return entries, used, failed, success
 
+    # When the panel is auto-selected (no explicit fusion.panel), a whole fan-out
+    # that fails is retried a few times against a freshly re-derived pool: the free
+    # and bare pools re-randomize their ordering each call, so select_panel lands
+    # on a different mix of models (and re-attempts transiently-failed ones) before
+    # the request gives up. An explicitly configured panel is honored as-is.
+    explicit_panel = (not free) and bool(fcfg.get("panel"))
+    attempts = 1 if explicit_panel else _fusion.PANEL_SELECTION_ATTEMPTS
     panel_entries: list[dict] = []
     panel_used: list[str] = []
     failed_models: list[dict] = []
     panel_success: list[tuple[tuple[str, dict, str], bytes]] = []
-    pending = list(panel_cands)
-    while pending:
-        with ThreadPoolExecutor(max_workers=min(len(pending), 8)) as ex:
-            results = list(ex.map(_call_panel, pending))
-        failures = 0
-        for cand, resp in results:
-            pn, _pc, uid = cand
-            key = f"{pn}/{uid}"
-            if resp is not None and resp.status_code < 400:
-                body = resp.get_data()
-                text = _fusion.extract_message_text(body)
-                if text.strip():
-                    _record_usage(pn, uid, usage=extract_usage(body), config=config)
-                    panel_entries.append({"label": key, "content": text})
-                    panel_used.append(key)
-                    panel_success.append((cand, body))
-                    continue
-                failed_models.append({"model": key, "reason": "empty response"})
-            else:
-                status = resp.status_code if resp is not None else "exception"
-                failed_models.append({"model": key, "reason": f"status {status}"})
-            failures += 1
-        # Pull one replacement per failed slot from the reserve (if any remain).
-        pending = [reserve.pop(0) for _ in range(min(failures, len(reserve)))]
+    for attempt in range(attempts):
+        if attempt > 0:
+            pool = _fusion_pool(model_full, config, fcfg, payload, free)
+            panel_cands = _fusion.select_panel(
+                pool, fcfg["panel_size"], fcfg["diversity"] == "provider"
+            )
+            logger.info(
+                "  [fusion] %s panel retry %d/%d (fresh selection of %d)",
+                model_full, attempt + 1, attempts, len(panel_cands),
+            )
+        panel_entries, panel_used, failed_models, panel_success = _run_panel(panel_cands, pool)
+        if panel_success:
+            break
 
     if not panel_success:
         reasons = "; ".join(f"{f['model']} ({f['reason']})" for f in failed_models)

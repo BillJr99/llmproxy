@@ -288,6 +288,76 @@ def test_fusion_streaming_sets_header(server, monkeypatch):
     assert resp.content_type.startswith("text/event-stream")
 
 
+def test_fusion_retries_panel_selection_on_total_failure(server, monkeypatch):
+    # An auto-selected panel that fails entirely is retried against a freshly
+    # re-derived pool; the second selection lands on working models, so the
+    # request still succeeds instead of returning a 503 on the first wipeout.
+    pools = iter([
+        [("p0", {}, "bad0"), ("p1", {}, "bad1")],    # attempt 0: every member fails
+        [("p2", {}, "good2"), ("p3", {}, "good3")],  # attempt 1: members succeed
+    ])
+    fallback = [("p2", {}, "good2"), ("p3", {}, "good3")]
+    monkeypatch.setattr(server, "_fusion_pool", lambda *a, **k: next(pools, fallback))
+    fake, seen = _fake_request_factory(fail_panel={"bad0", "bad1"})
+    monkeypatch.setattr(server, "_proxy_request", fake)
+
+    payload = {"model": "llmproxy__fusion", "messages": [{"role": "user", "content": "Q?"}]}
+    resp = _run(server, "llmproxy__fusion", payload)
+    assert resp.status_code == 200
+    rep = json.loads(resp.get_data())["llmproxy_fusion"]
+    assert set(rep["panel"]) <= {"p2/good2", "p3/good3"}  # the retry's panel answered
+    assert {"bad0", "bad1"}.issubset(set(seen["panel"]))  # first selection was attempted
+
+
+def test_fusion_auto_panel_retries_then_errors(server, monkeypatch):
+    # When every retry's panel also fails, the request gives up with a 503 after
+    # exactly PANEL_SELECTION_ATTEMPTS fresh selections (pool re-derivations).
+    derivations = {"n": 0}
+
+    def fake_pool(*a, **k):
+        derivations["n"] += 1
+        return [("p0", {}, "bad0"), ("p1", {}, "bad1")]
+
+    monkeypatch.setattr(server, "_fusion_pool", fake_pool)
+    fake, _ = _fake_request_factory(fail_panel={"bad0", "bad1"})
+    monkeypatch.setattr(server, "_proxy_request", fake)
+
+    payload = {"model": "llmproxy__fusion", "messages": [{"role": "user", "content": "Q?"}]}
+    resp = _run(server, "llmproxy__fusion", payload)
+    assert resp.status_code == 503
+    assert derivations["n"] == fusion.PANEL_SELECTION_ATTEMPTS
+
+
+def test_fusion_explicit_panel_not_retried(server, monkeypatch):
+    # A configured fusion.panel is honored as-is: a single attempt, no re-selection
+    # even when it fails entirely (the operator pinned these models on purpose).
+    monkeypatch.setattr(server, "_get_all_model_candidates",
+                        lambda: [("pa", {}, "m1"), ("pb", {}, "m2")])
+    monkeypatch.setattr(server, "_resolve_panel_list",
+                        lambda spec, cfg: [("pa", {}, "m1"), ("pb", {}, "m2")])
+    cfg = server.load_config()
+    cfg["fusion"] = {"enabled": True, "panel": ["pa/m1", "pb/m2"], "panel_size": 2}
+    derivations = {"n": 0}
+    real_pool = server._fusion_pool
+
+    def counting_pool(*a, **k):
+        derivations["n"] += 1
+        return real_pool(*a, **k)
+
+    monkeypatch.setattr(server, "_fusion_pool", counting_pool)
+    fake, _ = _fake_request_factory(fail_panel={"m1", "m2"})
+    monkeypatch.setattr(server, "_proxy_request", fake)
+
+    payload = {"model": "llmproxy__fusion", "messages": [{"role": "user", "content": "Q?"}]}
+    with server.app.test_request_context():
+        resp = server._proxy_fusion(
+            "chat/completions", "llmproxy__fusion", payload,
+            cfg, server.get_inbound("openai"), False,
+        )
+    assert resp.status_code == 503
+    assert derivations["n"] == 1  # explicit panel: derived once, never re-selected
+
+
 def test_fusion_panel_threads_inherit_request_context(server, monkeypatch):
     # Regression: the panel fans out on worker threads, but _proxy_request reads
     # request.headers (via _forwarded_client_headers). Without propagating the
