@@ -200,6 +200,21 @@ successfully.
 > offerings. If you want a local model to also appear under `llmproxy__free`,
 > add it to `believed_free` by hand.
 
+### Input-aware first pick (general virtuals only)
+
+For the two general virtuals — `llmproxy__free` and `llmproxy__local` — the proxy
+chooses *which candidate to try first* from the request itself, before the usual
+capacity/random cycling. It estimates the prompt size and detects an explicit
+"thinking" intent (`reasoning_effort` of `medium`/`high`, or a truthy `reasoning`
+field), then prefers a model whose `model_reasoning` tier fits: a short prompt
+prefers a fast (`exploratory`) model, a long prompt or a thinking request prefers a
+`deep` model, and mid-size prompts prefer `standard`. This is a *stable reordering*
+layered below the capability ordering (forced tools/JSON still win) and it never
+drops a candidate, so failover behavior is unchanged. It needs no configuration —
+thresholds live in `server.py` (`_TIER_SMALL_MAX_TOKENS`, `_TIER_MEDIUM_MAX_TOKENS`).
+The categorized families (`llmproxy__deep/free`, `llmproxy__tools`, …) already encode
+intent and are untouched.
+
 ### Reasoning-level virtual models
 
 You can optionally tag individual models in the config with a **reasoning
@@ -346,6 +361,74 @@ form is also accepted.
 
 ---
 
+### Fusion virtual models (multi-model deliberation)
+
+The virtual models above each select **one** upstream and return its response,
+cycling to the next only on failure. The fusion virtual models work differently:
+they fan a prompt out to a **panel** of models in parallel, have a **judge**
+compare the answers, and have a **synthesizer** write the final reply grounded in
+that comparison. This trades latency and cost for quality, so it suits research,
+expert critique, and high-stakes prompts rather than quick interactive chat.
+
+| Virtual model name        | Panel drawn from                                          |
+|---------------------------|-----------------------------------------------------------|
+| `llmproxy__fusion`        | The full non-local pool (or an explicit `fusion.panel`); paid models allowed by default |
+| `llmproxy__fusion/free`   | The capacity-ordered free-tier pool (panel, judge, and synthesizer all free) |
+
+The pipeline has four steps. First, llmproxy selects a panel of `panel_size`
+models, preferring distinct providers so the deliberation benefits from genuinely
+different training and decoding rather than near-identical siblings. Second, it
+sends the prompt to the panel in parallel. Third, a judge model compares the
+panel answers and emits structured analysis (consensus, contradictions, coverage
+gaps, unique insights, and blind spots). Fourth, a synthesizer model writes the
+final answer from that analysis. The pipeline degrades gracefully: it proceeds
+when at least one panel member answers, falls back to the first successful panel
+answer if the judge or synthesizer fails, and errors only when every panel member
+fails.
+
+```bash
+# Free-tier fusion: panel, judge, and synthesizer all drawn from the free pool
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "llmproxy__fusion/free",
+       "messages": [{"role": "user", "content": "Compare REST and gRPC for a mobile backend."}]}'
+```
+
+The models that participated are reported two ways, both additive: a top-level
+`llmproxy_fusion` object on non-streaming responses (panel members, judge,
+synthesizer, any `failed_models`, a `fell_back` flag, and the judge `analysis`),
+and an `X-LLMProxy-Fusion` response header carrying the same provenance without
+the analysis, which also works for streamed responses. Strict OpenAI clients
+ignore the extra field.
+
+Behavior is controlled by the `fusion` config object:
+
+| Key                  | Default      | Meaning |
+|----------------------|--------------|---------|
+| `enabled`            | `true`       | Master switch; when false the fusion models are not advertised or served. |
+| `panel`              | `null`       | Explicit list of model ids for bare `fusion`; `null` uses the full non-local pool. |
+| `panel_size`         | `4`          | Number of panel members (minimum 2). |
+| `diversity`          | `"provider"` | `"provider"` prefers distinct providers when selecting the panel; `"none"` takes the pre-ordered prefix. |
+| `judge_model`        | `null`       | Model that compares the panel answers; `null` auto-picks a capable pool model. |
+| `synthesizer_model`  | `null`       | Model that writes the final answer; `null` auto-picks, preferring one different from the judge. |
+| `allow_paid`         | `true`       | Whether bare `fusion` may recruit paid models. `fusion/free` is always free regardless. |
+| `report.metadata`    | `true`       | Emit the `llmproxy_fusion` provenance block. |
+| `forced_capability`  | `"restrict"` | When a request forces tools or JSON: `"restrict"` limits the panel and synthesizer to capable models; `"bypass"` orders capable-first without restricting. |
+
+When a request forces a capability (a `tool_choice` that demands a call, or a
+`response_format` requesting JSON), the panel and judge deliberate in plain text
+while the synthesizer call re-attaches the original tools and `response_format`,
+so the final answer honors the forced-output contract. The legacy `llmproxy/...`
+input form (`llmproxy/fusion`, `llmproxy/fusion/free`) is accepted as well.
+
+> **Scope notes (v1).** Fusion is available on chat/completions only. The
+> `llmproxy_fusion` body field and `X-LLMProxy-Fusion` header are populated on the
+> OpenAI surface; Anthropic/Gemini inbound requests receive the synthesized answer
+> with the header but without the in-body block. The panel and judge are not
+> web-augmented, since llmproxy has no server-side web tools.
+
+---
+
 ## API dialects — OpenAI **and** Anthropic, in and out
 
 llmproxy speaks more than one API dialect on both edges. Internally everything is
@@ -449,12 +532,29 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     }
   },
 
-  "probe_cost": false,
-  "autoremove_believed_free": false,
-  "probe_frequency_days": 0,
-  "sync_believed_free_on_startup": true,
-  "update_believed_free_on_startup": false,
-  "pr_providers_list": false,
+  "free_tier": {
+    "sync_on_startup": true,
+    "update_on_startup": false,
+    "probe": { "enabled": false, "autoremove": false, "frequency_days": 0 }
+  },
+  "providers_pr": {
+    "enabled": false,
+    "repo": "owner/repo",
+    "base": "main",
+    "branch": "llmproxy-auto/providers",
+    "token": "${GITHUB_TOKEN}"
+  },
+  "fusion": {
+    "enabled": true,
+    "panel": null,
+    "panel_size": 4,
+    "diversity": "provider",
+    "judge_model": null,
+    "synthesizer_model": null,
+    "allow_paid": true,
+    "report": { "metadata": true },
+    "forced_capability": "restrict"
+  },
 
   "server": {
     "host": "0.0.0.0",
@@ -467,6 +567,19 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
   }
 }
 ```
+
+> **Config layout (free_tier / providers_pr).** The free-tier maintenance
+> switches and the auto-PR settings live under two grouped objects, `free_tier`
+> and `providers_pr`, rather than as loose top-level keys. Configs written with
+> the older flat keys (`probe_cost`, `autoremove_believed_free`,
+> `probe_frequency_days`, `sync_believed_free_on_startup`,
+> `update_believed_free_on_startup`, `pr_providers_list`, `pr_providers_repo`,
+> `pr_providers_base`, `pr_providers_branch`, `pr_providers_token`) are still
+> accepted: a migration shim in the config loader lifts them into their nested
+> homes at load time, with the nested form taking precedence when both are set.
+> The mapping is: `free_tier.sync_on_startup`, `free_tier.update_on_startup`,
+> `free_tier.probe.enabled`, `free_tier.probe.autoremove`,
+> `free_tier.probe.frequency_days`, and `providers_pr.{enabled,repo,base,branch,token}`.
 
 `model_filter` is an optional list of upstream model IDs to allow (without the
 provider prefix).  It is not set by default in `config.example.json`.  Set it to
@@ -635,26 +748,26 @@ Two opt-in, top-level config flags (both default `false`) let you keep
 
 ```json
 {
-  "probe_cost": false,
-  "autoremove_believed_free": false,
-  "probe_frequency_days": 0
+  "free_tier": {
+    "probe": { "enabled": false, "autoremove": false, "frequency_days": 0 }
+  }
 }
 ```
 
-- **`probe_cost`** — when `true`, [`scripts/update_free_models.py`](#keeping-the-free-models-list-current)
+- **`free_tier.probe.enabled`** — when `true`, [`scripts/update_free_models.py`](#keeping-the-free-models-list-current)
   actively probes each `believed_free` model with a tiny real chat request
   (`max_tokens: 1`) using your configured API keys, inspects the returned
   `usage`/cost, and flags any model that reports a cost. This spends a small
   amount of quota, so it is off by default. (You can also trigger it for a single
   run with the `--probe` flag.)
-- **`autoremove_believed_free`** — when `true`, the scraper **removes** any
+- **`free_tier.probe.autoremove`** — when `true`, the scraper **removes** any
   model that probes (or prices) as non-free from `believed_free` (and therefore
   from the `/free` virtual model). When `false` (default), such models are
   reported in the scraper output and in `flagged_paid_free_models`, but left in
   place for you to review.
-- **`probe_frequency_days`** — throttles the probe so it runs at most once every
-  _N_ days, which matters when `probe_cost` is combined with
-  `update_believed_free_on_startup` (otherwise every server boot would spend
+- **`free_tier.probe.frequency_days`** — throttles the probe so it runs at most once every
+  _N_ days, which matters when `free_tier.probe.enabled` is combined with
+  `free_tier.update_on_startup` (otherwise every server boot would spend
   quota). `0` (default) probes on every run; `1` is at most once a day, `7` once a
   week, etc. The last-run timestamp is cached in `probe_state.json` next to your
   `config.json` (not in `config.json` itself). The throttle applies to both
@@ -662,7 +775,7 @@ Two opt-in, top-level config flags (both default `false`) let you keep
   `update_free_models.py` to force a probe regardless of how recently one ran.
 
 <a name="sync-on-startup"></a>
-### Syncing the live config on startup — `sync_believed_free_on_startup`
+### Syncing the live config on startup — `free_tier.sync_on_startup`
 
 **On by default.** On every boot, the server reconciles your **live `config.json`**'s
 `believed_free` / `free_limits` / `model_reasoning` / `model_capabilities` from the
@@ -688,18 +801,18 @@ python scripts/update_free_models.py --sync-config-only --config ~/.config/llmpr
 # add --dry-run to preview without writing
 ```
 
-This is distinct from `update_believed_free_on_startup` below: that one runs the
-**full network scrape** to *refresh* the sidecar first; `sync_believed_free_on_startup`
+This is distinct from `free_tier.update_on_startup` below: that one runs the
+**full network scrape** to *refresh* the sidecar first; `free_tier.sync_on_startup`
 only *applies* whatever sidecar data is already present.
 
 <a name="update-on-startup"></a>
-### Running the updater on startup — `update_believed_free_on_startup`
+### Running the updater on startup — `free_tier.update_on_startup`
 
 Set the top-level flag to refresh free-tier data automatically when the server
 boots:
 
 ```json
-{ "update_believed_free_on_startup": true }
+{ "free_tier": { "update_on_startup": true } }
 ```
 
 When `true`, the server runs `scripts/update_free_models.py` once per worker in a
@@ -713,8 +826,8 @@ background thread at startup (it never blocks request handling). It:
 Every line the updater prints — including `Updated …/providers.json`, each
 `believed_free` add/remove, and `Synced free-tier sections into …` — is re-emitted
 through the server log with a `[startup-update]` prefix (at `INFO` level), so set
-`server.log_level` to `INFO` to watch it work. If `probe_cost` is also `true`, the
-startup run includes the active cost probe (and, with `autoremove_believed_free`,
+`server.log_level` to `INFO` to watch it work. If `free_tier.probe.enabled` is also `true`, the
+startup run includes the active cost probe (and, with `free_tier.probe.autoremove`,
 removes any model it finds is no longer free). Defaults to `false`.
 
 > The scraper lives in the repo-root `scripts/` package. The Docker image ships
@@ -726,25 +839,27 @@ removes any model it finds is no longer free). Defaults to `false`.
 > changes back in the repo, use the [CI auto-update workflow](#automated-providersjson-updates-ci).
 
 <a name="pr-providers-list"></a>
-### Proposing `providers.json` changes as a PR — `pr_providers_list`
+### Proposing `providers.json` changes as a PR — `providers_pr.enabled`
 
-When `update_believed_free_on_startup` refreshes the sidecar (optionally with
-probing, if `probe_cost` / `autoremove_believed_free` are on), set this flag to
+When `free_tier.update_on_startup` refreshes the sidecar (optionally with
+probing, if `free_tier.probe.enabled` / `free_tier.probe.autoremove` are on), set this flag to
 have the running deployment open a **pull request** with the result instead of
 only keeping the change in its ephemeral local copy:
 
 ```json
 {
-  "update_believed_free_on_startup": true,
-  "pr_providers_list": true,
-  "pr_providers_repo": "BillJr99/llmproxy",
-  "pr_providers_base": "main",
-  "pr_providers_branch": "llmproxy-auto/providers",
-  "pr_providers_token": "${GITHUB_TOKEN}"
+  "free_tier": { "update_on_startup": true },
+  "providers_pr": {
+    "enabled": true,
+    "repo": "BillJr99/llmproxy",
+    "base": "main",
+    "branch": "llmproxy-auto/providers",
+    "token": "${GITHUB_TOKEN}"
+  }
 }
 ```
 
-The GitHub token is required. Provide it either via the `pr_providers_token`
+The GitHub token is required. Provide it either via the `providers_pr.token`
 config key (a literal token or a `${VAR}` reference, as above) **or** via the
 `GITHUB_TOKEN` / `GH_TOKEN` environment variable. It needs `contents:write` +
 `pull_requests:write` on the target repo.
@@ -759,24 +874,24 @@ This works **even when the bundled `providers.json` can't be saved locally** —
 on a read-only container image. In that case the updater mirrors the computed
 `providers.json` + `config.example.json` into the writable config directory (the
 container's `/config` bind mount) for review, and opens the PR from that computed
-content. (See also: the cost probe's `probe_frequency_days` throttle so a startup
+content. (See also: the cost probe's `free_tier.probe.frequency_days` throttle so a startup
 that probes + PRs doesn't spend quota or churn a PR on every restart.)
 
 Required / optional settings (all top-level):
 
 | Key | Required | Default | Meaning |
 |-----|----------|---------|---------|
-| `pr_providers_list` | — | `false` | Master switch. |
-| `pr_providers_repo` | **yes** | — | Target repo as `"owner/repo"`. |
-| `pr_providers_token` | yes¹ | — | GitHub token; may be a `${VAR}` ref. ¹Falls back to the `GITHUB_TOKEN` / `GH_TOKEN` environment variables. Needs `contents:write` + `pull_requests:write`. |
-| `pr_providers_base` | — | `"main"` | Base branch for the PR. |
-| `pr_providers_branch` | — | `"llmproxy-auto/providers"` | Head branch (force-updated each run; an open PR for it is reused). |
+| `providers_pr.enabled` | — | `false` | Master switch. |
+| `providers_pr.repo` | **yes** | — | Target repo as `"owner/repo"`. |
+| `providers_pr.token` | yes¹ | — | GitHub token; may be a `${VAR}` ref. ¹Falls back to the `GITHUB_TOKEN` / `GH_TOKEN` environment variables. Needs `contents:write` + `pull_requests:write`. |
+| `providers_pr.base` | — | `"main"` | Base branch for the PR. |
+| `providers_pr.branch` | — | `"llmproxy-auto/providers"` | Head branch (force-updated each run; an open PR for it is reused). |
 
-If the token or `pr_providers_repo` is missing, the server logs a `[providers-pr]`
+If the token or `providers_pr.repo` is missing, the server logs a `[providers-pr]`
 warning and skips — it never fails the startup update. This is the **deployment**
 counterpart to the repo-level
 [CI auto-update workflow](#automated-providersjson-updates-ci): the workflow
-proposes PRs from a scheduled scrape, while `pr_providers_list` proposes them from
+proposes PRs from a scheduled scrape, while `providers_pr.enabled` proposes them from
 a live deployment (which can additionally probe real model costs).
 
 ### Provider templates
@@ -971,7 +1086,7 @@ python scripts/update_free_models.py --probe --config ~/.config/llmproxy/config.
 python scripts/update_free_models.py --probe --probe-max 20 --probe-provider groq
 ```
 
-### Verifying free tiers and auto-removal (`probe_cost` / `autoremove_believed_free`)
+### Verifying free tiers and auto-removal (`free_tier.probe.enabled` / `free_tier.probe.autoremove`)
 
 By default the scraper only *adds* high-confidence free models and *removes* ones
 that a trusted source contradicts. Two `config.json` flags extend this to
@@ -985,7 +1100,7 @@ empirical cost checks (see [Verifying free models are actually free](#cost-flags
   (default), the run prints the flagged models but makes no removal.
 
 You can also have the server run this updater on boot — see
-[`update_believed_free_on_startup`](#update-on-startup).
+[`free_tier.update_on_startup`](#update-on-startup).
 
 ### Syncing your live config (`--config PATH`)
 
@@ -1060,7 +1175,7 @@ permissions (already declared in the file); if your org disables PR creation by
 permissions*.
 
 > This repo-level workflow and the server-side
-> [`update_believed_free_on_startup`](#update-on-startup) flag are complementary:
+> [`free_tier.update_on_startup`](#update-on-startup) flag are complementary:
 > the workflow lands durable updates in the repo via reviewable PRs, while the
 > startup flag refreshes a running deployment's live config.
 

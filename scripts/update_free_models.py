@@ -426,12 +426,33 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         # model_capabilities from the bundled providers.json sidecar. This needs no
         # network and works when the sidecar is read-only, so the shipped/merged
         # free-tier data reaches the live config without running the full scrape.
-        "probe_cost": False,
-        "autoremove_believed_free": False,
-        "probe_frequency_days": 0,
-        "update_believed_free_on_startup": False,
-        "sync_believed_free_on_startup": True,
-        "pr_providers_list": False,
+        "free_tier": {
+            "sync_on_startup": True,
+            "update_on_startup": False,
+            "probe": {
+                "enabled": False,
+                "autoremove": False,
+                "frequency_days": 0,
+            },
+        },
+        "providers_pr": {
+            "enabled": False,
+            "repo": None,
+            "base": "main",
+            "branch": "llmproxy-auto/providers",
+            "token": None,
+        },
+        "fusion": {
+            "enabled": True,
+            "panel": None,
+            "panel_size": 4,
+            "diversity": "provider",
+            "judge_model": None,
+            "synthesizer_model": None,
+            "allow_paid": True,
+            "report": {"metadata": True},
+            "forced_capability": "restrict",
+        },
 
         "server": server_block or {
             "host": "0.0.0.0",
@@ -758,8 +779,9 @@ def main(argv: list[str] | None = None) -> int:
         user_cfg = load_user_config(args.config, force_reload=True)
     except Exception:  # noqa: BLE001 — a missing/broken config must not break scraping
         user_cfg = {}
-    probe_cost = bool(user_cfg.get("probe_cost", False)) or args.probe
-    autoremove = bool(user_cfg.get("autoremove_believed_free", False))
+    probe_cfg = user_cfg.get("free_tier", {}).get("probe", {})
+    probe_cost = bool(probe_cfg.get("enabled", False)) or args.probe
+    autoremove = bool(probe_cfg.get("autoremove", False))
 
     # Throttle the probe to at most once every probe_frequency_days. The last-run
     # timestamp lives in a sibling cache file (probe_state.json), not config.json.
@@ -767,10 +789,10 @@ def main(argv: list[str] | None = None) -> int:
     if probe_cost and not args.ignore_throttle:
         state = load_probe_state(args.config)
         due, days_since = _probe_due(
-            state.get("last_probe_at"), user_cfg.get("probe_frequency_days", 0)
+            state.get("last_probe_at"), probe_cfg.get("frequency_days", 0)
         )
         if not due:
-            freq = user_cfg.get("probe_frequency_days", 0)
+            freq = probe_cfg.get("frequency_days", 0)
             since = f"{days_since:.1f}" if days_since is not None else "?"
             print(_warn(
                 f"  ⚠  probe throttled — last run was {since} day(s) ago, "

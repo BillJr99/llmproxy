@@ -67,6 +67,7 @@ the process environment at request time (see ``resolve_env_refs`` and the
 be written literally into config.json.
 """
 
+import copy
 import json
 import os
 import re
@@ -126,14 +127,74 @@ DEFAULT_ADMIN_CONFIG = {
     "token": "",
 }
 
+# Free-tier maintenance defaults. Groups the startup sync/update switches with
+# the cost-probe controls they drive. Replaces the former flat top-level keys
+# sync_believed_free_on_startup / update_believed_free_on_startup / probe_cost /
+# autoremove_believed_free / probe_frequency_days (still accepted on input via
+# _normalize_config below for backward compatibility).
+DEFAULT_FREE_TIER_CONFIG = {
+    "sync_on_startup": True,
+    "update_on_startup": False,
+    "probe": {
+        "enabled": False,
+        "autoremove": False,
+        "frequency_days": 0,
+    },
+}
+
+# Providers-PR defaults. Groups the auto-PR switch with its repo/branch/token.
+# Replaces the former flat pr_providers_list / pr_providers_repo /
+# pr_providers_base / pr_providers_branch / pr_providers_token keys (still
+# accepted on input via _normalize_config below).
+DEFAULT_PROVIDERS_PR_CONFIG = {
+    "enabled": False,
+    "repo": None,
+    "base": "main",
+    "branch": "llmproxy-auto/providers",
+    "token": None,
+}
+
+# Fusion (multi-model deliberation) defaults. See llmproxy/fusion.py and the
+# llmproxy__fusion / llmproxy__fusion/free virtual models in server.py.
+DEFAULT_FUSION_CONFIG = {
+    "enabled": True,
+    "panel": None,            # explicit model list for bare fusion; None -> full pool
+    "panel_size": 4,
+    "diversity": "provider",  # "provider" -> prefer distinct providers/families; "none"
+    "judge_model": None,      # None -> auto-pick a capable model
+    "synthesizer_model": None,  # None -> auto-pick a capable model
+    "allow_paid": True,       # bare fusion may use paid models; fusion/free never does
+    "report": {"metadata": True},
+    "forced_capability": "restrict",  # "restrict" -> panel+synth must be capable; "bypass"
+}
+
 DEFAULT_CONFIG: dict = {
     "providers": {},
     "believed_free": [],
     "model_reasoning": {},
     "model_capabilities": {},
     "free_limits": {},
+    "free_tier": dict(DEFAULT_FREE_TIER_CONFIG),
+    "providers_pr": dict(DEFAULT_PROVIDERS_PR_CONFIG),
+    "fusion": dict(DEFAULT_FUSION_CONFIG),
     "server": dict(DEFAULT_SERVER_CONFIG),
     "admin": dict(DEFAULT_ADMIN_CONFIG),
+}
+
+# Mapping from each legacy flat top-level key to its new nested location, used by
+# _normalize_config to migrate configs written before the reorganization. Each
+# value is the tuple path into the nested config.
+_LEGACY_KEY_MIGRATIONS: dict[str, tuple[str, ...]] = {
+    "sync_believed_free_on_startup": ("free_tier", "sync_on_startup"),
+    "update_believed_free_on_startup": ("free_tier", "update_on_startup"),
+    "probe_cost": ("free_tier", "probe", "enabled"),
+    "autoremove_believed_free": ("free_tier", "probe", "autoremove"),
+    "probe_frequency_days": ("free_tier", "probe", "frequency_days"),
+    "pr_providers_list": ("providers_pr", "enabled"),
+    "pr_providers_repo": ("providers_pr", "repo"),
+    "pr_providers_base": ("providers_pr", "base"),
+    "pr_providers_branch": ("providers_pr", "branch"),
+    "pr_providers_token": ("providers_pr", "token"),
 }
 
 
@@ -181,7 +242,7 @@ def load_config(config_path: str | None = None, force_reload: bool = False) -> d
         with open(path, encoding="utf-8") as fh:
             raw = json.load(fh)
 
-        merged = _deep_merge(DEFAULT_CONFIG, raw)
+        merged = _deep_merge(DEFAULT_CONFIG, _normalize_config(raw))
         _cache = merged
         _cache_mtime = mtime
         return merged
@@ -546,6 +607,62 @@ def heal_config(config: dict) -> tuple[dict, bool, list[tuple[str, str]]]:
 # ---------------------------------------------------------------------------
 # Internal utilities
 # ---------------------------------------------------------------------------
+
+def _nested_present(d: dict, path: tuple[str, ...]) -> bool:
+    """True if *path* is explicitly present (to any depth) in nested dict *d*."""
+    cur = d
+    for key in path:
+        if not isinstance(cur, dict) or key not in cur:
+            return False
+        cur = cur[key]
+    return True
+
+
+def _nested_set(d: dict, path: tuple[str, ...], value) -> None:
+    """Set *value* at *path* in *d*, creating intermediate dicts as needed."""
+    cur = d
+    for key in path[:-1]:
+        nxt = cur.get(key)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            cur[key] = nxt
+        cur = nxt
+    cur[path[-1]] = value
+
+
+def _normalize_config(raw: dict) -> dict:
+    """Migrate legacy flat top-level keys into their new nested homes.
+
+    The free-tier maintenance and providers-PR switches were originally flat
+    top-level keys (probe_cost, pr_providers_list, ...). They now live under the
+    ``free_tier`` and ``providers_pr`` objects. To keep configs written before
+    the reorganization working unchanged, any legacy flat key still present is
+    lifted into its nested location here, unless the user has *also* explicitly
+    set the nested form (in which case the nested form wins and the legacy key is
+    simply dropped). The returned dict is a shallow-safe copy with the legacy
+    keys removed, so all downstream readers see only the canonical nested shape.
+
+    A no-op for configs that already use the nested shape.
+    """
+    if not isinstance(raw, dict):
+        return raw
+    if not any(k in raw for k in _LEGACY_KEY_MIGRATIONS):
+        return raw
+
+    normalized = copy.deepcopy(raw)
+    for legacy_key, path in _LEGACY_KEY_MIGRATIONS.items():
+        if legacy_key not in normalized:
+            continue
+        value = normalized.pop(legacy_key)
+        # Nested form set by the user takes precedence over the legacy value.
+        if not _nested_present(raw, path):
+            try:
+                _nested_set(normalized, path, value)
+            except Exception as e:  # noqa: BLE001
+                print(f"[config:_normalize_config] failed migrating {legacy_key}: {e}")
+                traceback.print_exc()
+    return normalized
+
 
 def _deep_merge(base: dict, override: dict) -> dict:
     """
