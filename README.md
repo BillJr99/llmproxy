@@ -200,6 +200,21 @@ successfully.
 > offerings. If you want a local model to also appear under `llmproxy__free`,
 > add it to `believed_free` by hand.
 
+### Input-aware first pick (general virtuals only)
+
+For the two general virtuals — `llmproxy__free` and `llmproxy__local` — the proxy
+chooses *which candidate to try first* from the request itself, before the usual
+capacity/random cycling. It estimates the prompt size and detects an explicit
+"thinking" intent (`reasoning_effort` of `medium`/`high`, or a truthy `reasoning`
+field), then prefers a model whose `model_reasoning` tier fits: a short prompt
+prefers a fast (`exploratory`) model, a long prompt or a thinking request prefers a
+`deep` model, and mid-size prompts prefer `standard`. This is a *stable reordering*
+layered below the capability ordering (forced tools/JSON still win) and it never
+drops a candidate, so failover behavior is unchanged. It needs no configuration —
+thresholds live in `server.py` (`_TIER_SMALL_MAX_TOKENS`, `_TIER_MEDIUM_MAX_TOKENS`).
+The categorized families (`llmproxy__deep/free`, `llmproxy__tools`, …) already encode
+intent and are untouched.
+
 ### Reasoning-level virtual models
 
 You can optionally tag individual models in the config with a **reasoning

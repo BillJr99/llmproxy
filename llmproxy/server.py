@@ -168,6 +168,12 @@ _FREE_VIRTUAL_MODELS: frozenset[str] = frozenset({
     *(f"llmproxy__{cap}/free" for cap in _CAPABILITY_VIRTUALS),
     *(f"llmproxy/{cap}/free" for cap in _CAPABILITY_VIRTUALS),
 })
+# The two GENERAL (uncategorized) virtuals. Unlike the categorized families,
+# these don't pin a tier/capability, so their first-pick is chosen input-aware:
+# the request's estimated size and type bias which reasoning tier is tried first.
+_GENERAL_VIRTUAL_MODELS: frozenset[str] = frozenset({
+    "llmproxy__free", "llmproxy/free", "llmproxy__local", "llmproxy/local",
+})
 
 # Maps proxy display ID -> (provider_name, upstream_id).
 # Always access under _model_route_cache_lock.
@@ -2004,6 +2010,93 @@ def _order_by_capability(
     return sorted(candidates, key=satisfied, reverse=True)
 
 
+# Token thresholds for mapping a request's estimated input size to a reasoning
+# tier when routing the GENERAL virtuals (llmproxy__free / llmproxy__local).
+# Small, quick prompts prefer fast (exploratory) models; long or deliberately
+# "thinking" requests prefer deep models. Configurable here rather than in JSON
+# because they are routing heuristics, not per-deployment policy.
+_TIER_SMALL_MAX_TOKENS: int = 1500
+_TIER_MEDIUM_MAX_TOKENS: int = 8000
+
+
+def _estimate_payload_tokens(payload: dict) -> int:
+    """Rough token estimate (~4 chars/token) over a canonical request's text."""
+    chars = 0
+    for msg in payload.get("messages", []):
+        content = msg.get("content")
+        if isinstance(content, str):
+            chars += len(content)
+        elif isinstance(content, list):
+            chars += sum(len(p.get("text", "")) for p in content if isinstance(p, dict))
+    return chars // 4
+
+
+def _wants_thinking(payload: dict) -> bool:
+    """True when the request explicitly asks for extra reasoning effort.
+
+    Recognizes the OpenAI-style ``reasoning_effort`` ("medium"/"high") and a
+    truthy ``reasoning`` field. A request that wants thinking is routed toward
+    deep-tier models regardless of its size.
+    """
+    eff = payload.get("reasoning_effort")
+    if isinstance(eff, str) and eff.lower() in ("medium", "high"):
+        return True
+    return bool(payload.get("reasoning"))
+
+
+def _target_reasoning_tier(payload: dict) -> str:
+    """Choose the reasoning tier that best fits a request's size and type.
+
+    Explicit thinking requests go to ``deep``; otherwise the estimated input
+    size buckets the request into ``exploratory`` (small/fast), ``standard``, or
+    ``deep`` (large). This drives the first-pick order for the general virtuals;
+    failover still walks the rest of the candidates, so the choice is only a
+    preference, never a restriction.
+    """
+    if _wants_thinking(payload):
+        return "deep"
+    tokens = _estimate_payload_tokens(payload)
+    if tokens <= _TIER_SMALL_MAX_TOKENS:
+        return "exploratory"
+    if tokens <= _TIER_MEDIUM_MAX_TOKENS:
+        return "standard"
+    return "deep"
+
+
+def _order_by_reasoning_fit(
+    candidates: list[tuple[str, dict, str]],
+    target_tier: str,
+    reasoning_map: dict[str, str],
+) -> list[tuple[str, dict, str]]:
+    """Stable-sort *candidates* so models nearest *target_tier* come first.
+
+    Distance is measured along exploratory(0) < standard(1) < deep(2): an exact
+    tier match sorts first, an adjacent tier next, and a far tier last. Untagged
+    models sort in the middle (neutral) so incomplete metadata never buries a
+    usable model. Stable, so the base ordering (capacity headroom for /free,
+    random rotation for /local) is preserved within each distance band, and it
+    never drops a candidate.
+    """
+    if not candidates:
+        return candidates
+    order = {lvl: i for i, lvl in enumerate(_REASONING_LEVELS)}
+    target_idx = order.get(target_tier, 1)
+
+    def rank(c: tuple[str, dict, str]) -> float:
+        pn, _cfg, uid = c
+        lvl = reasoning_map.get(uid.lower()) or reasoning_map.get(f"{pn}/{uid}".lower())
+        if lvl is None or lvl not in order:
+            return 1.5  # untagged: neutral — after exact/adjacent, before far
+        return float(abs(order[lvl] - target_idx))
+
+    return sorted(candidates, key=rank)
+
+
+def _is_general_virtual(model_full: str) -> bool:
+    """True for the uncategorized llmproxy__free / llmproxy__local virtuals."""
+    return model_full in _GENERAL_VIRTUAL_MODELS
+
+
 def _capability_failed(payload: dict, body_bytes: bytes) -> bool:
     """True when a non-streaming 200 failed to deliver a *forced* capability.
 
@@ -3157,6 +3250,15 @@ def _proxy_endpoint(
         # request needs (tools/vision/reasoning/json).  Stable, never drops
         # candidates, and a no-op when nothing is needed or no metadata exists.
         needed = _needed_capabilities(payload)
+        # Input-aware first-pick for the GENERAL virtuals (llmproxy__free /
+        # llmproxy__local only): bias the order by how well each model's reasoning
+        # tier fits the request's size and type, before the capability ordering
+        # below (which still wins for hard capability needs). The categorized
+        # families already encode tier/capability intent, so they are untouched.
+        if _is_general_virtual(model_full):
+            tier = _target_reasoning_tier(payload)
+            ordered = _order_by_reasoning_fit(ordered, tier, _get_model_reasoning(config))
+            logger.info("  [%s] input-aware first-pick tier=%s", model_full, tier)
         if needed:
             ordered = _order_by_capability(ordered, needed, _model_capabilities(config))
         logger.info("  [%s] cycling through %d candidate(s)", model_full, len(ordered))

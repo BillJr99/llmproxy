@@ -92,7 +92,7 @@ if [ "$HAVE_JQ" -eq 1 ]; then
 fi
 has_model() { echo "$ALL_IDS" | grep -qx "$1"; }
 
-for vm in llmproxy__free llmproxy__tools llmproxy__tools/free llmproxy__vision llmproxy__vision/free; do
+for vm in llmproxy__free llmproxy__local llmproxy__tools llmproxy__tools/free llmproxy__vision llmproxy__vision/free llmproxy__fusion llmproxy__fusion/free; do
   if has_model "$vm"; then pass "advertised: $vm"; else skip "not advertised: $vm (no matching tagged models)"; fi
 done
 
@@ -281,6 +281,52 @@ code=$(req POST /v1/chat/completions '{"messages":[{"role":"user","content":"hi"
 
 code=$(req POST /v1/chat/completions '{"model":"definitely/not-a-real-model","messages":[{"role":"user","content":"hi"}]}')
 if [ "$code" -ge 400 ]; then pass "unknown model → $code (rejected)"; else fail "unknown model → $code (expected >=400)"; fi
+
+# ── fusion (multi-model deliberation) ───────────────────────────────────────
+hdr "Fusion"
+FUSION_MODEL=""
+if has_model "llmproxy__fusion/free"; then FUSION_MODEL="llmproxy__fusion/free"
+elif has_model llmproxy__fusion; then FUSION_MODEL="llmproxy__fusion"; fi
+if [ -z "$FUSION_MODEL" ]; then
+  skip "no fusion model advertised (need >=2 eligible models)"
+else
+  echo "  ${DIM}model: ${FUSION_MODEL}${RST}"
+  # Capture headers (-D) so we can assert the additive provenance channel.
+  HDRS="$(mktemp)"
+  code=$(curl -sS -o "$BODY" -D "$HDRS" -w '%{http_code}' -X POST \
+        "${BASE_URL}/v1/chat/completions" -H 'Content-Type: application/json' "${AUTH[@]}" \
+        -d "{\"model\":\"${FUSION_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"In one sentence, name a tradeoff between REST and gRPC.\"}],\"max_tokens\":128}")
+  content=$(jqr '.choices[0].message.content')
+  if ok2xx "$code" && { [ "$HAVE_JQ" -eq 0 ] || [ -n "$content" ]; }; then
+    pass "fusion chat → $code ${DIM}($(echo "${content:-ok}" | head -c 40))${RST}"
+  else
+    fail "fusion chat → $code $(head -c 200 "$BODY")"
+  fi
+  # Provenance: X-LLMProxy-Fusion header (always) and llmproxy_fusion body field.
+  if grep -qi '^x-llmproxy-fusion:' "$HDRS"; then pass "X-LLMProxy-Fusion header present"
+  else warn "no X-LLMProxy-Fusion header (older build or upstream error)"; fi
+  if [ "$HAVE_JQ" -eq 1 ]; then
+    panel=$(jq -r '.llmproxy_fusion.panel | length' "$BODY" 2>/dev/null)
+    if [ -n "$panel" ] && [ "$panel" != "null" ]; then
+      pass "llmproxy_fusion body field present ${DIM}(${panel} panel models)${RST}"
+    else warn "no llmproxy_fusion body field (synth may have fallen back / non-OpenAI render)"; fi
+  fi
+  rm -f "$HDRS"
+fi
+
+# ── input-aware first-pick on the general virtuals ──────────────────────────
+hdr "Input-aware routing (llmproxy__free)"
+if ! has_model llmproxy__free; then
+  skip "llmproxy__free not advertised"
+else
+  # A tiny prompt and a 'thinking' request should both succeed; the proxy biases
+  # the first model tried by input size/type, but failover still guarantees a
+  # reply, so this asserts functionality rather than which tier was chosen.
+  code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy__free\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}")
+  ok2xx "$code" && pass "small prompt routed → $code" || warn "small prompt → $code"
+  code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy__free\",\"reasoning_effort\":\"high\",\"messages\":[{\"role\":\"user\",\"content\":\"Think carefully, then answer: 2+2?\"}],\"max_tokens\":16}")
+  ok2xx "$code" && pass "thinking request routed → $code" || warn "thinking request → $code"
+fi
 
 # ── summary ─────────────────────────────────────────────────────────────────
 hdr "Summary"
