@@ -284,9 +284,13 @@ if [ "$code" -ge 400 ]; then pass "unknown model → $code (rejected)"; else fai
 
 # ── fusion (multi-model deliberation) ───────────────────────────────────────
 hdr "Fusion"
+# Prefer the general llmproxy__fusion pool (draws from all configured providers,
+# typically paid keys that are reliably reachable) and fall back to the free pool
+# only when the general one isn't advertised. The free-tier panel is the flakier
+# target — its members rate-limit and blip — so it makes a poorer smoke signal.
 FUSION_MODEL=""
-if has_model "llmproxy__fusion/free"; then FUSION_MODEL="llmproxy__fusion/free"
-elif has_model llmproxy__fusion; then FUSION_MODEL="llmproxy__fusion"; fi
+if has_model llmproxy__fusion; then FUSION_MODEL="llmproxy__fusion"
+elif has_model "llmproxy__fusion/free"; then FUSION_MODEL="llmproxy__fusion/free"; fi
 if [ -z "$FUSION_MODEL" ]; then
   skip "no fusion model advertised (need >=2 eligible models)"
 else
