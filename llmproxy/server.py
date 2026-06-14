@@ -55,6 +55,7 @@ import requests
 from flask import Flask, Response, g, jsonify, make_response, request, stream_with_context
 
 from . import __version__
+from . import fusion as _fusion
 from .config import (
     RESERVED_PROVIDER_NAMES,
     get_provider,
@@ -148,6 +149,17 @@ _LEGACY_VIRTUAL_MODELS: frozenset[str] = frozenset({
     *(f"llmproxy/{cap}/free" for cap in _CAPABILITY_VIRTUALS),
 })
 _VIRTUAL_MODELS: frozenset[str] = _NEW_VIRTUAL_MODELS | _LEGACY_VIRTUAL_MODELS
+# Fusion (multi-model deliberation) virtual models. These do NOT cycle/failover
+# like the sets above; they fan out to a panel, judge, and synthesize, so they
+# are dispatched on a separate path (_proxy_fusion) before the cycling logic.
+# They are members of _VIRTUAL_MODELS (so the cache-bypass and model-listing
+# machinery recognizes them) but intentionally NOT of _FREE_VIRTUAL_MODELS:
+# fusion/free does its own free-pool selection.
+_NEW_FUSION_MODELS: frozenset[str] = frozenset({"llmproxy__fusion", "llmproxy__fusion/free"})
+_LEGACY_FUSION_MODELS: frozenset[str] = frozenset({"llmproxy/fusion", "llmproxy/fusion/free"})
+_FUSION_VIRTUAL_MODELS: frozenset[str] = _NEW_FUSION_MODELS | _LEGACY_FUSION_MODELS
+# Recognized by _is_virtual_model (cache bypass, listing) but dispatched separately.
+_VIRTUAL_MODELS = _VIRTUAL_MODELS | _FUSION_VIRTUAL_MODELS
 # Virtual models that use capacity-aware free-tier load balancing.
 _FREE_VIRTUAL_MODELS: frozenset[str] = frozenset({
     "llmproxy__free", "llmproxy/free",
@@ -1383,6 +1395,42 @@ def list_models() -> Response:
                 "_note": f"Virtual model: cycles through free-tier models tagged '{cap}' in config['model_capabilities'].",
             })
 
+    # Fusion (multi-model deliberation) virtual models. Advertised when fusion is
+    # enabled and at least MIN_PANEL eligible models back the variant: the full
+    # non-local pool (or an explicit fusion.panel) for bare fusion, and the free
+    # pool for fusion/free.
+    fcfg = _fusion.get_fusion_config(config)
+    if fcfg.get("enabled") is not False:
+        if fcfg.get("panel"):
+            bare_pool = _resolve_panel_list(fcfg["panel"], config)
+        else:
+            bare_pool = _get_all_model_candidates()
+            if not fcfg.get("allow_paid", True):
+                bare_pool = [c for c in bare_pool if _is_model_free(c[0], c[2], config)]
+        if len(bare_pool) >= _fusion.MIN_PANEL:
+            synthetic.append({
+                "id": "llmproxy__fusion",
+                "object": "model",
+                "owned_by": "llmproxy",
+                "name": "llmproxy__fusion",
+                "_note": (
+                    "Virtual model: fans the prompt out to a panel of models, a judge "
+                    "compares their answers, and a synthesizer writes the final reply "
+                    "(reported in the llmproxy_fusion field / X-LLMProxy-Fusion header)."
+                ),
+            })
+        if len(_get_free_model_candidates()) >= _fusion.MIN_PANEL:
+            synthetic.append({
+                "id": "llmproxy__fusion/free",
+                "object": "model",
+                "owned_by": "llmproxy",
+                "name": "llmproxy__fusion/free",
+                "_note": (
+                    "Virtual model: fusion deliberation drawn entirely from the "
+                    "capacity-ordered free-tier pool (panel, judge, and synthesizer)."
+                ),
+            })
+
     # Per-provider virtual models: llmproxy__<provider> (cycles all of the
     # provider's models) and llmproxy__<provider>/<dimension>.  Advertised only
     # for enabled, non-local, virtual-exposing providers, and only when the
@@ -2521,6 +2569,16 @@ def _is_virtual_model(model_full: str) -> bool:
     return model_full in _VIRTUAL_MODELS or _is_per_provider_virtual(model_full)
 
 
+def _is_fusion_model(model_full: str) -> bool:
+    """True when *model_full* is a fusion virtual model (bare or /free)."""
+    return model_full in _FUSION_VIRTUAL_MODELS
+
+
+def _is_fusion_free_model(model_full: str) -> bool:
+    """True when *model_full* is the free-pool fusion variant."""
+    return model_full in ("llmproxy__fusion/free", "llmproxy/fusion/free")
+
+
 def _is_free_virtual_model(model_full: str) -> bool:
     """True for capacity-aware free virtuals (global free set or <provider>/free)."""
     if model_full in _FREE_VIRTUAL_MODELS:
@@ -2709,6 +2767,297 @@ def _virtual_model_hint(model_full: str) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Fusion (multi-model deliberation) — see llmproxy/fusion.py for the pipeline
+# ---------------------------------------------------------------------------
+
+def _get_all_model_candidates() -> list[tuple[str, dict, str]]:
+    """(provider_name, provider_cfg, upstream_model) for every non-local model
+    from a virtual-exposing provider. The full pool a bare ``fusion`` panel
+    draws from (subject to the allow_paid filter applied by the caller)."""
+    config = load_config()
+    out: list[tuple[str, dict, str]] = []
+    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+        provider_cfg = get_provider(config, provider_name)
+        if not provider_cfg:
+            continue
+        if not _provider_exposes_to_virtual_models(provider_cfg):
+            continue
+        if _is_local_url(provider_base_url(provider_cfg)):
+            continue
+        out.append((provider_name, provider_cfg, upstream_id))
+    return out
+
+
+def _resolve_panel_list(panel_ids: list, config: dict) -> list[tuple[str, dict, str]]:
+    """Resolve an explicit fusion.panel list of model ids to candidate tuples.
+
+    Unresolvable entries are logged and skipped rather than failing the request.
+    """
+    out: list[tuple[str, dict, str]] = []
+    seen: set[str] = set()
+    for mid in panel_ids:
+        if not isinstance(mid, str):
+            continue
+        pn, pc, uid, err = _resolve_provider(mid)
+        if err is not None or pc is None:
+            logger.warning("[fusion] panel entry %r could not be resolved; skipping.", mid)
+            continue
+        key = f"{pn}/{uid}"
+        if key not in seen:
+            seen.add(key)
+            out.append((pn, pc, uid))
+    return out
+
+
+def _strip_tool_keys(payload: dict) -> dict:
+    """Drop forced-output keys so panel/judge calls return plain text.
+
+    The synthesizer call re-attaches the original tools/tool_choice/
+    response_format so the user's forced-capability contract is still honored on
+    the final answer; the panel and judge deliberate in text.
+    """
+    return {k: v for k, v in payload.items() if k not in ("tools", "tool_choice", "response_format")}
+
+
+def _fusion_pool(model_full: str, config: dict, fcfg: dict, payload: dict, free: bool) -> list[tuple[str, dict, str]]:
+    """Build the ordered candidate pool a fusion panel is selected from.
+
+    For the /free variant the pool is the capacity-ordered free pool; for bare
+    fusion it is an explicit fusion.panel (if set) or the full non-local pool,
+    filtered to free models when allow_paid is false. When the request forces a
+    capability (tools/json) and forced_capability is "restrict", the pool is
+    narrowed to models carrying every needed capability; under "bypass" the pool
+    is merely reordered capable-first.
+    """
+    if free:
+        pool = _get_free_model_candidates()
+        pool = _capacity_ordered_candidates(pool, _get_normalized_free_limits(config))
+    else:
+        explicit = fcfg.get("panel")
+        if explicit:
+            pool = _resolve_panel_list(explicit, config)
+        else:
+            pool = _get_all_model_candidates()
+            if not fcfg.get("allow_paid", True):
+                pool = [c for c in pool if _is_model_free(c[0], c[2], config)]
+            pool = _cycling_candidates(pool)
+
+    needed = _needed_capabilities(payload)
+    if needed:
+        cap_map = _model_capabilities(config)
+        if fcfg.get("forced_capability") == "restrict":
+            pool = [
+                c for c in pool
+                if all(_model_has_capability(c[0], c[2], cap, cap_map) for cap in needed)
+            ]
+        else:  # "bypass": keep all, but order capable-first
+            pool = _order_by_capability(pool, needed, cap_map)
+    return pool
+
+
+def _pick_aux_model(
+    pool: list[tuple[str, dict, str]],
+    explicit: str | None,
+    config: dict,
+    prefer_caps: frozenset[str] = frozenset(),
+    exclude_first: tuple[str, dict, str] | None = None,
+) -> tuple[str, dict, str] | None:
+    """Choose a judge or synthesizer model.
+
+    An explicit configured model id wins when it resolves; otherwise a model is
+    auto-picked from *pool*, preferring one tagged with any of *prefer_caps*
+    (e.g. reasoning) and, where possible, not the same model already chosen for
+    the other stage (*exclude_first*) so the judge and synthesizer differ.
+    """
+    if explicit:
+        pn, pc, uid, err = _resolve_provider(explicit)
+        if err is None and pc is not None:
+            return (pn, pc, uid)
+        logger.warning("[fusion] configured model %r unresolved; auto-picking.", explicit)
+
+    if not pool:
+        return None
+    cap_map = _model_capabilities(config)
+    exclude_key = f"{exclude_first[0]}/{exclude_first[2]}" if exclude_first else None
+    ranked = [
+        (c, f"{c[0]}/{c[2]}",
+         any(_model_has_capability(c[0], c[2], cap, cap_map) for cap in prefer_caps) if prefer_caps else False)
+        for c in pool
+    ]
+    for c, key, has in ranked:
+        if has and key != exclude_key:
+            return c
+    for c, key, _has in ranked:
+        if key != exclude_key:
+            return c
+    return pool[0]
+
+
+def _proxy_fusion(
+    endpoint: str,
+    model_full: str,
+    payload: dict,
+    config: dict,
+    inbound_adapter,
+    is_streaming: bool,
+) -> Response:
+    """Run the fusion pipeline: panel fan-out, judge, synthesis.
+
+    See the module docstring of llmproxy/fusion.py for the four-step pipeline and
+    the graceful-degradation policy. ``on_success`` accounting is recorded per
+    upstream touched (each panel member, the judge, and the synthesizer), so a
+    fusion request is costed like the several real requests it issues.
+    """
+    fcfg = _fusion.get_fusion_config(config)
+    if fcfg.get("enabled") is False:
+        return _error("Fusion is disabled (set config['fusion']['enabled'] = true).", status=404)
+    if endpoint != "chat/completions":
+        return _error("Fusion models are only available on chat/completions.", status=400)
+
+    free = _is_fusion_free_model(model_full)
+    server_cfg = config.get("server", {})
+    timeout = server_cfg.get("request_timeout", 120)
+    candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
+
+    pool = _fusion_pool(model_full, config, fcfg, payload, free)
+    if len(pool) < _fusion.MIN_PANEL:
+        return _error(
+            f"No '{model_full}' panel available (need at least {_fusion.MIN_PANEL} "
+            f"eligible models). " + _virtual_model_hint(model_full),
+            status=503,
+        )
+
+    panel_cands = _fusion.select_panel(pool, fcfg["panel_size"], fcfg["diversity"] == "provider")
+    original_messages = payload.get("messages", [])
+    stripped = _strip_tool_keys(
+        {k: v for k, v in payload.items() if k not in ("model", "stream", "stream_options")}
+    )
+
+    logger.info("  [fusion] %s panel of %d (free=%s)", model_full, len(panel_cands), free)
+
+    # 1 + 2. Fan the prompt out to the panel in parallel (non-streaming).
+    def _call_panel(cand: tuple[str, dict, str]):
+        pn, pc, uid = cand
+        try:
+            resp = _proxy_request(endpoint, pn, pc, {**stripped, "model": uid}, candidate_timeout)
+            return cand, resp
+        except Exception as e:  # noqa: BLE001
+            print(f"[server:_proxy_fusion:panel] {pn}/{uid}: {e}")
+            traceback.print_exc()
+            return cand, None
+
+    with ThreadPoolExecutor(max_workers=min(len(panel_cands), 8)) as ex:
+        results = list(ex.map(_call_panel, panel_cands))
+
+    panel_entries: list[dict] = []
+    panel_used: list[str] = []
+    failed_models: list[dict] = []
+    panel_success: list[tuple[tuple[str, dict, str], bytes]] = []
+    for cand, resp in results:
+        pn, _pc, uid = cand
+        key = f"{pn}/{uid}"
+        if resp is not None and resp.status_code < 400:
+            body = resp.get_data()
+            text = _fusion.extract_message_text(body)
+            if text.strip():
+                _record_usage(pn, uid, usage=extract_usage(body), config=config)
+                panel_entries.append({"label": key, "content": text})
+                panel_used.append(key)
+                panel_success.append((cand, body))
+                continue
+            failed_models.append({"model": key, "reason": "empty response"})
+        else:
+            status = resp.status_code if resp is not None else "exception"
+            failed_models.append({"model": key, "reason": f"status {status}"})
+
+    if not panel_success:
+        return _error(f"All fusion panel models failed for '{model_full}'.", status=503)
+
+    # 3. Judge compares the panel responses and emits structured analysis.
+    judge_tuple = _pick_aux_model(pool, fcfg.get("judge_model"), config, prefer_caps=frozenset({"reasoning"}))
+    analysis: dict | None = None
+    judge_id: str | None = None
+    if judge_tuple is not None:
+        jpn, jpc, juid = judge_tuple
+        judge_id = f"{jpn}/{juid}"
+        jmsgs = _fusion.build_judge_messages(original_messages, panel_entries)
+        try:
+            jresp = _proxy_request(endpoint, jpn, jpc, {"model": juid, "messages": jmsgs}, candidate_timeout)
+            if jresp.status_code < 400:
+                _record_usage(jpn, juid, usage=extract_usage(jresp.get_data()), config=config)
+                analysis = _fusion.parse_analysis(_fusion.extract_message_text(jresp.get_data()))
+            else:
+                logger.warning("  [fusion] judge %s returned %d", judge_id, jresp.status_code)
+        except Exception as e:  # noqa: BLE001
+            print(f"[server:_proxy_fusion:judge] {judge_id}: {e}")
+            traceback.print_exc()
+
+    # 4. Synthesizer writes the final answer grounded in the analysis.
+    synth_tuple = _pick_aux_model(
+        pool, fcfg.get("synthesizer_model"), config,
+        prefer_caps=frozenset({"reasoning"}), exclude_first=judge_tuple,
+    ) or panel_success[0][0]
+    spn, spc, suid = synth_tuple
+    synth_id = f"{spn}/{suid}"
+    smsgs = _fusion.build_synthesizer_messages(original_messages, panel_entries, analysis)
+    synth_payload = {**stripped, "model": suid, "messages": smsgs}
+
+    def _report(fell_back: bool, with_analysis: bool) -> dict:
+        return _fusion.build_report(
+            panel_used=panel_used, judge_model=judge_id, synthesizer_model=synth_id,
+            failed_models=failed_models, analysis=analysis if with_analysis else None,
+            fell_back=fell_back, free=free,
+        )
+
+    header_report = json.dumps(_report(False, with_analysis=False), ensure_ascii=True)
+
+    # Streaming: stream only the synthesis stage; provenance rides the header.
+    if is_streaming:
+        stream_timeout = server_cfg.get("stream_timeout", 300)
+        resp = _proxy_streaming(
+            endpoint, spn, spc, {**synth_payload, "stream": True},
+            stream_timeout, config=config, inbound=inbound_adapter,
+        )
+        if getattr(resp, "status_code", 200) < 400:
+            with contextlib.suppress(Exception):
+                resp.headers["X-LLMProxy-Fusion"] = header_report
+            return resp
+        # Synth failed to start: degrade to the first panel answer (non-streamed).
+        logger.warning("  [fusion] synth %s failed to stream; falling back to panel answer", synth_id)
+        body = panel_success[0][1]
+        out = _fusion.inject_report(body, _report(True, with_analysis=True))
+        if not inbound_adapter.is_identity:
+            out = inbound_adapter.render_response(out)
+        resp = Response(out, status=200, content_type="application/json")
+        with contextlib.suppress(Exception):
+            resp.headers["X-LLMProxy-Fusion"] = header_report
+        return resp
+
+    # Non-streaming synthesis.
+    try:
+        sresp = _proxy_request(endpoint, spn, spc, synth_payload, timeout)
+    except Exception as e:  # noqa: BLE001
+        print(f"[server:_proxy_fusion:synth] {synth_id}: {e}")
+        traceback.print_exc()
+        sresp = None
+
+    if sresp is None or sresp.status_code >= 400:
+        # Graceful fallback: return the first successful panel response, flagged.
+        logger.warning("  [fusion] synth %s failed; falling back to panel answer", synth_id)
+        out = _fusion.inject_report(panel_success[0][1], _report(True, with_analysis=True))
+    else:
+        _record_usage(spn, suid, usage=extract_usage(sresp.get_data()), config=config)
+        out = _fusion.inject_report(sresp.get_data(), _report(False, with_analysis=True))
+
+    if not inbound_adapter.is_identity:
+        out = inbound_adapter.render_response(out)
+    resp = Response(out, status=200, content_type="application/json")
+    with contextlib.suppress(Exception):
+        resp.headers["X-LLMProxy-Fusion"] = header_report
+    return resp
+
+
 def _proxy_endpoint(
     endpoint: str,
     inbound: str = "openai",
@@ -2778,6 +3127,12 @@ def _proxy_endpoint(
                 return Response(content, status=status, content_type=ct)
 
     if _is_virtual_model(model_full):
+        # Fusion is virtual but fans out + judges + synthesizes rather than
+        # cycling to one upstream, so it dispatches on its own path first.
+        if _is_fusion_model(model_full):
+            return _proxy_fusion(
+                endpoint, model_full, payload, config, inbound_adapter, is_streaming
+            )
         candidates = _get_virtual_candidates(model_full)
         if not candidates:
             return _error(
