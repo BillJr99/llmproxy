@@ -82,6 +82,35 @@ from .usage import (
 app = Flask(__name__)
 logger = logging.getLogger("llmproxy.server")
 
+
+class _StripApiPrefix:
+    """Mirror every API route under an ``/api`` prefix.
+
+    Many clients (OpenRouter-, Open WebUI-, and Ollama-style) assume the API
+    lives under ``/api`` or ``/api/v1`` and probe e.g. ``/api/v1/models`` before
+    falling back. Rather than duplicating ``@app.route`` decorators, this WSGI
+    shim strips a leading ``/api`` from PATH_INFO so ``/api/v1/...`` and
+    ``/api/v1beta/...`` reach the same handlers as ``/v1/...``. The original
+    ``/v1`` surface is unchanged.
+
+    ``/api/admin`` is intentionally NOT aliased: the admin UI/API stays reachable
+    only at its canonical ``/admin`` path to keep that surface area small.
+    """
+
+    def __init__(self, wsgi_app):
+        self.wsgi_app = wsgi_app
+
+    def __call__(self, environ, start_response):
+        path = environ.get("PATH_INFO", "")
+        if path == "/api" or path.startswith("/api/"):
+            stripped = path[4:] or "/"
+            if not stripped.startswith("/admin"):
+                environ["PATH_INFO"] = stripped
+        return self.wsgi_app(environ, start_response)
+
+
+app.wsgi_app = _StripApiPrefix(app.wsgi_app)
+
 _REASONING_LEVELS: tuple[str, ...] = ("exploratory", "standard", "deep")
 # Capabilities that get their own capability-selecting virtual endpoints
 # (llmproxy__tools, llmproxy__vision, and their /free variants).
@@ -92,6 +121,9 @@ _CAPABILITY_VIRTUALS: tuple[str, ...] = ("tools", "vision")
 _PER_PROVIDER_DIMENSIONS: tuple[str, ...] = (*_REASONING_LEVELS, *_CAPABILITY_VIRTUALS, "free")
 # Per-candidate timeout for virtual-model cycling so a slow upstream doesn't block all failover.
 _VIRTUAL_CANDIDATE_TIMEOUT: int = 60
+# Stable per-process timestamp used as the OpenAI-standard ``created`` fallback
+# for models whose upstream listing omits it (and for synthetic virtual models).
+_SERVER_EPOCH: int = int(time.time())
 # Bytes of the streamed SSE response kept buffered so the final `usage` chunk can
 # be parsed for token/cost accounting without buffering the whole stream.
 _STREAM_TAIL_BYTES: int = 16384
@@ -447,6 +479,49 @@ def _flatten_display_model(stripped: str) -> str:
     return stripped[:last].replace("/", "_") + "/" + stripped[last + 1:]
 
 
+def _architecture_block(
+    input_mods: "list | None", output_mods: "list | None",
+) -> dict:
+    """Build an OpenRouter-style ``architecture`` block from modality lists.
+
+    Falls back to text-only when a side is missing/empty. ``modality`` is the
+    compact OpenRouter string form, e.g. ``"text+image->text"``.
+    """
+    inp = [m for m in (input_mods or []) if isinstance(m, str)] or ["text"]
+    out = [m for m in (output_mods or []) if isinstance(m, str)] or ["text"]
+    return {
+        "input_modalities": inp,
+        "output_modalities": out,
+        "modality": "+".join(inp) + "->" + "+".join(out),
+    }
+
+
+def _supported_parameters(
+    provider_name: str,
+    upstream_id: str,
+    config: dict,
+    cap_map: "dict[str, set[str]] | None" = None,
+    reasoning: "dict[str, str] | None" = None,
+) -> list[str]:
+    """OpenRouter-style ``supported_parameters`` derived from llmproxy config.
+
+    Surfaces the tool/reasoning capabilities llmproxy already tracks (and uses
+    for capability/reasoning virtual models) so clients can classify a model
+    without a separate probe. ``cap_map``/``reasoning`` may be passed in to avoid
+    recomputing them per model when annotating a whole list.
+    """
+    if cap_map is None:
+        cap_map = _model_capabilities(config)
+    if reasoning is None:
+        reasoning = _get_model_reasoning(config)
+    params: list[str] = []
+    if _model_has_capability(provider_name, upstream_id, "tools", cap_map):
+        params += ["tools", "tool_choice"]
+    if reasoning.get(upstream_id.lower()) or reasoning.get(f"{provider_name}/{upstream_id}".lower()):
+        params.append("reasoning")
+    return params
+
+
 def _describe_fetch_failure(url: str, resp: "requests.Response | None") -> str:
     """
     Build a secret-free diagnostic suffix for a failed /models fetch.
@@ -587,6 +662,24 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         # Build a proxy-facing model object.  Drop non-standard fields that
         # some upstreams (e.g. LM Studio) add and that strict clients reject.
         proxy_model = {k: v for k, v in model.items() if k != "modalities"}
+        # Re-expose the upstream modalities as an OpenRouter-style ``architecture``
+        # block instead of the raw ``modalities`` field.  Raw ``modalities`` is
+        # dropped because strict clients (e.g. opencode) reject unexpected values
+        # there, but the classification signal it carries is exactly what clients
+        # need to infer a model's type, so we surface it in the well-defined
+        # ``architecture`` shape that OpenRouter-schema clients (e.g. Hermes) read
+        # and OpenAI-strict clients ignore.
+        modalities = model.get("modalities") if isinstance(model.get("modalities"), dict) else {}
+        proxy_model["architecture"] = _architecture_block(
+            modalities.get("input"), modalities.get("output"),
+        )
+        # OpenAI-standard ``created`` (unix ts): keep upstream's value when present,
+        # else fall back to a stable per-process timestamp so clients that require
+        # the field don't choke.
+        proxy_model.setdefault("created", _SERVER_EPOCH)
+        # Normalize the context window onto the OpenRouter-standard key.
+        if "context_length" not in proxy_model and "context_window" in proxy_model:
+            proxy_model["context_length"] = proxy_model["context_window"]
         # Strip a duplicate provider prefix so "nvidia/nvidia/llama-x" → "llama-x".
         auto_prefix = provider_name + "/"
         stripped = upstream_id[len(auto_prefix):] if upstream_id.startswith(auto_prefix) else upstream_id
@@ -1250,7 +1343,10 @@ def list_models() -> Response:
                     ),
                 })
 
-    # Annotate real models with (believed_free) and/or (local) suffixes in name.
+    # Annotate real models with (believed_free) and/or (local) suffixes in name,
+    # and with OpenRouter-style supported_parameters so clients can classify them.
+    cap_map = _model_capabilities(config)
+    reasoning = _get_model_reasoning(config)
     for model in all_models:
         route = snapshot.get(model["id"])
         if not route:
@@ -1269,6 +1365,28 @@ def list_models() -> Response:
             suffixes.append("local")
         if suffixes:
             model["name"] = model["name"] + " (" + ", ".join(suffixes) + ")"
+        params = _supported_parameters(
+            provider_name, upstream_id, config, cap_map=cap_map, reasoning=reasoning,
+        )
+        if params:
+            model["supported_parameters"] = params
+
+    # Enrich synthetic virtual models with the same classification fields so
+    # clients can type them too (these are the entries clients most want to
+    # classify, e.g. llmproxy__tools / llmproxy__vision).
+    for vmodel in synthetic:
+        tokens = set(re.split(r"[^a-z0-9]+", vmodel["id"].lower()))
+        vmodel.setdefault("created", _SERVER_EPOCH)
+        vmodel["architecture"] = _architecture_block(
+            ["text", "image"] if "vision" in tokens else ["text"], ["text"],
+        )
+        vparams: list[str] = []
+        if "tools" in tokens:
+            vparams += ["tools", "tool_choice"]
+        if tokens & set(_REASONING_LEVELS):
+            vparams.append("reasoning")
+        if vparams:
+            vmodel["supported_parameters"] = vparams
 
     full_list = synthetic + all_models
     if models_ttl > 0:
@@ -1342,6 +1460,9 @@ def get_model(model_id: str) -> Response:
     # Match by proxy display ID or by upstream model ID (clients may use either).
     for m in provider_models:
         if m.get("id") == model_id or m.get("_upstream_id") == upstream_model:
+            params = _supported_parameters(provider_name, upstream_model, config)
+            if params:
+                m["supported_parameters"] = params
             return jsonify(m)
 
     # The model passed the filter check but was not returned by the upstream

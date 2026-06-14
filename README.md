@@ -114,6 +114,21 @@ requests:
 
 All four resolve identically.
 
+#### Classification fields in the model object
+
+Beyond the OpenAI-standard `id` / `object` / `owned_by` / `created`, each entry in
+`GET /v1/models` (and `GET /v1/models/<id>`) carries OpenRouter-style classification
+fields so clients can infer a model's type without a separate probe:
+
+- `architecture` — `{ "input_modalities": [...], "output_modalities": [...], "modality": "text+image->text" }`, derived from the upstream's modalities (text-only fallback when the upstream doesn't report them).
+- `supported_parameters` — surfaces what llmproxy already tracks: `["tools", "tool_choice"]` for tool-capable models and `["reasoning"]` for models tagged in `model_reasoning`.
+- `context_length` — normalized from the upstream when available.
+
+These are additive — strict OpenAI clients ignore the extra keys, while clients that
+read the OpenRouter schema (e.g. Hermes) can classify models from the listing alone.
+The synthetic virtual models (`llmproxy__free`, `llmproxy__tools`, `llmproxy__vision`,
+…) carry the same fields.
+
 ### The `free` virtual model
 
 llmproxy advertises a special synthetic model named `llmproxy__free`.  When a request
@@ -351,6 +366,12 @@ the virtual models (`llmproxy__free`, `llmproxy__deep`, …). So an Anthropic SD
 with `model="llmproxy__free"` is routed and load-balanced exactly like the OpenAI path.
 (xAI/Grok, Mistral, Groq, DeepSeek, etc. are OpenAI- and/or Anthropic-compatible, so they
 need no separate inbound surface — use the OpenAI or Anthropic endpoints for them.)
+
+> **`/api` prefix.** Every endpoint above is also served under an `/api` prefix
+> (`/api/v1/models`, `/api/v1/chat/completions`, `/api/v1beta/...`), so clients that
+> assume an OpenRouter-/Open WebUI-/Ollama-style base URL (`http://host/api` or
+> `http://host/api/v1`) work without hitting a 404 fallback. The bare `/v1` surface is
+> unchanged. The admin UI/API is **not** aliased — it stays at `/admin` only.
 
 ```python
 # Anthropic SDK pointed at llmproxy — works with streaming and tools
