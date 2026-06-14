@@ -55,7 +55,6 @@ import requests
 from flask import (
     Flask,
     Response,
-    copy_current_request_context,
     g,
     has_request_context,
     jsonify,
@@ -422,8 +421,10 @@ def _forwarded_client_headers() -> dict:
     native Anthropic/Gemini ignore them).
 
     Returns ``{}`` when there is no active request context (e.g. a background
-    worker thread that was not wrapped with ``copy_current_request_context``),
-    so callers off the request thread degrade gracefully rather than raising.
+    worker thread), so callers off the request thread degrade gracefully rather
+    than raising. Such callers should instead capture these on the request thread
+    and pass them down (see _proxy_fusion's panel fan-out, which forwards them via
+    ``_proxy_request(..., forwarded_headers=...)``).
     """
     if not has_request_context():
         return {}
@@ -1629,6 +1630,7 @@ def _proxy_request(
     timeout: int,
     *,
     outbound=None,
+    forwarded_headers: dict | None = None,
 ) -> Response:
     """
     Forward a non-streaming request to the upstream provider and return the
@@ -1654,12 +1656,20 @@ def _proxy_request(
         Request timeout in seconds.
     outbound : OutboundAdapter, optional
         Override the adapter resolved from ``provider_cfg['protocol']``.
+    forwarded_headers : dict, optional
+        Pre-captured client headers to relay upstream. When omitted they are read
+        from the active request via ``_forwarded_client_headers()``. Callers that
+        dispatch off the request thread (e.g. the fusion panel fan-out on worker
+        threads) must capture these on the request thread and pass them in, since
+        Flask's ``request`` is not available — and not safe to reach for — there.
     """
     base_url = provider_base_url(provider_cfg)
     outbound = outbound or get_outbound(provider_cfg.get("protocol"))
+    if forwarded_headers is None:
+        forwarded_headers = _forwarded_client_headers()
     url, headers, body = outbound.build_request(
         endpoint, base_url, provider_cfg, payload,
-        stream=False, forwarded_headers=_forwarded_client_headers(),
+        stream=False, forwarded_headers=forwarded_headers,
     )
 
     logger.info("  upstream POST %s  model=%s", url, payload.get("model", "?"))
@@ -3046,16 +3056,22 @@ def _proxy_fusion(
     logger.info("  [fusion] %s panel of %d (free=%s)", model_full, len(panel_cands), free)
 
     # 1 + 2. Fan the prompt out to the panel in parallel (non-streaming).
-    # The fan-out runs on ThreadPoolExecutor worker threads, which do not inherit
-    # Flask's request context. _proxy_request -> _forwarded_client_headers reads
-    # request.headers, so the callable is wrapped with copy_current_request_context
-    # to carry the active request into each worker (otherwise every panel member
-    # raises "working outside of request context" and the panel collapses).
-    @copy_current_request_context
+    # The fan-out runs on ThreadPoolExecutor worker threads, which do not have a
+    # Flask request context. Rather than copy the request context into each worker
+    # — which is unsafe to reuse across the many ex.map rounds the backfill/retry
+    # loops issue (the shared RequestContext's contextvars token stack corrupts,
+    # raising "Token was created in a different Context") — capture the forwarded
+    # client headers once here on the request thread and hand them to each call,
+    # so the workers never touch ``request``.
+    forwarded_headers = _forwarded_client_headers()
+
     def _call_panel(cand: tuple[str, dict, str]):
         pn, pc, uid = cand
         try:
-            resp = _proxy_request(endpoint, pn, pc, {**stripped, "model": uid}, candidate_timeout)
+            resp = _proxy_request(
+                endpoint, pn, pc, {**stripped, "model": uid}, candidate_timeout,
+                forwarded_headers=forwarded_headers,
+            )
             return cand, resp
         except Exception as e:  # noqa: BLE001
             print(f"[server:_proxy_fusion:panel] {pn}/{uid}: {e}")
