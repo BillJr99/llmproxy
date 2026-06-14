@@ -962,6 +962,61 @@ def _warm_route_cache_if_empty() -> None:
         logger.warning("[startup] route-cache warm failed: %s", exc)
 
 
+def _sync_believed_free_from_sidecar(config_path: str | None) -> bool:
+    """Reconcile the live config.json's free-tier sections from the bundled sidecar.
+
+    Unlike _run_free_models_update this does **no** network scraping and never
+    rewrites providers.json / config.example.json — it only reconciles
+    believed_free / free_limits / model_reasoning / model_capabilities into the
+    user config from the data that already ships in providers.json. Because it
+    never writes the sidecar, it works even when the sidecar is read-only (an
+    installed package or a container image layer), so the shipped/merged
+    free-tier data reaches the live config without the full updater.
+
+    Returns True if the sync ran (so the caller can refresh the models cache).
+    """
+    import os
+    import sys
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    try:
+        from scripts.update_free_models import main as _update_main
+    except Exception as exc:  # noqa: BLE001 — updater is optional at runtime
+        logger.warning(
+            "[startup-sync] updater unavailable in this deployment "
+            "(scripts/ not found next to the package): %s", exc,
+        )
+        return False
+    path = config_path
+    if not path:
+        try:
+            from .config import get_config_path
+            path = str(get_config_path(None))
+        except Exception:  # noqa: BLE001
+            path = None
+    if not path:
+        logger.warning("[startup-sync] no config path resolved; skipping live sync")
+        return False
+    logger.info("[startup-sync] reconciling %s from bundled providers.json", path)
+    stream = _LineLoggingStream(lambda line: logger.info("[startup-sync] %s", line))
+    # Serialize against admin config edits: the reconcile is a read-modify-write
+    # of config.json, and the admin API guards its writes with the same lock, so
+    # a concurrent admin edit can't clobber it (and vice versa).
+    from .admin import _locked  # local import: admin is wired after routes
+    try:
+        with _locked(), contextlib.redirect_stdout(stream):
+            _update_main(["--sync-config-only", "--config", path])
+    except SystemExit:
+        pass
+    except Exception as exc:  # noqa: BLE001 — never let a sync failure crash the worker
+        logger.warning("[startup-sync] failed: %s", exc)
+        return False
+    finally:
+        stream.flush()
+    return True
+
+
 def _run_free_models_update(config: dict, config_path: str | None) -> bool:
     """Run scripts/update_free_models and stream its output to the server log.
 
@@ -1066,13 +1121,16 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
       1. Warms the virtual-model route cache immediately, so GET /v1/models (and
          virtual-model routing) work from the very first request rather than only
          after a client has happened to hit /v1/models.
-      2. When config['update_believed_free_on_startup'] is true, runs the
-         free-models updater (streaming its progress to the log).
-      3. Invalidates the cached /v1/models list after the updater runs, so the
-         synthetic 'free' virtual models are rebuilt from the freshly scraped
-         believed_free data instead of the pre-scrape snapshot. (The route cache
-         maps proxy id -> upstream model and does not depend on believed_free, so
-         it does not need rebuilding here.)
+      2. Unless config['sync_believed_free_on_startup'] is false, reconciles the
+         live config.json's free-tier sections from the bundled providers.json
+         sidecar (no network, safe on a read-only sidecar).
+      3. When config['update_believed_free_on_startup'] is true, additionally runs
+         the full free-models updater (streaming its progress to the log).
+      4. Invalidates the cached /v1/models list after either step changes the
+         config, so the synthetic 'free' virtual models are rebuilt from the
+         updated believed_free data instead of the pre-update snapshot. (The route
+         cache maps proxy id -> upstream model and does not depend on
+         believed_free, so it does not need rebuilding here.)
     """
     global _startup_update_done
     with _startup_update_lock:
@@ -1085,15 +1143,25 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
         logger.info("[startup] warming virtual-model route cache…")
         _warm_route_cache_if_empty()
 
-        # 2. Optionally run the free-models updater.
         config = load_config()
-        if config.get("update_believed_free_on_startup") is not True:
-            return
-        ran = _run_free_models_update(config, config_path)
 
-        # 3. Drop the cached /v1/models list so the synthetic 'free' set is
-        #    rebuilt from the freshly-scraped believed_free on the next request.
-        if ran:
+        # 2. Lightweight live-config sync from the bundled sidecar (no network,
+        #    safe on a read-only sidecar). On by default so the shipped/merged
+        #    believed_free data reaches the live config.json every boot; opt out
+        #    with sync_believed_free_on_startup: false.
+        synced = False
+        if config.get("sync_believed_free_on_startup", True) is not False:
+            synced = _sync_believed_free_from_sidecar(config_path)
+
+        # 3. Optionally run the full network updater (refreshes + persists the
+        #    sidecar, then syncs the live config from the freshly-scraped data).
+        ran = False
+        if config.get("update_believed_free_on_startup") is True:
+            ran = _run_free_models_update(config, config_path)
+
+        # 4. Drop the cached /v1/models list so the synthetic 'free' set is rebuilt
+        #    from the updated believed_free on the next request.
+        if synced or ran:
             global _models_list_cache
             with _models_list_cache_lock:
                 _models_list_cache = None

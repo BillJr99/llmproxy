@@ -380,12 +380,15 @@ _MAINTENANCE_BOOL_FLAGS = (
     "update_believed_free_on_startup",
     "pr_providers_list",
 )
+# Maintenance booleans that default to True when absent (vs False above).
+_MAINTENANCE_BOOL_FLAGS_DEFAULT_TRUE = ("sync_believed_free_on_startup",)
 _MAINTENANCE_STR_FIELDS = ("pr_providers_repo", "pr_providers_base", "pr_providers_branch")
 
 
 def _maintenance_view(config: dict) -> dict:
     """The automation/maintenance flags, with the PR token masked like api_key."""
     view: dict = {k: bool(config.get(k, False)) for k in _MAINTENANCE_BOOL_FLAGS}
+    view.update({k: bool(config.get(k, True)) for k in _MAINTENANCE_BOOL_FLAGS_DEFAULT_TRUE})
     try:
         view["probe_frequency_days"] = int(config.get("probe_frequency_days", 0) or 0)
     except (TypeError, ValueError):
@@ -483,7 +486,7 @@ def api_put_maintenance():
     with _locked():
         config = _load()
 
-        for key in _MAINTENANCE_BOOL_FLAGS:
+        for key in _MAINTENANCE_BOOL_FLAGS + _MAINTENANCE_BOOL_FLAGS_DEFAULT_TRUE:
             if key in payload:
                 if not isinstance(payload[key], bool):
                     return _err(f"{key} must be a boolean.")

@@ -1138,6 +1138,7 @@
   "autoremove_believed_free": false,
   "probe_frequency_days": 0,
   "update_believed_free_on_startup": false,
+  "sync_believed_free_on_startup": true,
   "pr_providers_list": false,
   "server": {
     "host": "0.0.0.0",

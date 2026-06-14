@@ -48,6 +48,7 @@ from llmproxy.config import (  # noqa: E402
 )
 from llmproxy.config import (  # noqa: E402
     load_probe_state,
+    save_config,
     save_probe_state,
 )
 from llmproxy.providers import (  # noqa: E402
@@ -412,17 +413,24 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         "model_capabilities": model_capabilities,
         "free_limits": free_limits_with_note,
 
-        # Opt-in maintenance flags (all default false). See the README:
-        # probe_cost / autoremove_believed_free → "Verifying free models are
-        # actually free"; update_believed_free_on_startup → "Running the updater
-        # on startup"; pr_providers_list → "Proposing providers.json changes as a
-        # PR from a running deployment". probe_frequency_days throttles the probe
-        # to at most once every N days (0 = every run); the last-run timestamp is
-        # cached in probe_state.json next to config.json.
+        # Maintenance flags. See the README: probe_cost / autoremove_believed_free
+        # → "Verifying free models are actually free"; update_believed_free_on_startup
+        # → "Running the updater on startup"; pr_providers_list → "Proposing
+        # providers.json changes as a PR from a running deployment".
+        # probe_frequency_days throttles the probe to at most once every N days
+        # (0 = every run); the last-run timestamp is cached in probe_state.json
+        # next to config.json.
+        #
+        # sync_believed_free_on_startup defaults TRUE: on every boot the server
+        # reconciles this config's believed_free / free_limits / model_reasoning /
+        # model_capabilities from the bundled providers.json sidecar. This needs no
+        # network and works when the sidecar is read-only, so the shipped/merged
+        # free-tier data reaches the live config without running the full scrape.
         "probe_cost": False,
         "autoremove_believed_free": False,
         "probe_frequency_days": 0,
         "update_believed_free_on_startup": False,
+        "sync_believed_free_on_startup": True,
         "pr_providers_list": False,
 
         "server": server_block or {
@@ -642,7 +650,9 @@ def _sync_user_config(sidecar: dict, config_path: str, *, dry_run: bool) -> int:
     if dry_run:
         print(_dim("\n(dry run — config not written)"))
         return 0
-    path.write_text(json.dumps(user_cfg, indent=2), encoding="utf-8")
+    # Atomic write (temp + os.replace), matching how the proxy persists config, so
+    # a concurrent reader never sees a half-written file.
+    save_config(user_cfg, str(path))
     print(_ok(f"Synced free-tier sections into {path}"))
     return 0
 
@@ -723,11 +733,25 @@ def main(argv: list[str] | None = None) -> int:
                          "since the last probe (bypasses the throttle).")
     ap.add_argument("--regen-config-only", action="store_true",
                     help="Skip scraping; regenerate config.example.json from the current sidecar.")
+    ap.add_argument("--sync-config-only", action="store_true",
+                    help="Skip scraping; only reconcile the --config user config from the "
+                         "current (bundled) providers.json sidecar. No network, and never "
+                         "writes the sidecar or config.example.json, so it is safe when the "
+                         "sidecar is read-only (installed package / container image layer).")
     ap.add_argument("--config", metavar="PATH",
                     help="Also sync a user config.json's believed_free / free_limits "
                          "(add new + remove no-longer-free) and model_reasoning (add-only) "
                          "from the updated sidecar. Limited to providers configured in that file.")
     args = ap.parse_args(argv)
+
+    # Lightweight, network-free, read-only-safe path: reconcile the live user
+    # config from the bundled sidecar without scraping or touching the sidecar /
+    # config.example.json. Used by the server's startup sync.
+    if args.sync_config_only:
+        if not args.config:
+            print(_err("--sync-config-only requires --config PATH"))
+            return 2
+        return _sync_user_config(load_data(), args.config, dry_run=args.dry_run)
 
     # Read opt-in flags from the user config (probe_cost / autoremove_believed_free).
     try:

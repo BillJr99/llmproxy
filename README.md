@@ -452,6 +452,7 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
   "probe_cost": false,
   "autoremove_believed_free": false,
   "probe_frequency_days": 0,
+  "sync_believed_free_on_startup": true,
   "update_believed_free_on_startup": false,
   "pr_providers_list": false,
 
@@ -659,6 +660,37 @@ Two opt-in, top-level config flags (both default `false`) let you keep
   `config.json` (not in `config.json` itself). The throttle applies to both
   `probe_cost: true` and the `--probe` flag; pass `--ignore-throttle` to
   `update_free_models.py` to force a probe regardless of how recently one ran.
+
+<a name="sync-on-startup"></a>
+### Syncing the live config on startup — `sync_believed_free_on_startup`
+
+**On by default.** On every boot, the server reconciles your **live `config.json`**'s
+`believed_free` / `free_limits` / `model_reasoning` / `model_capabilities` from the
+bundled `providers.json` sidecar — the same data that ships with the package and is
+refreshed by the [weekly CI PR](#automated-providersjson-updates-ci). This is the
+piece that makes merged/`pip install -U` updates actually reach a running proxy:
+
+- It does **no network scraping** and **never writes the sidecar or
+  `config.example.json`**, so it works even when the sidecar is **read-only** (an
+  installed package, or a container image layer) — only your `config.json` is
+  written, and only when something actually changed.
+- Reconciliation is scoped to providers configured in *your* `config.json`:
+  `believed_free` / `free_limits` add newly-free models and drop ones no longer
+  listed as free; `model_reasoning` / `model_capabilities` are **add-only** (your
+  manual tags are never pruned). Custom providers not in the sidecar are untouched.
+- Progress is logged with a `[startup-sync]` prefix at `INFO`. Set it to `false` to
+  opt out (e.g. if you hand-curate `believed_free`).
+
+You can run the same reconcile manually — handy on a read-only checkout:
+
+```bash
+python scripts/update_free_models.py --sync-config-only --config ~/.config/llmproxy/config.json
+# add --dry-run to preview without writing
+```
+
+This is distinct from `update_believed_free_on_startup` below: that one runs the
+**full network scrape** to *refresh* the sidecar first; `sync_believed_free_on_startup`
+only *applies* whatever sidecar data is already present.
 
 <a name="update-on-startup"></a>
 ### Running the updater on startup — `update_believed_free_on_startup`

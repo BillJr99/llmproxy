@@ -109,6 +109,35 @@ def test_architecture_block(server):
     assert server._architecture_block(None, [])["modality"] == "text->text"
 
 
+def test_startup_sidecar_sync_reconciles_live_config(server, tmp_path, monkeypatch):
+    """The startup sync helper reconciles the live config.json from the bundled
+    sidecar, with no network and without writing the sidecar (read-only safe)."""
+    import json
+
+    import scripts.update_free_models as ufm
+
+    sidecar = {
+        "providers": {
+            "google": {
+                "base_url": "u", "display": "G",
+                "believed_free": ["google/added"],
+                "free_limits": {}, "model_reasoning": {}, "model_capabilities": {},
+            },
+        },
+        "provider_order": ["google"],
+    }
+    monkeypatch.setattr(ufm, "load_data", lambda: sidecar)
+
+    cfg = {"providers": {"google": {"base_url": "u", "api_key": "k"}}, "believed_free": []}
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps(cfg), encoding="utf-8")
+
+    ran = server._sync_believed_free_from_sidecar(str(p))
+    assert ran is True
+    written = json.loads(p.read_text())
+    assert "google/added" in written["believed_free"]
+
+
 def test_supported_parameters_from_config(server):
     """_supported_parameters surfaces tool/reasoning capabilities from config."""
     cfg = {
