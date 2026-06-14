@@ -149,7 +149,7 @@ def _fake_request_factory(judge_text='{"consensus": ["agree"]}', synth_text="FIN
     """Build a fake _proxy_request that routes by the system prompt it sees."""
     seen = {"panel": [], "judge": [], "synth": []}
 
-    def fake(endpoint, pn, cfg, payload, timeout):
+    def fake(endpoint, pn, cfg, payload, timeout, **kwargs):
         msgs = payload.get("messages", [])
         sys = msgs[0]["content"] if msgs and msgs[0].get("role") == "system" else ""
         if "impartial judge" in sys:
@@ -358,28 +358,29 @@ def test_fusion_explicit_panel_not_retried(server, monkeypatch):
     assert derivations["n"] == 1  # explicit panel: derived once, never re-selected
 
 
-def test_fusion_panel_threads_inherit_request_context(server, monkeypatch):
-    # Regression: the panel fans out on worker threads, but _proxy_request reads
-    # request.headers (via _forwarded_client_headers). Without propagating the
-    # request context into the workers, every panel member raised "working outside
-    # of request context" and the whole panel collapsed to a 503. Assert the panel
-    # threads see the active request context *and* its forwarded headers.
+def test_fusion_panel_forwards_captured_headers_off_thread(server, monkeypatch):
+    # Regression: the panel fans out on worker threads. The forwarded client
+    # headers must be captured once on the request thread and passed into each
+    # panel call — the workers must NOT reach for Flask's request, since reusing a
+    # copied request context across the backfill/retry ex.map rounds corrupts its
+    # contextvars token stack ("Token was created in a different Context") and
+    # bubbles an unhandled 500. Assert each panel call receives the headers via the
+    # forwarded_headers kwarg while holding no request context of its own.
     _seed(server, {f"p{x}__m{x}": (f"p{x}", f"m{x}") for x in ("a", "b", "c", "d")})
     from flask import has_request_context
 
-    seen_titles: list[str] = []
+    seen: list[tuple[bool, str]] = []
 
-    def fake(endpoint, pn, cfg, payload, timeout):
+    def fake(endpoint, pn, cfg, payload, timeout, *, forwarded_headers=None, **kwargs):
         msgs = payload.get("messages", [])
         sys = msgs[0]["content"] if msgs and msgs[0].get("role") == "system" else ""
         if "impartial judge" in sys:
             return _chat('{"consensus": ["agree"]}')
         if "synthesizer" in sys:
             return _chat("FINAL")
-        # Panel call: exercise the request-context-bound header forwarding the real
-        # _proxy_request performs, from inside the worker thread.
-        assert has_request_context(), "panel worker lost the request context"
-        seen_titles.append(server._forwarded_client_headers().get("X-Title", ""))
+        # Panel call on a worker thread: no request context, but the captured
+        # header rode in through the kwarg.
+        seen.append((has_request_context(), (forwarded_headers or {}).get("X-Title", "")))
         return _chat(f"answer from {payload['model']}")
 
     monkeypatch.setattr(server, "_proxy_request", fake)
@@ -390,7 +391,25 @@ def test_fusion_panel_threads_inherit_request_context(server, monkeypatch):
             server.load_config(), server.get_inbound("openai"), False,
         )
     assert resp.status_code == 200
-    assert seen_titles and all(t == "regression" for t in seen_titles)
+    assert seen and all(title == "regression" for _ctx, title in seen)
+    assert all(ctx is False for ctx, _title in seen)  # workers held no request context
+
+
+def test_fusion_all_panel_exceptions_returns_503_not_500(server, monkeypatch):
+    # Regression: when every panel call raises (e.g. upstream connection errors),
+    # the request must degrade to a clean 503, never an unhandled 500. This guards
+    # the contextvars-token regression that previously escaped the worker threads
+    # across the backfill/retry ex.map rounds.
+    _seed(server, {f"p{x}__m{x}": (f"p{x}", f"m{x}") for x in ("a", "b", "c", "d")})
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(server, "_proxy_request", boom)
+    payload = {"model": "llmproxy__fusion", "messages": [{"role": "user", "content": "Q?"}]}
+    resp = _run(server, "llmproxy__fusion", payload)
+    assert resp.status_code == 503
+    assert "All fusion panel models failed" in json.loads(resp.get_data())["error"]["message"]
 
 
 def test_fusion_models_advertised(server):
