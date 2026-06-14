@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import json
 
+import scripts.update_free_models as ufm
 from scripts.update_free_models import (
     _sync_user_config,
+    main,
     reconcile_user_config,
 )
 
@@ -135,6 +137,41 @@ def test_sync_writes_when_not_dry_run(tmp_path):
 def test_missing_file_returns_error(tmp_path):
     rc = _sync_user_config(_sidecar(), str(tmp_path / "nope.json"), dry_run=False)
     assert rc == 2
+
+
+def test_sync_config_only_cli_writes_live_config(tmp_path, monkeypatch):
+    """--sync-config-only reconciles the live config from the bundled sidecar,
+    with no scraping and without touching the sidecar / config.example.json —
+    so it works even when the sidecar is read-only."""
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps(_user_cfg(), indent=2), encoding="utf-8")
+    monkeypatch.setattr(ufm, "load_data", _sidecar)
+
+    # The sidecar must never be written on this path: make any write blow up.
+    def _boom(*_a, **_k):  # pragma: no cover - only fails if wrongly called
+        raise AssertionError("--sync-config-only must not write the sidecar")
+    monkeypatch.setattr(ufm, "write_config_example", _boom)
+
+    rc = main(["--sync-config-only", "--config", str(p)])
+    assert rc == 0
+    written = json.loads(p.read_text())
+    assert "google/added" in written["believed_free"]   # newly free -> added
+    assert "github/gone" not in written["believed_free"]  # no longer free -> removed
+    assert written["model_reasoning"]["github/gone"] == "deep"  # add-only, kept
+
+
+def test_sync_config_only_requires_config():
+    assert main(["--sync-config-only"]) == 2
+
+
+def test_sync_config_only_dry_run_writes_nothing(tmp_path, monkeypatch):
+    p = tmp_path / "config.json"
+    original = _user_cfg()
+    p.write_text(json.dumps(original, indent=2), encoding="utf-8")
+    monkeypatch.setattr(ufm, "load_data", _sidecar)
+    rc = main(["--sync-config-only", "--dry-run", "--config", str(p)])
+    assert rc == 0
+    assert json.loads(p.read_text()) == original  # untouched on disk
 
 
 def test_model_capabilities_is_add_only():

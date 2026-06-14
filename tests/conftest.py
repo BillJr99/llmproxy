@@ -43,6 +43,10 @@ def minimal_config(tmp_path: Path) -> Path:
             "fakeprov/big-model": "deep",
         },
         "free_limits": {},
+        # Keep the static fixture stable: don't let the on-by-default startup
+        # reconcile rewrite it. (fakeprov isn't in the sidecar so this is a no-op
+        # in practice, but it's explicit and future-proofs new providers.)
+        "sync_believed_free_on_startup": False,
         "server": {
             "host": "127.0.0.1",
             "port": 8080,

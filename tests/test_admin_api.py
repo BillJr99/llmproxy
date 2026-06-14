@@ -25,6 +25,9 @@ BASE_CONFIG = {
     "model_reasoning": {"openai/gpt-x": "deep"},
     "model_capabilities": {"openai/gpt-x": ["tools"]},
     "free_limits": {},
+    # These tests assert on a static config; opt out of the on-by-default startup
+    # reconcile so the background sync thread can't rewrite it mid-test.
+    "sync_believed_free_on_startup": False,
     "server": {
         "host": "127.0.0.1",
         "port": 8080,
@@ -288,6 +291,20 @@ def test_get_config_includes_maintenance(client):
               "pr_providers_list", "probe_frequency_days", "pr_providers_repo",
               "pr_providers_token_set"):
         assert k in m
+
+
+def test_sync_believed_free_flag_defaults_true_and_toggles(client, cfg_path):
+    # BASE_CONFIG sets it False explicitly; flip to absent to see the default.
+    cfg = _read_config(cfg_path)
+    cfg.pop("sync_believed_free_on_startup", None)
+    cfg_path.write_text(json.dumps(cfg))
+    m = client.get("/admin/api/config").get_json()["maintenance"]
+    assert m["sync_believed_free_on_startup"] is True  # default when absent
+
+    resp = client.put("/admin/api/maintenance", json={"sync_believed_free_on_startup": False})
+    assert resp.status_code == 200
+    assert _read_config(cfg_path)["sync_believed_free_on_startup"] is False
+    assert resp.get_json()["maintenance"]["sync_believed_free_on_startup"] is False
 
 
 def test_put_maintenance_sets_flags(client, cfg_path):

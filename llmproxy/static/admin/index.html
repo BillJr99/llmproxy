@@ -181,6 +181,7 @@
     <h2>Automation &amp; maintenance</h2>
     <div class="card">
       <h3>Free-models updater &amp; cost probe</h3>
+      <label class="switch"><input type="checkbox" id="mt-sync_believed_free_on_startup" /> Sync believed-free into config from the bundled providers.json on startup <span class="muted">(no network; on by default)</span></label>
       <label class="switch"><input type="checkbox" id="mt-update_believed_free_on_startup" /> Run the free-models updater on startup</label>
       <label class="switch"><input type="checkbox" id="mt-probe_cost" /> Probe believed-free models for cost <span class="muted">(sends real requests using your keys)</span></label>
       <label class="switch"><input type="checkbox" id="mt-autoremove_believed_free" /> Auto-remove models that probe/price as paid</label>
@@ -286,7 +287,7 @@ $("#sv-save").addEventListener("click", async () => {
 });
 
 // ---- Automation / maintenance ----
-const MT_BOOLS = ["update_believed_free_on_startup","probe_cost","autoremove_believed_free","pr_providers_list"];
+const MT_BOOLS = ["sync_believed_free_on_startup","update_believed_free_on_startup","probe_cost","autoremove_believed_free","pr_providers_list"];
 const MT_STRS = ["pr_providers_repo","pr_providers_base","pr_providers_branch"];
 function fillMaintenance(m) {
   for (const k of MT_BOOLS) $("#mt-"+k).checked = !!m[k];
