@@ -284,6 +284,18 @@ if [ "$code" -ge 400 ]; then pass "unknown model → $code (rejected)"; else fai
 
 # ── fusion (multi-model deliberation) ───────────────────────────────────────
 hdr "Fusion"
+# Try the free pool first (the most constrained panel, so it best exercises the
+# availability/backfill path). If the free panel is merely unavailable — a 503
+# model-availability failure, not an internal 5xx — fall back to the general
+# llmproxy__fusion pool so the test can still complete. An internal error from
+# the free pool is NOT masked: it surfaces as a fail rather than a fallback.
+HDRS="$(mktemp)"
+# fusion_chat MODEL -> echoes http status; body in $BODY, headers in $HDRS
+fusion_chat() {
+  curl -sS -o "$BODY" -D "$HDRS" -w '%{http_code}' -X POST \
+    "${BASE_URL}/v1/chat/completions" -H 'Content-Type: application/json' "${AUTH[@]}" \
+    -d "{\"model\":\"$1\",\"messages\":[{\"role\":\"user\",\"content\":\"In one sentence, name a tradeoff between REST and gRPC.\"}],\"max_tokens\":128}"
+}
 FUSION_MODEL=""
 if has_model "llmproxy__fusion/free"; then FUSION_MODEL="llmproxy__fusion/free"
 elif has_model llmproxy__fusion; then FUSION_MODEL="llmproxy__fusion"; fi
@@ -291,11 +303,15 @@ if [ -z "$FUSION_MODEL" ]; then
   skip "no fusion model advertised (need >=2 eligible models)"
 else
   echo "  ${DIM}model: ${FUSION_MODEL}${RST}"
-  # Capture headers (-D) so we can assert the additive provenance channel.
-  HDRS="$(mktemp)"
-  code=$(curl -sS -o "$BODY" -D "$HDRS" -w '%{http_code}' -X POST \
-        "${BASE_URL}/v1/chat/completions" -H 'Content-Type: application/json' "${AUTH[@]}" \
-        -d "{\"model\":\"${FUSION_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"In one sentence, name a tradeoff between REST and gRPC.\"}],\"max_tokens\":128}")
+  code=$(fusion_chat "$FUSION_MODEL")
+  # A 503 is the proxy's model-availability signal (no eligible panel / all panel
+  # members failed). When the free pool hits that, retry on the general pool.
+  if [ "$FUSION_MODEL" = "llmproxy__fusion/free" ] && [ "$code" = "503" ] && has_model llmproxy__fusion; then
+    warn "fusion/free unavailable → $code; falling back to llmproxy__fusion"
+    FUSION_MODEL="llmproxy__fusion"
+    echo "  ${DIM}model: ${FUSION_MODEL}${RST}"
+    code=$(fusion_chat "$FUSION_MODEL")
+  fi
   content=$(jqr '.choices[0].message.content')
   if ok2xx "$code" && { [ "$HAVE_JQ" -eq 0 ] || [ -n "$content" ]; }; then
     pass "fusion chat → $code ${DIM}($(echo "${content:-ok}" | head -c 40))${RST}"
