@@ -225,6 +225,34 @@ def test_fusion_all_panel_fail_errors(server, monkeypatch):
     assert resp.status_code == 503
 
 
+def test_fusion_backfills_failed_panel_from_reserve(server, monkeypatch):
+    # Fixed ordered pool of 6 distinct providers, panel_size 4. The four chosen
+    # members all fail; the panel should be rebuilt from the two-member reserve so
+    # the request still succeeds, with the four failures recorded for provenance.
+    pool = [(f"p{x}", {}, f"m{x}") for x in range(6)]
+    monkeypatch.setattr(server, "_fusion_pool", lambda *a, **k: pool)
+    fake, seen = _fake_request_factory(fail_panel={"m0", "m1", "m2", "m3"})
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    payload = {"model": "llmproxy__fusion", "messages": [{"role": "user", "content": "Q?"}]}
+    resp = _run(server, "llmproxy__fusion", payload)
+    assert resp.status_code == 200
+    rep = json.loads(resp.get_data())["llmproxy_fusion"]
+    assert rep["panel"] == ["p4/m4", "p5/m5"]  # reserve backfilled the failed slots
+    assert {f["model"] for f in rep["failed_models"]} == {"p0/m0", "p1/m1", "p2/m2", "p3/m3"}
+    assert seen["panel"] == ["m0", "m1", "m2", "m3", "m4", "m5"]  # every slot attempted once
+
+
+def test_fusion_all_panel_fail_error_lists_reasons(server, monkeypatch):
+    _seed(server, {f"p{x}__m{x}": (f"p{x}", f"m{x}") for x in ("a", "b", "c", "d")})
+    fake, _ = _fake_request_factory(fail_panel={"ma", "mb", "mc", "md"})
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    payload = {"model": "llmproxy__fusion", "messages": [{"role": "user", "content": "Q?"}]}
+    resp = _run(server, "llmproxy__fusion", payload)
+    assert resp.status_code == 503
+    msg = json.loads(resp.get_data())["error"]["message"]
+    assert "Panel failures:" in msg and "status 503" in msg  # diagnosable, not opaque
+
+
 def test_fusion_forced_tools_restricts_panel(server, monkeypatch):
     # Only pa/tool-1 and pb/tool-2 carry the tools capability.
     _seed(server, {"pa__tool-1": ("pa", "tool-1"), "pb__tool-2": ("pb", "tool-2"),

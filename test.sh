@@ -306,10 +306,10 @@ else
   if grep -qi '^x-llmproxy-fusion:' "$HDRS"; then pass "X-LLMProxy-Fusion header present"
   else warn "no X-LLMProxy-Fusion header (older build or upstream error)"; fi
   if [ "$HAVE_JQ" -eq 1 ]; then
-    panel=$(jq -r '.llmproxy_fusion.panel | length' "$BODY" 2>/dev/null)
-    if [ -n "$panel" ] && [ "$panel" != "null" ]; then
+    panel=$(jq -r 'if has("llmproxy_fusion") then (.llmproxy_fusion.panel | length) else "absent" end' "$BODY" 2>/dev/null)
+    if [ -n "$panel" ] && [ "$panel" != "null" ] && [ "$panel" != "absent" ] && [ "$panel" != "0" ]; then
       pass "llmproxy_fusion body field present ${DIM}(${panel} panel models)${RST}"
-    else warn "no llmproxy_fusion body field (synth may have fallen back / non-OpenAI render)"; fi
+    else warn "no llmproxy_fusion body field (synth may have fallen back / error / non-OpenAI render)"; fi
   fi
   rm -f "$HDRS"
 fi

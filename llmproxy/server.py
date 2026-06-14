@@ -3040,32 +3040,50 @@ def _proxy_fusion(
             traceback.print_exc()
             return cand, None
 
-    with ThreadPoolExecutor(max_workers=min(len(panel_cands), 8)) as ex:
-        results = list(ex.map(_call_panel, panel_cands))
+    # Backfill failed slots from the rest of the pool so a few transient upstream
+    # failures (rate limits, blips) on the chosen members don't collapse the whole
+    # panel — mirroring the resilient cycling of the plain /free route. ``reserve``
+    # is the ordered pool minus the initially-chosen members; each failed slot is
+    # retried with the next reserve candidate until the pool is exhausted.
+    chosen_keys = {f"{c[0]}/{c[2]}" for c in panel_cands}
+    reserve = [c for c in pool if f"{c[0]}/{c[2]}" not in chosen_keys]
 
     panel_entries: list[dict] = []
     panel_used: list[str] = []
     failed_models: list[dict] = []
     panel_success: list[tuple[tuple[str, dict, str], bytes]] = []
-    for cand, resp in results:
-        pn, _pc, uid = cand
-        key = f"{pn}/{uid}"
-        if resp is not None and resp.status_code < 400:
-            body = resp.get_data()
-            text = _fusion.extract_message_text(body)
-            if text.strip():
-                _record_usage(pn, uid, usage=extract_usage(body), config=config)
-                panel_entries.append({"label": key, "content": text})
-                panel_used.append(key)
-                panel_success.append((cand, body))
-                continue
-            failed_models.append({"model": key, "reason": "empty response"})
-        else:
-            status = resp.status_code if resp is not None else "exception"
-            failed_models.append({"model": key, "reason": f"status {status}"})
+    pending = list(panel_cands)
+    while pending:
+        with ThreadPoolExecutor(max_workers=min(len(pending), 8)) as ex:
+            results = list(ex.map(_call_panel, pending))
+        failures = 0
+        for cand, resp in results:
+            pn, _pc, uid = cand
+            key = f"{pn}/{uid}"
+            if resp is not None and resp.status_code < 400:
+                body = resp.get_data()
+                text = _fusion.extract_message_text(body)
+                if text.strip():
+                    _record_usage(pn, uid, usage=extract_usage(body), config=config)
+                    panel_entries.append({"label": key, "content": text})
+                    panel_used.append(key)
+                    panel_success.append((cand, body))
+                    continue
+                failed_models.append({"model": key, "reason": "empty response"})
+            else:
+                status = resp.status_code if resp is not None else "exception"
+                failed_models.append({"model": key, "reason": f"status {status}"})
+            failures += 1
+        # Pull one replacement per failed slot from the reserve (if any remain).
+        pending = [reserve.pop(0) for _ in range(min(failures, len(reserve)))]
 
     if not panel_success:
-        return _error(f"All fusion panel models failed for '{model_full}'.", status=503)
+        reasons = "; ".join(f"{f['model']} ({f['reason']})" for f in failed_models)
+        detail = f" Panel failures: {reasons}." if reasons else ""
+        return _error(
+            f"All fusion panel models failed for '{model_full}'.{detail}",
+            status=503,
+        )
 
     # 3. Judge compares the panel responses and emits structured analysis.
     judge_tuple = _pick_aux_model(pool, fcfg.get("judge_model"), config, prefer_caps=frozenset({"reasoning"}))
