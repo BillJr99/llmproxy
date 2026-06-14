@@ -25,7 +25,7 @@ def captured_pr(monkeypatch):
 
 
 def test_opens_pr_with_both_files_from_content(captured_pr):
-    cfg = {"pr_providers_list": True, "pr_providers_repo": "o/r"}
+    cfg = {"providers_pr": {"enabled": True, "repo": "o/r"}}
     server._maybe_open_providers_pr(cfg, '{"providers":{}}\n', '{"example":true}\n')
     assert captured_pr["owner"] == "o" and captured_pr["repo"] == "r"
     assert captured_pr["files"]["llmproxy/providers.json"] == '{"providers":{}}\n'
@@ -33,24 +33,24 @@ def test_opens_pr_with_both_files_from_content(captured_pr):
 
 
 def test_omits_example_when_not_provided(captured_pr):
-    cfg = {"pr_providers_list": True, "pr_providers_repo": "o/r"}
+    cfg = {"providers_pr": {"enabled": True, "repo": "o/r"}}
     server._maybe_open_providers_pr(cfg, '{"providers":{}}\n', None)
     assert "config.example.json" not in captured_pr["files"]
     assert "llmproxy/providers.json" in captured_pr["files"]
 
 
 def test_skipped_when_flag_off(captured_pr):
-    server._maybe_open_providers_pr({"pr_providers_list": False}, "x", "y")
+    server._maybe_open_providers_pr({"providers_pr": {"enabled": False}}, "x", "y")
     assert captured_pr == {}  # create_or_update_pr never called
 
 
 def test_skipped_when_no_token(monkeypatch, captured_pr):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    cfg = {"pr_providers_list": True, "pr_providers_repo": "o/r"}
+    cfg = {"providers_pr": {"enabled": True, "repo": "o/r"}}
     server._maybe_open_providers_pr(cfg, "x", "y")
     assert captured_pr == {}  # no token -> skipped before calling the API
 
 
 def test_skipped_when_no_repo(captured_pr):
-    server._maybe_open_providers_pr({"pr_providers_list": True}, "x", "y")
-    assert captured_pr == {}  # missing pr_providers_repo -> skipped
+    server._maybe_open_providers_pr({"providers_pr": {"enabled": True}}, "x", "y")
+    assert captured_pr == {}  # missing providers_pr.repo -> skipped

@@ -303,7 +303,7 @@ def test_sync_believed_free_flag_defaults_true_and_toggles(client, cfg_path):
 
     resp = client.put("/admin/api/maintenance", json={"sync_believed_free_on_startup": False})
     assert resp.status_code == 200
-    assert _read_config(cfg_path)["sync_believed_free_on_startup"] is False
+    assert _read_config(cfg_path)["free_tier"]["sync_on_startup"] is False
     assert resp.get_json()["maintenance"]["sync_believed_free_on_startup"] is False
 
 
@@ -321,10 +321,10 @@ def test_put_maintenance_sets_flags(client, cfg_path):
     })
     assert resp.status_code == 200
     saved = _read_config(cfg_path)
-    assert saved["probe_cost"] is True
-    assert saved["probe_frequency_days"] == 7
-    assert saved["pr_providers_repo"] == "BillJr99/llmproxy"
-    assert saved["pr_providers_token"] == "ghp_secret"
+    assert saved["free_tier"]["probe"]["enabled"] is True
+    assert saved["free_tier"]["probe"]["frequency_days"] == 7
+    assert saved["providers_pr"]["repo"] == "BillJr99/llmproxy"
+    assert saved["providers_pr"]["token"] == "ghp_secret"
     # Token is never echoed back verbatim
     m = resp.get_json()["maintenance"]
     assert m["pr_providers_token"] != "ghp_secret"
@@ -334,7 +334,7 @@ def test_put_maintenance_sets_flags(client, cfg_path):
 def test_put_maintenance_blank_token_keeps_existing(client, cfg_path):
     client.put("/admin/api/maintenance", json={"pr_providers_token": "ghp_keepme"})
     client.put("/admin/api/maintenance", json={"pr_providers_list": True, "pr_providers_token": ""})
-    assert _read_config(cfg_path)["pr_providers_token"] == "ghp_keepme"
+    assert _read_config(cfg_path)["providers_pr"]["token"] == "ghp_keepme"
 
 
 def test_put_maintenance_rejects_bad_values(client):

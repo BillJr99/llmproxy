@@ -384,18 +384,67 @@ _MAINTENANCE_BOOL_FLAGS = (
 _MAINTENANCE_BOOL_FLAGS_DEFAULT_TRUE = ("sync_believed_free_on_startup",)
 _MAINTENANCE_STR_FIELDS = ("pr_providers_repo", "pr_providers_base", "pr_providers_branch")
 
+# The admin API and frontend keep the historical flat field names; storage maps
+# each into the reorganized nested config (free_tier / providers_pr). This keeps
+# the single-page admin UI unchanged while the on-disk config uses the grouped
+# objects (and the config loader's migration shim accepts either form on input).
+_MAINTENANCE_PATHS: dict[str, tuple[str, ...]] = {
+    "probe_cost": ("free_tier", "probe", "enabled"),
+    "autoremove_believed_free": ("free_tier", "probe", "autoremove"),
+    "update_believed_free_on_startup": ("free_tier", "update_on_startup"),
+    "pr_providers_list": ("providers_pr", "enabled"),
+    "sync_believed_free_on_startup": ("free_tier", "sync_on_startup"),
+    "probe_frequency_days": ("free_tier", "probe", "frequency_days"),
+    "pr_providers_repo": ("providers_pr", "repo"),
+    "pr_providers_base": ("providers_pr", "base"),
+    "pr_providers_branch": ("providers_pr", "branch"),
+    "pr_providers_token": ("providers_pr", "token"),
+}
+
+
+def _cfg_get(config: dict, path: tuple[str, ...], default=None):
+    """Read a value at a nested *path* in *config*, returning *default* if absent."""
+    cur = config
+    for key in path:
+        if not isinstance(cur, dict) or key not in cur:
+            return default
+        cur = cur[key]
+    return cur
+
+
+def _cfg_set(config: dict, path: tuple[str, ...], value) -> None:
+    """Set *value* at a nested *path* in *config*, creating intermediate dicts."""
+    cur = config
+    for key in path[:-1]:
+        nxt = cur.get(key)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            cur[key] = nxt
+        cur = nxt
+    cur[path[-1]] = value
+
 
 def _maintenance_view(config: dict) -> dict:
-    """The automation/maintenance flags, with the PR token masked like api_key."""
-    view: dict = {k: bool(config.get(k, False)) for k in _MAINTENANCE_BOOL_FLAGS}
-    view.update({k: bool(config.get(k, True)) for k in _MAINTENANCE_BOOL_FLAGS_DEFAULT_TRUE})
+    """The automation/maintenance flags, with the PR token masked like api_key.
+
+    Field names are the historical flat names; values are read from the nested
+    free_tier / providers_pr objects via _MAINTENANCE_PATHS.
+    """
+    view: dict = {
+        k: bool(_cfg_get(config, _MAINTENANCE_PATHS[k], False)) for k in _MAINTENANCE_BOOL_FLAGS
+    }
+    view.update(
+        {k: bool(_cfg_get(config, _MAINTENANCE_PATHS[k], True)) for k in _MAINTENANCE_BOOL_FLAGS_DEFAULT_TRUE}
+    )
     try:
-        view["probe_frequency_days"] = int(config.get("probe_frequency_days", 0) or 0)
+        view["probe_frequency_days"] = int(
+            _cfg_get(config, _MAINTENANCE_PATHS["probe_frequency_days"], 0) or 0
+        )
     except (TypeError, ValueError):
         view["probe_frequency_days"] = 0
     for k in _MAINTENANCE_STR_FIELDS:
-        view[k] = config.get(k) or ""
-    tok = config.get("pr_providers_token")
+        view[k] = _cfg_get(config, _MAINTENANCE_PATHS[k]) or ""
+    tok = _cfg_get(config, _MAINTENANCE_PATHS["pr_providers_token"])
     view["pr_providers_token"] = _mask_secret(tok)
     view["pr_providers_token_set"] = bool(tok)
     view["pr_providers_token_is_env"] = value_has_env_ref(tok)
@@ -490,7 +539,7 @@ def api_put_maintenance():
             if key in payload:
                 if not isinstance(payload[key], bool):
                     return _err(f"{key} must be a boolean.")
-                config[key] = payload[key]
+                _cfg_set(config, _MAINTENANCE_PATHS[key], payload[key])
 
         if "probe_frequency_days" in payload:
             try:
@@ -499,7 +548,7 @@ def api_put_maintenance():
                 return _err("probe_frequency_days must be an integer.")
             if v < 0:
                 return _err("probe_frequency_days must be >= 0.")
-            config["probe_frequency_days"] = v
+            _cfg_set(config, _MAINTENANCE_PATHS["probe_frequency_days"], v)
 
         for key in _MAINTENANCE_STR_FIELDS:
             if key in payload:
@@ -508,7 +557,7 @@ def api_put_maintenance():
                     val = ""
                 if not isinstance(val, str):
                     return _err(f"{key} must be a string.")
-                config[key] = val.strip()
+                _cfg_set(config, _MAINTENANCE_PATHS[key], val.strip())
 
         if "pr_providers_token" in payload:
             tok = payload["pr_providers_token"]
@@ -517,7 +566,7 @@ def api_put_maintenance():
             if not isinstance(tok, str):
                 return _err("pr_providers_token must be a string.")
             if tok.strip():
-                config["pr_providers_token"] = tok.strip()
+                _cfg_set(config, _MAINTENANCE_PATHS["pr_providers_token"], tok.strip())
             # blank -> keep the existing token
 
         if not _save(config):

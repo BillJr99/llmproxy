@@ -1150,13 +1150,13 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
         #    believed_free data reaches the live config.json every boot; opt out
         #    with sync_believed_free_on_startup: false.
         synced = False
-        if config.get("sync_believed_free_on_startup", True) is not False:
+        if config.get("free_tier", {}).get("sync_on_startup", True) is not False:
             synced = _sync_believed_free_from_sidecar(config_path)
 
         # 3. Optionally run the full network updater (refreshes + persists the
         #    sidecar, then syncs the live config from the freshly-scraped data).
         ran = False
-        if config.get("update_believed_free_on_startup") is True:
+        if config.get("free_tier", {}).get("update_on_startup") is True:
             ran = _run_free_models_update(config, config_path)
 
         # 4. Drop the cached /v1/models list so the synthetic 'free' set is rebuilt
@@ -1171,7 +1171,7 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
 
 
 def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: str | None = None) -> None:
-    """When config['pr_providers_list'] is true, open a PR with the refreshed
+    """When config['providers_pr']['enabled'] is true, open a PR with the refreshed
     providers.json (+ config.example.json) against the configured base branch.
 
     *providers_text* / *example_text* are the computed file contents — passed in
@@ -1180,13 +1180,13 @@ def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: st
 
     Uses the GitHub API directly (see github_pr.py) — it never touches the local
     git checkout. Requires a token (GITHUB_TOKEN / GH_TOKEN env, or
-    config['pr_providers_token'] which may be a ${VAR} ref) and the target repo
-    as config['pr_providers_repo'] = "owner/repo". Base branch defaults to
-    "main" (config['pr_providers_base']); branch name to "llmproxy-auto/providers"
-    (config['pr_providers_branch']). Best-effort: every missing prerequisite or
+    config['providers_pr']['token'] which may be a ${VAR} ref) and the target repo
+    as config['providers_pr']['repo'] = "owner/repo". Base branch defaults to
+    "main" (config['providers_pr']['base']); branch name to "llmproxy-auto/providers"
+    (config['providers_pr']['branch']). Best-effort: every missing prerequisite or
     API error is logged and skipped, never raised.
     """
-    if config.get("pr_providers_list") is not True:
+    if config.get("providers_pr", {}).get("enabled") is not True:
         return
     import os
 
@@ -1195,24 +1195,24 @@ def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: st
     token = (
         os.environ.get("GITHUB_TOKEN")
         or os.environ.get("GH_TOKEN")
-        or resolve_env_refs(config.get("pr_providers_token"))
+        or resolve_env_refs(config.get("providers_pr", {}).get("token"))
         or ""
     )
     if not token:
         logger.warning(
-            "[providers-pr] pr_providers_list is on but no token found "
-            "(set GITHUB_TOKEN / GH_TOKEN env or config['pr_providers_token']); skipping PR."
+            "[providers-pr] providers_pr.enabled is on but no token found "
+            "(set GITHUB_TOKEN / GH_TOKEN env or config['providers_pr']['token']); skipping PR."
         )
         return
-    slug = config.get("pr_providers_repo")
+    slug = config.get("providers_pr", {}).get("repo")
     if not (isinstance(slug, str) and "/" in slug):
         logger.warning(
-            "[providers-pr] set config['pr_providers_repo'] to \"owner/repo\" to open a PR; skipping."
+            "[providers-pr] set config['providers_pr']['repo'] to \"owner/repo\" to open a PR; skipping."
         )
         return
     owner, repo = slug.split("/", 1)
-    base = config.get("pr_providers_base", "main")
-    branch = config.get("pr_providers_branch", "llmproxy-auto/providers")
+    base = config.get("providers_pr", {}).get("base", "main")
+    branch = config.get("providers_pr", {}).get("branch", "llmproxy-auto/providers")
 
     files = {"llmproxy/providers.json": providers_text}
     if example_text is not None:
@@ -1226,7 +1226,7 @@ def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: st
             title="chore: automated providers.json refresh (llmproxy)",
             body=(
                 "Automated `providers.json` refresh opened by a running llmproxy "
-                "deployment (`pr_providers_list`). Free-tier status is best-effort — "
+                "deployment (`providers_pr.enabled`). Free-tier status is best-effort — "
                 "review the diff before merging."
             ),
         )
