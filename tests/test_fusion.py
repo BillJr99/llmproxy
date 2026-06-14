@@ -288,6 +288,41 @@ def test_fusion_streaming_sets_header(server, monkeypatch):
     assert resp.content_type.startswith("text/event-stream")
 
 
+def test_fusion_panel_threads_inherit_request_context(server, monkeypatch):
+    # Regression: the panel fans out on worker threads, but _proxy_request reads
+    # request.headers (via _forwarded_client_headers). Without propagating the
+    # request context into the workers, every panel member raised "working outside
+    # of request context" and the whole panel collapsed to a 503. Assert the panel
+    # threads see the active request context *and* its forwarded headers.
+    _seed(server, {f"p{x}__m{x}": (f"p{x}", f"m{x}") for x in ("a", "b", "c", "d")})
+    from flask import has_request_context
+
+    seen_titles: list[str] = []
+
+    def fake(endpoint, pn, cfg, payload, timeout):
+        msgs = payload.get("messages", [])
+        sys = msgs[0]["content"] if msgs and msgs[0].get("role") == "system" else ""
+        if "impartial judge" in sys:
+            return _chat('{"consensus": ["agree"]}')
+        if "synthesizer" in sys:
+            return _chat("FINAL")
+        # Panel call: exercise the request-context-bound header forwarding the real
+        # _proxy_request performs, from inside the worker thread.
+        assert has_request_context(), "panel worker lost the request context"
+        seen_titles.append(server._forwarded_client_headers().get("X-Title", ""))
+        return _chat(f"answer from {payload['model']}")
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    payload = {"model": "llmproxy__fusion", "messages": [{"role": "user", "content": "Q?"}]}
+    with server.app.test_request_context(headers={"X-Title": "regression"}):
+        resp = server._proxy_fusion(
+            "chat/completions", "llmproxy__fusion", payload,
+            server.load_config(), server.get_inbound("openai"), False,
+        )
+    assert resp.status_code == 200
+    assert seen_titles and all(t == "regression" for t in seen_titles)
+
+
 def test_fusion_models_advertised(server):
     # Advertisement keys on the candidate-selector counts; verify both pools
     # clear the MIN_PANEL bar so llmproxy__fusion and llmproxy__fusion/free show.

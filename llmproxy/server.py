@@ -52,7 +52,17 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
-from flask import Flask, Response, g, jsonify, make_response, request, stream_with_context
+from flask import (
+    Flask,
+    Response,
+    copy_current_request_context,
+    g,
+    has_request_context,
+    jsonify,
+    make_response,
+    request,
+    stream_with_context,
+)
 
 from . import __version__
 from . import fusion as _fusion
@@ -407,10 +417,16 @@ def _upstream_headers(provider_cfg: dict) -> dict:
 def _forwarded_client_headers() -> dict:
     """Selected client headers we relay upstream (OpenRouter attribution etc.).
 
-    Returns only the present subset of _FORWARDED_REQUEST_HEADERS; safe to call
-    only inside a request context. Outbound dialect adapters decide whether to
-    merge these (the OpenAI adapter does; native Anthropic/Gemini ignore them).
+    Returns only the present subset of _FORWARDED_REQUEST_HEADERS. Outbound
+    dialect adapters decide whether to merge these (the OpenAI adapter does;
+    native Anthropic/Gemini ignore them).
+
+    Returns ``{}`` when there is no active request context (e.g. a background
+    worker thread that was not wrapped with ``copy_current_request_context``),
+    so callers off the request thread degrade gracefully rather than raising.
     """
+    if not has_request_context():
+        return {}
     out: dict = {}
     for header in _FORWARDED_REQUEST_HEADERS - {"Content-Type"}:
         value = request.headers.get(header)
@@ -3030,6 +3046,12 @@ def _proxy_fusion(
     logger.info("  [fusion] %s panel of %d (free=%s)", model_full, len(panel_cands), free)
 
     # 1 + 2. Fan the prompt out to the panel in parallel (non-streaming).
+    # The fan-out runs on ThreadPoolExecutor worker threads, which do not inherit
+    # Flask's request context. _proxy_request -> _forwarded_client_headers reads
+    # request.headers, so the callable is wrapped with copy_current_request_context
+    # to carry the active request into each worker (otherwise every panel member
+    # raises "working outside of request context" and the panel collapses).
+    @copy_current_request_context
     def _call_panel(cand: tuple[str, dict, str]):
         pn, pc, uid = cand
         try:
