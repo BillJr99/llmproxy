@@ -42,12 +42,22 @@ jobs:
           pip install -r requirements.txt
 
       - name: Refresh providers.json from sources (no model probing)
+        id: scrape
         run: |
           python scripts/update_free_models.py
           echo "----- git status after scrape -----"
           git status --porcelain llmproxy/providers.json config.example.json || true
+          # Record whether the tracked data files actually changed so the PR step
+          # is skipped entirely on a no-op run (no empty branch / PR is opened).
+          if [ -n "$(git status --porcelain llmproxy/providers.json config.example.json)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No changes to providers.json / config.example.json — skipping PR."
+          fi
 
       - name: Open a pull request if anything changed
+        if: steps.scrape.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           commit-message: "chore: refresh believed_free / free_limits / pricing in providers.json"

@@ -9,6 +9,7 @@ one). It only needs a token, an ``owner/repo`` slug, and the file contents.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 
 import requests
@@ -43,6 +44,19 @@ def parse_github_slug(remote_url: str) -> tuple[str, str] | None:
     return parts[0], parts[1]
 
 
+def _git_blob_sha(content: str) -> str:
+    """Git's object id for a blob holding *content* (sha1 of 'blob <len>\\0<bytes>').
+
+    Matches the sha GitHub stores in a tree entry, so identical content yields an
+    identical sha — letting us tell whether a file actually differs from the base
+    branch without a per-file content fetch (and without the contents API's inline
+    size limit).
+    """
+    data = content.encode("utf-8")
+    header = f"blob {len(data)}\0".encode()
+    return hashlib.sha1(header + data).hexdigest()  # noqa: S324 — git uses sha1, not security-sensitive
+
+
 def _gh(method: str, url: str, token: str, *, json: dict | None = None) -> requests.Response:
     return requests.request(
         method, url,
@@ -54,6 +68,26 @@ def _gh(method: str, url: str, token: str, *, json: dict | None = None) -> reque
         json=json,
         timeout=_TIMEOUT,
     )
+
+
+def _base_tree_blobs(owner: str, repo: str, tree_sha: str, token: str) -> dict[str, str] | None:
+    """Map repo-relative path -> blob sha for every file in *tree_sha* (recursive).
+
+    Returns None if the tree can't be read (so callers fall back to opening the
+    PR rather than wrongly assuming "no changes"). A truncated tree is also
+    treated as unknown, since a missing path would otherwise read as a change.
+    """
+    resp = _gh("GET", f"{_API}/repos/{owner}/{repo}/git/trees/{tree_sha}?recursive=1", token)
+    if not resp.ok:
+        return None
+    data = resp.json()
+    if data.get("truncated"):
+        return None
+    return {
+        entry["path"]: entry["sha"]
+        for entry in data.get("tree", [])
+        if entry.get("type") == "blob"
+    }
 
 
 def create_or_update_pr(
@@ -81,6 +115,21 @@ def create_or_update_pr(
     commit = _gh("GET", f"{_API}/repos/{owner}/{repo}/git/commits/{base_sha}", token)
     commit.raise_for_status()
     base_tree = commit.json()["tree"]["sha"]
+
+    # 1b. Skip entirely if every file already matches the base branch. The caller
+    # only knows the local sidecar changed within the running container — not
+    # whether it differs from `base` (a previous PR may already have merged the
+    # same content). Comparing git blob shas against the base tree avoids opening
+    # (or force-refreshing) a PR whose diff is empty.
+    base_blobs = _base_tree_blobs(owner, repo, base_tree, token)
+    if base_blobs is not None and all(
+        base_blobs.get(path) == _git_blob_sha(content)
+        for path, content in files.items()
+    ):
+        logger.info(
+            "[providers-pr] no changes vs %s — skipping PR (files already current).", base
+        )
+        return None
 
     # 2. Create blobs + a tree layered on the base tree.
     tree_entries = []
