@@ -1004,7 +1004,8 @@
         ],
         "openrouter/openai/gpt-oss-20b:free": [
           "tools",
-          "reasoning"
+          "reasoning",
+          "json"
         ],
         "openrouter/nvidia/nemotron-nano-9b-v2:free": [
           "tools",
