@@ -129,32 +129,103 @@ read the OpenRouter schema (e.g. Hermes) can classify models from the listing al
 The synthetic virtual models (`llmproxy__free`, `llmproxy__tools`, `llmproxy__vision`,
 …) carry the same fields.
 
+## Virtual models
+
+Alongside the real `provider/model` ids, llmproxy advertises **synthetic** model
+names under the reserved `llmproxy` namespace. A virtual model doesn't map to one
+upstream — it stands for a *pool* of candidate models that share a property (free,
+local, a reasoning level, a capability, a single provider, …). When you send a
+request to a virtual model, llmproxy picks an ordered list of candidates from that
+pool and **cycles** through them until one returns a usable answer. This gives you
+automatic load-spreading and failover without pinning a specific upstream in your
+client config.
+
+Every virtual model is advertised in the display form `llmproxy__<name>` (double
+underscore). The legacy slash form `llmproxy/<name>` is still accepted on **input**
+for backward compatibility with pinned client configs, but it is no longer
+advertised in `GET /v1/models`. A virtual model only appears in the listing when at
+least one eligible backend currently exists for it.
+
+The families are:
+
+| Family                    | Examples                                              | Pool |
+|---------------------------|------------------------------------------------------|------|
+| General                   | `llmproxy__free`, `llmproxy__local`                  | All free / all localhost-served models |
+| Reasoning level           | `llmproxy__exploratory`, `llmproxy__standard`, `llmproxy__deep` (+ `/free`, `/local`) | Models tagged at that reasoning tier |
+| Capability                | `llmproxy__tools`, `llmproxy__vision` (+ `/free`)    | Models tagged with that capability |
+| Per-provider              | `llmproxy__<provider>` (+ `/<dimension>`)            | One provider's models, optionally sliced |
+| Fusion (deliberation)     | `llmproxy__fusion`, `llmproxy__fusion/free`          | A panel of models, judged + synthesized |
+
+All of these **except fusion** share the same cycling-and-failover machinery
+described next; fusion fans out to a panel instead (see [Fusion](#fusion-virtual-models-multi-model-deliberation)).
+
+### How cycling & failover works
+
+When a request targets a (non-fusion) virtual model, llmproxy:
+
+1. **Builds the candidate pool** for that virtual name.
+2. **Orders** the pool. Free-tier pools are ordered by remaining capacity
+   (capacity-aware weighted sampling — see [`free_limits`](#free_limits)); every
+   other pool starts from a **random position** to spread load. Two stable
+   reorderings may then run on top without ever dropping a candidate: the
+   [input-aware first pick](#input-aware-first-pick-general-virtuals-only) for the
+   general virtuals, and [capability ordering](#capability-aware-routing--failover)
+   when the request forces a capability.
+3. **Tries each candidate in order**, returning the first **usable** response.
+
+A candidate is considered to have **failed** — so llmproxy moves on to the next
+one — in any of these cases:
+
+- **HTTP error** — the upstream returns a status ≥ 400.
+- **Timeout / connection error** — the upstream is unreachable or exceeds the
+  per-candidate timeout (60s; a slow upstream can't stall the whole failover
+  chain).
+- **200 with an unusable body** *(non-streaming)* — the body carries a top-level
+  `error` object, has no `choices`, or isn't valid JSON. Some providers answer
+  `200 OK` while really reporting an error; these now fail over instead of being
+  handed to the client.
+- **Forced capability not honored** *(non-streaming)* — a `tool_choice` that
+  demanded a call came back with no `tool_calls`, or a `response_format` asked for
+  JSON and the body wasn't valid JSON. See
+  [capability failover](#capability-aware-routing--failover).
+- **Stream that errors on arrival** *(streaming)* — llmproxy peeks the first SSE
+  chunk before committing; if the stream opens with an `error` event the candidate
+  fails over. The peeked chunk is replayed verbatim once a healthy stream is
+  committed, so the first token is never dropped.
+
+**Transient failures get one retry first.** Before moving to the next candidate, a
+*transient* failure (HTTP 429 / 5xx, a timeout, or a connection error) is retried
+on the **same** candidate once with a short backoff — a brief blip on an otherwise
+healthy model won't cost you a needless failover. Non-transient errors (400/401/404
+and the like) fail straight over, since a retry wouldn't help.
+
+When **every** candidate has failed, llmproxy returns the last upstream response
+(so you still see the real diagnostic body and status) rather than a synthesized
+error; if no candidate was even reachable it returns a `503`.
+
+You can inspect the live pool behind any virtual model without sending a chat
+request:
+
+```bash
+curl http://localhost:8080/v1/models/llmproxy__free | jq '._candidates'
+```
+
 ### The `free` virtual model
 
-llmproxy advertises a special synthetic model named `llmproxy__free`.  When a request
-arrives with `"model": "llmproxy__free"` (or the legacy `"llmproxy/free"`), the proxy:
-
-1. Collects every model across all providers whose upstream ID contains the
-   word `free` (case-insensitive) **or** whose upstream ID (or full
-   `provider/upstream` ID) appears in the top-level `believed_free` config list
-   — see [Configuration](#configuration).
-2. Picks a **random starting position** in that list, then tries each
-   candidate in order, wrapping around.
-3. Returns the first response with an HTTP status below 400.  If a candidate
-   is rate-limited, overloaded, or otherwise unhealthy, it is skipped silently
-   and the next one is tried.
-
-This spreads load across free-tier endpoints and provides automatic failover —
-useful when any individual free model is rate-limited.
+`llmproxy__free` (legacy `llmproxy/free`) pools every model across all providers
+whose upstream ID contains the word `free` (case-insensitive) **or** whose upstream
+ID (or full `provider/upstream` ID) appears in the top-level `believed_free` config
+list — see [Configuration](#configuration). Its pool is **capacity-aware**: among
+healthy candidates, models with more remaining free-tier quota are preferred, while
+load is still spread (see [`free_limits`](#free_limits)). Failover then follows the
+[shared rules](#how-cycling--failover-works) above, which is exactly what you want
+when an individual free endpoint is rate-limited.
 
 ```bash
 # Use the free virtual model
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "llmproxy__free", "messages": [{"role": "user", "content": "Hello!"}]}'
-
-# Inspect which backends are currently eligible
-curl http://localhost:8080/v1/models/llmproxy__free | jq '._candidates'
 ```
 
 The `llmproxy__free` model appears at the top of `GET /v1/models` whenever at least one
@@ -162,29 +233,19 @@ eligible backend is available.
 
 ### The `local` virtual model
 
-llmproxy also advertises a synthetic model named `llmproxy__local`.  When a request
-arrives with `"model": "llmproxy__local"` (or the legacy `"llmproxy/local"`), the proxy:
-
-1. Collects every model across all providers whose `base_url` hostname matches
-   a loopback address (`localhost`, `127.x.x.x`, `::1`, `0.0.0.0`), an mDNS
-   name (`*.local`), or a Docker host-gateway alias (`host.docker.internal`,
-   `gateway.docker.internal`).
-2. Picks a **random starting position** in that list, then tries each
-   candidate in order, wrapping around.
-3. Returns the first response with an HTTP status below 400.
-
-This is useful for clients that want to use whichever local model (Ollama,
-LM Studio, llama.cpp, etc.) happens to be running without hard-coding a
-specific model name.
+`llmproxy__local` (legacy `llmproxy/local`) pools every model whose provider
+`base_url` hostname is a loopback address (`localhost`, `127.x.x.x`, `::1`,
+`0.0.0.0`), an mDNS name (`*.local`), or a Docker host-gateway alias
+(`host.docker.internal`, `gateway.docker.internal`). It uses random-start cycling
+with the [shared failover rules](#how-cycling--failover-works) — useful for clients
+that want whichever local model (Ollama, LM Studio, llama.cpp, etc.) happens to be
+running without hard-coding a name.
 
 ```bash
 # Use the local virtual model
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "llmproxy__local", "messages": [{"role": "user", "content": "Hello!"}]}'
-
-# Inspect which backends are currently eligible
-curl http://localhost:8080/v1/models/llmproxy__local | jq '._candidates'
 ```
 
 The `llmproxy__local` model appears in `GET /v1/models` only when at least one model
@@ -234,10 +295,10 @@ with a given level, llmproxy exposes corresponding virtual endpoints:
 | `llmproxy__deep/free`        | Models tagged `deep` **and** qualifying as free-tier          |
 | `llmproxy__deep/local`       | Models tagged `deep` **and** served on localhost              |
 
-Each virtual endpoint uses the same random-start round-robin with automatic
-failover as `llmproxy__free` and `llmproxy__local`.  The legacy `llmproxy/...`
-form (e.g. `llmproxy/deep/free`) is still accepted on input for backward
-compatibility with pinned client configs.
+Each endpoint cycles through its pool using the
+[shared failover rules](#how-cycling--failover-works); the `/free` variants are
+additionally capacity-aware. The legacy `llmproxy/...` form (e.g.
+`llmproxy/deep/free`) is still accepted on input.
 
 ```bash
 # Use the deep reasoning virtual model
@@ -265,15 +326,16 @@ that to route requests on **any** virtual model:
   request into a hard failure.
 - **Reactive failover** — when a capability was *mandatory* but the upstream
   returned a 200 that didn't deliver it, llmproxy fails over to the next
-  candidate, exactly like it does on an HTTP error. Today this covers:
+  candidate, one of the failure cases in the
+  [shared failover rules](#how-cycling--failover-works). Today this covers:
   - **tools** — `tool_choice` forced a call (`"required"` or a specific
     function) but the response contained no `tool_calls`.
   - **json** — `response_format` requested JSON but the body wasn't valid JSON.
 
   (Reactive 200-body detection runs on **non-streaming** requests only; streaming
-  responses still benefit from proactive ordering. Capabilities without a
-  reliable 200 signal — **vision**, **reasoning** — rely on the upstream
-  returning an HTTP error, which already triggers failover.)
+  responses still benefit from proactive ordering and from the first-chunk error
+  peek. Capabilities without a reliable 200 signal — **vision**, **reasoning** —
+  rely on the upstream returning an HTTP error, which already triggers failover.)
 
 The `tool_choice: "auto"` case is never treated as a failure — a model may
 legitimately answer without calling a tool.
