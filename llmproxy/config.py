@@ -39,9 +39,9 @@ Schema:
     "<provider>/<upstream_model_id>": {           // used for capacity-aware ordering
       "requests_per_minute": 15,                  // on llmproxy__free and */free
       "requests_per_day": 1500,                   // endpoints; null = not tracked
-      "tokens_per_minute": null,                  // token limits stored for reference
-      "tokens_per_day": null                      // but not yet enforced (no token
-    }                                             // counting without response parsing)
+      "tokens_per_minute": null,                  // token limits; null = not tracked.
+      "tokens_per_day": null                      // Enforced in capacity ordering from
+    }                                             // recorded usage, like the request limits.
   },
   "server": {
     "host": "0.0.0.0",

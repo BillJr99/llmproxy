@@ -40,6 +40,7 @@ import contextlib
 import datetime
 import hashlib
 import io
+import itertools
 import json
 import logging
 import random
@@ -48,7 +49,7 @@ import threading
 import time
 import traceback
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -131,6 +132,11 @@ _CAPABILITY_VIRTUALS: tuple[str, ...] = ("tools", "vision")
 _PER_PROVIDER_DIMENSIONS: tuple[str, ...] = (*_REASONING_LEVELS, *_CAPABILITY_VIRTUALS, "free")
 # Per-candidate timeout for virtual-model cycling so a slow upstream doesn't block all failover.
 _VIRTUAL_CANDIDATE_TIMEOUT: int = 60
+# Extra attempts on the *same* candidate when it returns a transient failure
+# (HTTP 429 / 5xx, timeout, connection error) before cycling to the next one.
+_VIRTUAL_MAX_RETRIES: int = 1
+# Backoff (seconds) between those same-candidate retries.
+_VIRTUAL_RETRY_BACKOFF: float = 0.5
 # Stable per-process timestamp used as the OpenAI-standard ``created`` fallback
 # for models whose upstream listing omits it (and for synthetic virtual models).
 _SERVER_EPOCH: int = int(time.time())
@@ -1709,8 +1715,13 @@ def _translated_stream_response(
     provider_name: str,
     upstream_model: str,
     config: dict | None,
+    prefix: bytes = b"",
 ) -> Response:
     """Pipe a *non-identity* upstream SSE stream through the dialect adapters.
+
+    ``prefix`` carries any first chunk already pulled off the wire by a peek
+    (see ``_peek_stream``); it is replayed ahead of the remaining stream so no
+    bytes are lost.
 
     ``outbound.parse_stream`` turns the provider-native event stream into
     canonical OpenAI chunk dicts; usage is tee'd off those canonical chunks; then
@@ -1723,6 +1734,8 @@ def _translated_stream_response(
         try:
             with r:
                 def raw():
+                    if prefix:
+                        yield prefix
                     for chunk in r.iter_content(chunk_size=None):
                         if chunk:
                             yield chunk
@@ -2138,6 +2151,86 @@ def _capability_failed(payload: dict, body_bytes: bytes) -> bool:
     return False
 
 
+def _is_transient_status(status: int) -> bool:
+    """True for statuses worth retrying on the *same* candidate.
+
+    HTTP 429 (rate limited) and any 5xx are transient — including the 502/504
+    that ``_proxy_request`` synthesizes for connection errors and timeouts.
+    Other 4xx (bad request, auth, not-found) won't improve on retry, so the
+    cycling loop fails straight over to the next candidate instead.
+    """
+    return status == 429 or status >= 500
+
+
+def _response_unusable(body_bytes: bytes) -> bool:
+    """True when a non-streaming HTTP 200 isn't actually a usable completion.
+
+    Some upstreams answer ``200 OK`` while the body carries an error object or
+    an empty result (no ``choices``).  Treating these as failures lets the
+    cycling loop fail over instead of handing the client a dead response.
+
+    Deliberately conservative to avoid false failover: a body with at least one
+    ``choices`` entry is accepted even when its ``content`` is empty (a model
+    may legitimately answer with tool calls or an empty string).  A body that
+    isn't JSON at all is treated as unusable, since every cycled endpoint speaks
+    JSON chat/completions.
+    """
+    try:
+        data = json.loads(body_bytes)
+    except (ValueError, TypeError):
+        return True
+    if not isinstance(data, dict):
+        return True
+    if data.get("error"):
+        return True
+    choices = data.get("choices")
+    if not choices or not isinstance(choices, list):
+        return True
+    return False
+
+
+def _peek_stream(resp) -> tuple[bytes | None, bytes, "Iterator[bytes]"]:
+    """Read the first non-empty chunk of a streamed response without losing it.
+
+    Returns ``(error_body, prefix, rest)`` where:
+
+    * ``error_body`` is the upstream bytes when the opening of the stream is an
+      SSE error event (a ``data:`` payload whose JSON carries an ``error``),
+      else ``None``.
+    * ``prefix`` is the first non-empty chunk already pulled off the wire.
+    * ``rest`` is an iterator over the remaining chunks.
+
+    Streaming the buffered ``prefix`` first means the first token is never
+    dropped, while the peek lets the caller fail over when a provider returns
+    ``200`` and then immediately errors inside the stream.
+    """
+    chunks = resp.iter_content(chunk_size=None)
+    prefix = b""
+    for chunk in chunks:
+        if chunk:
+            prefix = chunk
+            break
+    error_body = prefix if (prefix and _sse_prefix_is_error(prefix)) else None
+    return error_body, prefix, chunks
+
+
+def _sse_prefix_is_error(prefix: bytes) -> bool:
+    """True when the opening SSE bytes encode a JSON object carrying an error."""
+    for line in prefix.split(b"\n"):
+        line = line.strip()
+        if line.startswith(b"data:"):
+            line = line[len(b"data:"):].strip()
+        if not line or line == b"[DONE]":
+            continue
+        try:
+            data = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(data, dict) and data.get("error"):
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Virtual models — shared cycling logic + per-model candidate selectors
 # ---------------------------------------------------------------------------
@@ -2152,11 +2245,15 @@ def _proxy_cycling_non_streaming(
 ) -> Response:
     """Try each candidate in order, returning the first success.
 
-    A 200 that fails to deliver a *forced* capability (e.g. ``tool_choice``
-    forced a tool call but the body has none) is treated as a failure and the
-    next candidate is tried, mirroring HTTP-error failover.  When every
-    candidate is exhausted the last response is returned so the client still
-    receives the real upstream body rather than a synthesized error.
+    Failover is triggered by any of: an HTTP error, a 200 that fails to deliver
+    a *forced* capability (e.g. ``tool_choice`` forced a tool call but the body
+    has none), or a 200 whose body is unusable (an error object or no
+    ``choices``).  A *transient* failure (HTTP 429/5xx, which also covers the
+    502/504 ``_proxy_request`` synthesizes for connection errors and timeouts)
+    is first retried on the same candidate up to ``_VIRTUAL_MAX_RETRIES`` times
+    with a short backoff before moving on.  When every candidate is exhausted
+    the last response is returned so the client still receives the real upstream
+    body rather than a synthesized error.
 
     ``on_success`` is invoked as ``on_success(provider, model, body)`` with the
     successful response bytes so the caller can record token + cost usage.
@@ -2165,18 +2262,36 @@ def _proxy_cycling_non_streaming(
     last: Response | None = None
     for provider_name, provider_cfg, upstream_model in candidates:
         upstream_payload = {**payload, "model": upstream_model}
-        logger.info("  [%s] trying %s/%s", label, provider_name, upstream_model)
-        resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, candidate_timeout)
+        for attempt in range(_VIRTUAL_MAX_RETRIES + 1):
+            logger.info("  [%s] trying %s/%s", label, provider_name, upstream_model)
+            resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, candidate_timeout)
+            if resp.status_code < 400 or not _is_transient_status(resp.status_code):
+                break
+            if attempt < _VIRTUAL_MAX_RETRIES:
+                logger.warning(
+                    "  [%s] %s/%s returned %d, retrying (%d/%d)",
+                    label, provider_name, upstream_model, resp.status_code,
+                    attempt + 1, _VIRTUAL_MAX_RETRIES,
+                )
+                time.sleep(_VIRTUAL_RETRY_BACKOFF)
         if resp.status_code < 400:
-            if _capability_failed(payload, resp.get_data()):
+            body = resp.get_data()
+            if _capability_failed(payload, body):
                 logger.warning(
                     "  [%s] %s/%s returned 200 but did not honor a forced capability, trying next",
                     label, provider_name, upstream_model,
                 )
                 last = resp
                 continue
+            if _response_unusable(body):
+                logger.warning(
+                    "  [%s] %s/%s returned 200 with an unusable body (error/empty), trying next",
+                    label, provider_name, upstream_model,
+                )
+                last = resp
+                continue
             if on_success is not None:
-                on_success(provider_name, upstream_model, resp.get_data())
+                on_success(provider_name, upstream_model, body)
             return resp
         logger.warning(
             "  [%s] %s/%s returned %d, trying next", label, provider_name, upstream_model, resp.status_code
@@ -2197,10 +2312,14 @@ def _proxy_cycling_streaming(
     inbound=None,
 ) -> Response:
     """
-    Try each candidate in order.  Checks the HTTP status code before committing
-    to stream the response so failed upstreams are skipped transparently.
-    When all candidates fail the last upstream error body is returned so
-    clients receive the same diagnostic information as the non-streaming path.
+    Try each candidate in order.  Checks the HTTP status code — and peeks at the
+    first streamed chunk — before committing to stream the response, so failed
+    upstreams (including a 200 that immediately errors inside the stream) are
+    skipped transparently.  A *transient* failure (HTTP 429/5xx, timeout, or
+    connection error) is retried on the same candidate up to
+    ``_VIRTUAL_MAX_RETRIES`` times with a short backoff before moving on.  When
+    all candidates fail the last upstream error body is returned so clients
+    receive the same diagnostic information as the non-streaming path.
 
     Each candidate's ``protocol`` selects its outbound adapter; ``inbound`` (the
     client dialect, default openai) renders the canonical stream. When both are
@@ -2222,72 +2341,114 @@ def _proxy_cycling_streaming(
             endpoint, base_url, provider_cfg, upstream_payload,
             stream=True, forwarded_headers=_forwarded_client_headers(),
         )
-        logger.info("  [%s] trying %s/%s  [streaming]", label, provider_name, upstream_model)
+
+        # Open the upstream, retrying transient failures on this same candidate.
+        resp = None
+        for attempt in range(_VIRTUAL_MAX_RETRIES + 1):
+            logger.info("  [%s] trying %s/%s  [streaming]", label, provider_name, upstream_model)
+            try:
+                resp = requests.post(url, headers=headers, json=body, stream=True, timeout=candidate_timeout)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                if attempt < _VIRTUAL_MAX_RETRIES:
+                    logger.warning("  [%s] %s/%s connect error: %s, retrying (%d/%d)",
+                                   label, provider_name, upstream_model, e, attempt + 1, _VIRTUAL_MAX_RETRIES)
+                    time.sleep(_VIRTUAL_RETRY_BACKOFF)
+                    continue
+                logger.warning("  [%s] %s/%s error: %s, trying next", label, provider_name, upstream_model, e)
+                resp = None
+                break
+            except Exception as e:
+                logger.warning("  [%s] %s/%s error: %s, trying next", label, provider_name, upstream_model, e)
+                resp = None
+                break
+            if resp.status_code < 400 or not _is_transient_status(resp.status_code):
+                break
+            if attempt < _VIRTUAL_MAX_RETRIES:
+                logger.warning("  [%s] %s/%s -> %d, retrying (%d/%d)",
+                               label, provider_name, upstream_model, resp.status_code, attempt + 1, _VIRTUAL_MAX_RETRIES)
+                resp.close()
+                time.sleep(_VIRTUAL_RETRY_BACKOFF)
+
+        if resp is None:
+            continue
+        if resp.status_code >= 400:
+            last_error = (
+                resp.content,
+                resp.status_code,
+                resp.headers.get("Content-Type", "application/json"),
+            )
+            resp.close()
+            logger.warning(
+                "  [%s] %s/%s -> %d, trying next", label, provider_name, upstream_model, resp.status_code
+            )
+            continue
+
         try:
-            resp = requests.post(url, headers=headers, json=body, stream=True, timeout=candidate_timeout)
-            if resp.status_code >= 400:
-                last_error = (
-                    resp.content,
-                    resp.status_code,
-                    resp.headers.get("Content-Type", "application/json"),
-                )
+            # Peek the opening of the stream so a 200 that immediately emits an
+            # SSE error event fails over like an HTTP error instead of being
+            # handed to the client.  The peeked prefix is replayed verbatim, so
+            # the first token is never dropped.
+            error_body, prefix, rest = _peek_stream(resp)
+            if error_body is not None:
+                last_error = (error_body, 502, "text/event-stream")
                 resp.close()
                 logger.warning(
-                    "  [%s] %s/%s -> %d, trying next", label, provider_name, upstream_model, resp.status_code
+                    "  [%s] %s/%s -> 200 then stream error, trying next",
+                    label, provider_name, upstream_model,
                 )
                 continue
-
-            # Reactive capability detection (forced-tool/json 200-body checks) is
-            # intentionally NOT applied to streaming: inspecting delta.tool_calls
-            # would require buffering the SSE stream before committing the first
-            # chunk, defeating the zero-latency passthrough below.  Proactive
-            # capability ordering still steers streaming requests to capable models.
-            if on_success is not None:
-                on_success(provider_name, upstream_model)
-
-            # Translation path: pipe the native stream through the adapters.
-            if not (outbound.is_identity and inbound.is_identity):
-                return _translated_stream_response(
-                    resp, outbound, inbound, provider_name, upstream_model, config
-                )
-
-            captured_resp = resp
-            captured_provider = provider_name
-            captured_model = upstream_model
-
-            @stream_with_context
-            def generate(r=captured_resp, pn=captured_provider, um=captured_model):
-                tail = bytearray()
-                try:
-                    with r:
-                        first = True
-                        for chunk in r.iter_content(chunk_size=None):
-                            if chunk:
-                                if first:
-                                    logger.info("  upstream %d  first chunk: %s", r.status_code, chunk[:200])
-                                    first = False
-                                yield chunk
-                                tail += chunk
-                                if len(tail) > _STREAM_TAIL_BYTES:
-                                    del tail[:-_STREAM_TAIL_BYTES]
-                except requests.exceptions.Timeout:
-                    logger.error("[%s] provider=%s timed out mid-stream", label, pn)
-                    yield b'data: {"error":{"message":"Upstream stream timed out."}}\n\n'
-                except Exception as e:
-                    logger.error("[%s] provider=%s mid-stream error: %s", label, pn, e)
-                    msg = str(e).replace('"', "'")
-                    yield f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
-                finally:
-                    _record_stream_usage(pn, um, bytes(tail), config)
-
-            return Response(generate(), content_type="text/event-stream")
-
-        except requests.exceptions.Timeout:
-            logger.warning("  [%s] %s/%s timed out, trying next", label, provider_name, upstream_model)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            logger.warning("  [%s] %s/%s error mid-peek: %s, trying next", label, provider_name, upstream_model, e)
+            resp.close()
             continue
-        except Exception as e:
-            logger.warning("  [%s] %s/%s error: %s, trying next", label, provider_name, upstream_model, e)
-            continue
+
+        # Reactive capability detection (forced-tool/json 200-body checks) is
+        # intentionally NOT applied beyond the first-chunk error peek: inspecting
+        # delta.tool_calls would require buffering the whole SSE stream before
+        # committing.  Proactive capability ordering still steers streaming
+        # requests to capable models.
+        if on_success is not None:
+            on_success(provider_name, upstream_model)
+
+        # Translation path: pipe the native stream through the adapters.
+        if not (outbound.is_identity and inbound.is_identity):
+            return _translated_stream_response(
+                resp, outbound, inbound, provider_name, upstream_model, config, prefix=prefix
+            )
+
+        captured_resp = resp
+        captured_provider = provider_name
+        captured_model = upstream_model
+        captured_prefix = prefix
+        captured_rest = rest
+
+        @stream_with_context
+        def generate(r=captured_resp, pn=captured_provider, um=captured_model,
+                     pfx=captured_prefix, rst=captured_rest):
+            tail = bytearray()
+            try:
+                with r:
+                    first = True
+                    for chunk in itertools.chain((pfx,) if pfx else (), rst):
+                        if chunk:
+                            if first:
+                                logger.info("  upstream %d  first chunk: %s", r.status_code, chunk[:200])
+                                first = False
+                            yield chunk
+                            tail += chunk
+                            if len(tail) > _STREAM_TAIL_BYTES:
+                                del tail[:-_STREAM_TAIL_BYTES]
+            except requests.exceptions.Timeout:
+                logger.error("[%s] provider=%s timed out mid-stream", label, pn)
+                yield b'data: {"error":{"message":"Upstream stream timed out."}}\n\n'
+            except Exception as e:
+                logger.error("[%s] provider=%s mid-stream error: %s", label, pn, e)
+                msg = str(e).replace('"', "'")
+                yield f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
+            finally:
+                _record_stream_usage(pn, um, bytes(tail), config)
+
+        return Response(generate(), content_type="text/event-stream")
 
     if last_error:
         body, status, ct = last_error
