@@ -285,9 +285,26 @@
     "github/deepseek/DeepSeek-V3-0324",
     "github/xai/grok-3",
     "github/xai/grok-3-mini",
+    "groq/allam-2-7b",
+    "groq/canopylabs/orpheus-arabic-saudi",
+    "groq/canopylabs/orpheus-v1-english",
     "groq/gemma2-9b-it",
+    "groq/groq/compound",
+    "groq/groq/compound-mini",
+    "groq/llama-3.1-8b-instant",
+    "groq/llama-3.3-70b-versatile",
     "groq/llama-4-scout-17b-16e-instruct",
+    "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+    "groq/meta-llama/llama-prompt-guard-2-22m",
+    "groq/meta-llama/llama-prompt-guard-2-86m",
     "groq/mixtral-8x7b-32768",
+    "groq/openai/gpt-oss-120b",
+    "groq/openai/gpt-oss-20b",
+    "groq/openai/gpt-oss-safeguard-20b",
+    "groq/qwen/qwen3-32b",
+    "groq/qwen/qwen3.6-27b",
+    "groq/whisper-large-v3",
+    "groq/whisper-large-v3-turbo",
     "cloudflare-workers/@cf/ai4bharat/indictrans2-en-indic-1B",
     "cloudflare-workers/@cf/aisingapore/gemma-sea-lion-v4-27b-it",
     "cloudflare-workers/@cf/baai/bge-base-en-v1.5",
@@ -491,6 +508,21 @@
     "groq/llama-3.1-8b-instant": "exploratory",
     "groq/mixtral-8x7b-32768": "standard",
     "groq/gemma2-9b-it": "exploratory",
+    "groq/allam-2-7b": "exploratory",
+    "groq/canopylabs/orpheus-arabic-saudi": "exploratory",
+    "groq/canopylabs/orpheus-v1-english": "exploratory",
+    "groq/groq/compound": "exploratory",
+    "groq/groq/compound-mini": "exploratory",
+    "groq/meta-llama/llama-4-scout-17b-16e-instruct": "standard",
+    "groq/meta-llama/llama-prompt-guard-2-22m": "exploratory",
+    "groq/meta-llama/llama-prompt-guard-2-86m": "exploratory",
+    "groq/openai/gpt-oss-120b": "deep",
+    "groq/openai/gpt-oss-20b": "standard",
+    "groq/openai/gpt-oss-safeguard-20b": "standard",
+    "groq/qwen/qwen3-32b": "standard",
+    "groq/qwen/qwen3.6-27b": "standard",
+    "groq/whisper-large-v3": "standard",
+    "groq/whisper-large-v3-turbo": "standard",
     "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct": "standard",
     "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct": "exploratory",
     "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
@@ -881,7 +913,8 @@
     ],
     "openrouter/openai/gpt-oss-20b:free": [
       "tools",
-      "reasoning"
+      "reasoning",
+      "json"
     ],
     "openrouter/nvidia/nemotron-nano-9b-v2:free": [
       "tools",
@@ -1062,6 +1095,108 @@
       "tokens_per_minute": null,
       "tokens_per_day": null
     },
+    "groq/groq/compound-mini": {
+      "requests_per_minute": 30,
+      "requests_per_day": 250,
+      "tokens_per_minute": 70000,
+      "tokens_per_day": null
+    },
+    "groq/openai/gpt-oss-20b": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 8000,
+      "tokens_per_day": 200000
+    },
+    "groq/meta-llama/llama-prompt-guard-2-86m": {
+      "requests_per_minute": 30,
+      "requests_per_day": 14400,
+      "tokens_per_minute": 15000,
+      "tokens_per_day": 500000
+    },
+    "groq/whisper-large-v3-turbo": {
+      "requests_per_minute": 20,
+      "requests_per_day": 2000,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "groq/openai/gpt-oss-120b": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 8000,
+      "tokens_per_day": 200000
+    },
+    "groq/canopylabs/orpheus-v1-english": {
+      "requests_per_minute": 10,
+      "requests_per_day": 100,
+      "tokens_per_minute": 1200,
+      "tokens_per_day": 3600
+    },
+    "groq/qwen/qwen3.6-27b": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 8000,
+      "tokens_per_day": 200000
+    },
+    "groq/allam-2-7b": {
+      "requests_per_minute": 30,
+      "requests_per_day": 7000,
+      "tokens_per_minute": 6000,
+      "tokens_per_day": 500000
+    },
+    "groq/llama-3.3-70b-versatile": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 12000,
+      "tokens_per_day": 100000
+    },
+    "groq/meta-llama/llama-prompt-guard-2-22m": {
+      "requests_per_minute": 30,
+      "requests_per_day": 14400,
+      "tokens_per_minute": 15000,
+      "tokens_per_day": 500000
+    },
+    "groq/openai/gpt-oss-safeguard-20b": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 8000,
+      "tokens_per_day": 200000
+    },
+    "groq/qwen/qwen3-32b": {
+      "requests_per_minute": 60,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 6000,
+      "tokens_per_day": 500000
+    },
+    "groq/meta-llama/llama-4-scout-17b-16e-instruct": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 30000,
+      "tokens_per_day": 500000
+    },
+    "groq/whisper-large-v3": {
+      "requests_per_minute": 20,
+      "requests_per_day": 2000,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    },
+    "groq/canopylabs/orpheus-arabic-saudi": {
+      "requests_per_minute": 10,
+      "requests_per_day": 100,
+      "tokens_per_minute": 1200,
+      "tokens_per_day": 3600
+    },
+    "groq/llama-3.1-8b-instant": {
+      "requests_per_minute": 30,
+      "requests_per_day": 14400,
+      "tokens_per_minute": 6000,
+      "tokens_per_day": 500000
+    },
+    "groq/groq/compound": {
+      "requests_per_minute": 30,
+      "requests_per_day": 250,
+      "tokens_per_minute": 70000,
+      "tokens_per_day": null
+    },
     "zhipu/glm-4.5-flash": {
       "requests_per_minute": null,
       "requests_per_day": null,
@@ -1141,12 +1276,35 @@
       "tokens_per_day": null
     }
   },
-  "probe_cost": false,
-  "autoremove_believed_free": false,
-  "probe_frequency_days": 0,
-  "update_believed_free_on_startup": false,
-  "sync_believed_free_on_startup": true,
-  "pr_providers_list": false,
+  "free_tier": {
+    "sync_on_startup": true,
+    "update_on_startup": false,
+    "probe": {
+      "enabled": false,
+      "autoremove": false,
+      "frequency_days": 0
+    }
+  },
+  "providers_pr": {
+    "enabled": false,
+    "repo": null,
+    "base": "main",
+    "branch": "llmproxy-auto/providers",
+    "token": null
+  },
+  "fusion": {
+    "enabled": true,
+    "panel": null,
+    "panel_size": 4,
+    "diversity": "provider",
+    "judge_model": null,
+    "synthesizer_model": null,
+    "allow_paid": true,
+    "report": {
+      "metadata": true
+    },
+    "forced_capability": "restrict"
+  },
   "server": {
     "host": "0.0.0.0",
     "port": 8080,
