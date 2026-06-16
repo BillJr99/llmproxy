@@ -133,7 +133,11 @@ _PER_PROVIDER_DIMENSIONS: tuple[str, ...] = (*_REASONING_LEVELS, *_CAPABILITY_VI
 # Per-candidate timeout for virtual-model cycling so a slow upstream doesn't block all failover.
 _VIRTUAL_CANDIDATE_TIMEOUT: int = 60
 # Extra attempts on the *same* candidate when it returns a transient failure
-# (HTTP 429 / 5xx, timeout, connection error) before cycling to the next one.
+# (HTTP 429 / 5xx, timeout, connection error). To keep cost and latency low,
+# these same-candidate retries are only spent on the LAST candidate — while
+# alternatives remain, a transient failure fails over to the next candidate
+# immediately (no backoff), since trying a different (often free/local) model
+# beats waiting on a rate-limited one. See _candidate_max_attempts.
 _VIRTUAL_MAX_RETRIES: int = 1
 # Backoff (seconds) between those same-candidate retries.
 _VIRTUAL_RETRY_BACKOFF: float = 0.5
@@ -148,7 +152,7 @@ _STREAM_TAIL_BYTES: int = 16384
 # The legacy "llmproxy/" prefix is kept in the membership set so pinned client
 # configs continue to resolve; only the new form is advertised in /v1/models.
 _NEW_VIRTUAL_MODELS: frozenset[str] = frozenset({
-    "llmproxy__free", "llmproxy__local",
+    "llmproxy__free", "llmproxy__local", "llmproxy__loadbalanced",
     *(f"llmproxy__{lvl}" for lvl in _REASONING_LEVELS),
     *(f"llmproxy__{lvl}/free" for lvl in _REASONING_LEVELS),
     *(f"llmproxy__{lvl}/local" for lvl in _REASONING_LEVELS),
@@ -156,7 +160,7 @@ _NEW_VIRTUAL_MODELS: frozenset[str] = frozenset({
     *(f"llmproxy__{cap}/free" for cap in _CAPABILITY_VIRTUALS),
 })
 _LEGACY_VIRTUAL_MODELS: frozenset[str] = frozenset({
-    "llmproxy/free", "llmproxy/local",
+    "llmproxy/free", "llmproxy/local", "llmproxy/loadbalanced",
     *(f"llmproxy/{lvl}" for lvl in _REASONING_LEVELS),
     *(f"llmproxy/{lvl}/free" for lvl in _REASONING_LEVELS),
     *(f"llmproxy/{lvl}/local" for lvl in _REASONING_LEVELS),
@@ -188,6 +192,13 @@ _FREE_VIRTUAL_MODELS: frozenset[str] = frozenset({
 # the request's estimated size and type bias which reasoning tier is tried first.
 _GENERAL_VIRTUAL_MODELS: frozenset[str] = frozenset({
     "llmproxy__free", "llmproxy/free", "llmproxy__local", "llmproxy/local",
+})
+# The cost-tiered "just pick something sensible and cheap" virtual. It owns its
+# own ordering (free → local → paid waterfall, optimized per-prompt within each
+# tier), so it is deliberately NOT in _FREE_VIRTUAL_MODELS (whole-pool capacity
+# ordering) nor _GENERAL_VIRTUAL_MODELS (free/local input-aware first-pick).
+_LOADBALANCED_MODELS: frozenset[str] = frozenset({
+    "llmproxy__loadbalanced", "llmproxy/loadbalanced",
 })
 
 # Maps proxy display ID -> (provider_name, upstream_id).
@@ -1352,6 +1363,23 @@ def list_models() -> Response:
     with _model_route_cache_lock:
         snapshot = dict(_model_route_cache)
     synthetic: list[dict] = []
+    # The cost-tiered default: advertised whenever any virtual-eligible model
+    # exists, since it spans the whole pool (free → local → paid).
+    if any(
+        _provider_exposes_to_virtual_models(cfg)
+        for pn, _ in snapshot.values()
+        if (cfg := get_provider(config, pn))
+    ):
+        synthetic.append({
+            "id": "llmproxy__loadbalanced",
+            "object": "model",
+            "owned_by": "llmproxy",
+            "name": "llmproxy__loadbalanced",
+            "_note": "Virtual model: cost-tiered waterfall — prefers free-tier "
+                     "(with session capacity), then local, then the cheapest "
+                     "capable paid model, optimized per request. Fails over "
+                     "silently to keep cost near zero.",
+        })
     believed_free = _normalized_believed_free(config)
     has_free = any(
         "free" in uid.lower()
@@ -2235,6 +2263,18 @@ def _sse_prefix_is_error(prefix: bytes) -> bool:
 # Virtual models — shared cycling logic + per-model candidate selectors
 # ---------------------------------------------------------------------------
 
+def _candidate_max_attempts(idx: int, total: int) -> int:
+    """How many times to try one candidate before failing over.
+
+    While alternatives remain (not the last candidate) a transient failure
+    (429/5xx/timeout) fails over *immediately* — one attempt, no backoff — so a
+    rate-limited or flaky upstream never stalls the pipeline when another (often
+    free or local) model could answer now. The last candidate, having no
+    fallback, gets the full ``_VIRTUAL_MAX_RETRIES`` same-candidate retries.
+    """
+    return (_VIRTUAL_MAX_RETRIES + 1) if idx == total - 1 else 1
+
+
 def _proxy_cycling_non_streaming(
     endpoint: str,
     label: str,
@@ -2250,28 +2290,32 @@ def _proxy_cycling_non_streaming(
     has none), or a 200 whose body is unusable (an error object or no
     ``choices``).  A *transient* failure (HTTP 429/5xx, which also covers the
     502/504 ``_proxy_request`` synthesizes for connection errors and timeouts)
-    is first retried on the same candidate up to ``_VIRTUAL_MAX_RETRIES`` times
-    with a short backoff before moving on.  When every candidate is exhausted
-    the last response is returned so the client still receives the real upstream
-    body rather than a synthesized error.
+    fails over to the next candidate immediately while alternatives remain, and
+    is only retried on the same candidate (up to ``_VIRTUAL_MAX_RETRIES`` times
+    with a short backoff) when it is the last candidate — see
+    ``_candidate_max_attempts``.  When every candidate is exhausted the last
+    response is returned so the client still receives the real upstream body
+    rather than a synthesized error.
 
     ``on_success`` is invoked as ``on_success(provider, model, body)`` with the
     successful response bytes so the caller can record token + cost usage.
     """
     candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
+    total = len(candidates)
     last: Response | None = None
-    for provider_name, provider_cfg, upstream_model in candidates:
+    for idx, (provider_name, provider_cfg, upstream_model) in enumerate(candidates):
         upstream_payload = {**payload, "model": upstream_model}
-        for attempt in range(_VIRTUAL_MAX_RETRIES + 1):
+        max_attempts = _candidate_max_attempts(idx, total)
+        for attempt in range(max_attempts):
             logger.info("  [%s] trying %s/%s", label, provider_name, upstream_model)
             resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, candidate_timeout)
             if resp.status_code < 400 or not _is_transient_status(resp.status_code):
                 break
-            if attempt < _VIRTUAL_MAX_RETRIES:
+            if attempt < max_attempts - 1:
                 logger.warning(
                     "  [%s] %s/%s returned %d, retrying (%d/%d)",
                     label, provider_name, upstream_model, resp.status_code,
-                    attempt + 1, _VIRTUAL_MAX_RETRIES,
+                    attempt + 1, max_attempts - 1,
                 )
                 time.sleep(_VIRTUAL_RETRY_BACKOFF)
         if resp.status_code < 400:
@@ -2316,10 +2360,12 @@ def _proxy_cycling_streaming(
     first streamed chunk — before committing to stream the response, so failed
     upstreams (including a 200 that immediately errors inside the stream) are
     skipped transparently.  A *transient* failure (HTTP 429/5xx, timeout, or
-    connection error) is retried on the same candidate up to
-    ``_VIRTUAL_MAX_RETRIES`` times with a short backoff before moving on.  When
-    all candidates fail the last upstream error body is returned so clients
-    receive the same diagnostic information as the non-streaming path.
+    connection error) fails over to the next candidate immediately while
+    alternatives remain, and is retried on the same candidate (up to
+    ``_VIRTUAL_MAX_RETRIES`` times with a short backoff) only when it is the last
+    candidate — see ``_candidate_max_attempts``.  When all candidates fail the
+    last upstream error body is returned so clients receive the same diagnostic
+    information as the non-streaming path.
 
     Each candidate's ``protocol`` selects its outbound adapter; ``inbound`` (the
     client dialect, default openai) renders the canonical stream. When both are
@@ -2331,10 +2377,12 @@ def _proxy_cycling_streaming(
     """
     candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
     inbound = inbound or get_inbound("openai")
+    total = len(candidates)
     last_error: tuple[bytes, int, str] | None = None
 
-    for provider_name, provider_cfg, upstream_model in candidates:
+    for idx, (provider_name, provider_cfg, upstream_model) in enumerate(candidates):
         upstream_payload = {**payload, "model": upstream_model}
+        max_attempts = _candidate_max_attempts(idx, total)
         base_url = provider_base_url(provider_cfg)
         outbound = get_outbound(provider_cfg.get("protocol"))
         url, headers, body = outbound.build_request(
@@ -2342,16 +2390,17 @@ def _proxy_cycling_streaming(
             stream=True, forwarded_headers=_forwarded_client_headers(),
         )
 
-        # Open the upstream, retrying transient failures on this same candidate.
+        # Open the upstream. Transient failures fail over to the next candidate
+        # immediately unless this is the last one (then same-candidate retries).
         resp = None
-        for attempt in range(_VIRTUAL_MAX_RETRIES + 1):
+        for attempt in range(max_attempts):
             logger.info("  [%s] trying %s/%s  [streaming]", label, provider_name, upstream_model)
             try:
                 resp = requests.post(url, headers=headers, json=body, stream=True, timeout=candidate_timeout)
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-                if attempt < _VIRTUAL_MAX_RETRIES:
+                if attempt < max_attempts - 1:
                     logger.warning("  [%s] %s/%s connect error: %s, retrying (%d/%d)",
-                                   label, provider_name, upstream_model, e, attempt + 1, _VIRTUAL_MAX_RETRIES)
+                                   label, provider_name, upstream_model, e, attempt + 1, max_attempts - 1)
                     time.sleep(_VIRTUAL_RETRY_BACKOFF)
                     continue
                 logger.warning("  [%s] %s/%s error: %s, trying next", label, provider_name, upstream_model, e)
@@ -2363,9 +2412,9 @@ def _proxy_cycling_streaming(
                 break
             if resp.status_code < 400 or not _is_transient_status(resp.status_code):
                 break
-            if attempt < _VIRTUAL_MAX_RETRIES:
+            if attempt < max_attempts - 1:
                 logger.warning("  [%s] %s/%s -> %d, retrying (%d/%d)",
-                               label, provider_name, upstream_model, resp.status_code, attempt + 1, _VIRTUAL_MAX_RETRIES)
+                               label, provider_name, upstream_model, resp.status_code, attempt + 1, max_attempts - 1)
                 resp.close()
                 time.sleep(_VIRTUAL_RETRY_BACKOFF)
 
@@ -2790,6 +2839,160 @@ def _get_capability_free_candidates(cap: str) -> list[tuple[str, dict, str]]:
     return [(pn, pc, um) for pn, pc, um in _get_free_model_candidates() if (pn, um) in cap_set]
 
 
+# — loadbalanced (cost-tiered) candidate selector + ordering —
+
+# Cost tiers, lowest = preferred. Free cloud is tried before local (also $0) so
+# local compute is reserved for when no free cloud capacity is left; paid is the
+# last resort.
+_TIER_FREE, _TIER_LOCAL, _TIER_PAID = 0, 1, 2
+
+
+def _is_loadbalanced_model(model_full: str) -> bool:
+    """True when *model_full* is the cost-tiered loadbalanced virtual model."""
+    return model_full in _LOADBALANCED_MODELS
+
+
+def _get_loadbalanced_candidates() -> list[tuple[str, dict, str]]:
+    """(provider, cfg, upstream) for every virtual-eligible model in the route cache.
+
+    This is the FULL pool — free, local, and paid. Cost tiering happens at
+    ordering time in _loadbalanced_ordered_candidates, not here, so a request can
+    fail over down the waterfall when an upper tier is exhausted or unsuitable.
+    """
+    config = load_config()
+    candidates = []
+    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+        provider_cfg = get_provider(config, provider_name)
+        if not provider_cfg:
+            continue
+        if not _provider_exposes_to_virtual_models(provider_cfg):
+            continue
+        candidates.append((provider_name, provider_cfg, upstream_id))
+    return candidates
+
+
+def _provider_free_allowance(provider_cfg: dict) -> dict | None:
+    """Return a provider's ``free_allowance`` as a {rpm,rpd,tpm,tpd} dict, or None.
+
+    Best-effort: a provider MAY advertise a provider-wide free quota/session that
+    applies on top of its explicitly-free models. Missing field, non-dict, or all
+    malformed values → None (no provider-wide allowance to claim). Bools are
+    rejected (``True`` is an int subclass) so a stray flag never becomes a limit.
+    """
+    raw = provider_cfg.get("free_allowance")
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, int | None] = {}
+    has_any = False
+    for k in ("requests_per_minute", "requests_per_day", "tokens_per_minute", "tokens_per_day"):
+        v = raw.get(k)
+        if isinstance(v, bool):
+            v = None
+        if isinstance(v, int) and v >= 0:
+            out[k] = v
+            has_any = True
+        else:
+            out[k] = None
+    return out if has_any else None
+
+
+def _provider_free_headroom(provider_name: str, provider_cfg: dict) -> bool:
+    """True when *provider_name* still has provider-wide free-tier headroom now.
+
+    Aggregates this provider's recent request/token usage across all of its
+    cached models and compares it to the configured ``free_allowance`` via
+    _capacity_score. Returns False when no allowance is configured (nothing to
+    claim as free) or when it is exhausted in the current window. Best-effort:
+    counters are per-worker, so this is "as far as we can tell in the moment".
+    """
+    allowance = _provider_free_allowance(provider_cfg)
+    if allowance is None:
+        return False
+    used_min = used_day = used_tok_min = used_tok_day = 0
+    for _proxy_id, (pn, upstream_id) in _get_route_cache_snapshot().items():
+        if pn != provider_name:
+            continue
+        key = f"{pn}/{upstream_id}".lower()
+        m, d = _get_usage_snapshot(key)
+        tm, td = _get_token_snapshot(key)
+        used_min += m
+        used_day += d
+        used_tok_min += tm
+        used_tok_day += td
+    return _capacity_score(used_min, used_day, allowance, used_tok_min, used_tok_day) > 0.0
+
+
+def _cost_tier(provider_name: str, upstream_id: str, provider_cfg: dict, config: dict) -> int:
+    """Classify a model into a cost tier: 0=free, 1=local, 2=paid.
+
+    Local models are $0 but kept in their own tier so free *cloud* models are
+    preferred first (local compute is reserved for when free cloud is exhausted).
+    A non-local, non-``believed_free`` model counts as free (0) only while its
+    provider still has ``free_allowance`` headroom right now; once exhausted it
+    falls back to paid (2).
+    """
+    if _is_local_url(provider_base_url(provider_cfg)):
+        return _TIER_LOCAL
+    if _is_model_free(provider_name, upstream_id, config):
+        return _TIER_FREE
+    if _provider_free_headroom(provider_name, provider_cfg):
+        return _TIER_FREE
+    return _TIER_PAID
+
+
+def _loadbalanced_ordered_candidates(
+    candidates: list[tuple[str, dict, str]],
+    payload: dict,
+    config: dict,
+) -> list[tuple[str, dict, str]]:
+    """Order candidates as a cost waterfall: free → local → paid.
+
+    Cost tier is the dominant (outer) key — a paid model is NEVER ordered before
+    a free or local one, so cost-avoidance always wins and paid stays a true last
+    resort (failover, which is silent and robust, handles feasibility). Within
+    each tier candidates are optimized for *this* prompt exactly like the cloud
+    tier: reasoning/size fit then capability match (applied as stable sorts so
+    capability dominates, fit breaks its ties), over a tier base order — free →
+    most session quota first, local → rotated for spread, paid → cheapest first.
+    """
+    tiers: dict[int, list[tuple[str, dict, str]]] = {
+        _TIER_FREE: [], _TIER_LOCAL: [], _TIER_PAID: [],
+    }
+    for pn, pc, um in candidates:
+        tiers[_cost_tier(pn, um, pc, config)].append((pn, pc, um))
+
+    free_limits = _get_normalized_free_limits(config)
+    pricing = load_pricing_map()
+    needed = _needed_capabilities(payload)
+    cap_map = _model_capabilities(config)
+    reasoning_map = _get_model_reasoning(config)
+    target_tier = _target_reasoning_tier(payload)
+
+    def _price(c: tuple[str, dict, str]) -> float:
+        pn, _pc, um = c
+        prices = pricing.get(f"{pn}/{um}".lower()) or pricing.get(um.lower())
+        if not prices:
+            return float("inf")  # unknown price sorts last but is still tried
+        return sum(prices)
+
+    ordered: list[tuple[str, dict, str]] = []
+    for tier in (_TIER_FREE, _TIER_LOCAL, _TIER_PAID):
+        bucket = tiers[tier]
+        if not bucket:
+            continue
+        if tier == _TIER_FREE:
+            bucket = _capacity_ordered_candidates(bucket, free_limits)
+        elif tier == _TIER_LOCAL:
+            bucket = _cycling_candidates(bucket)
+        else:
+            bucket = sorted(bucket, key=_price)
+        bucket = _order_by_reasoning_fit(bucket, target_tier, reasoning_map)
+        if needed:
+            bucket = _order_by_capability(bucket, needed, cap_map)
+        ordered.extend(bucket)
+    return ordered
+
+
 def _strip_virtual_prefix(model_full: str) -> str:
     """Strip the leading "llmproxy__" or legacy "llmproxy/" virtual-model prefix."""
     if model_full.startswith("llmproxy__"):
@@ -2901,6 +3104,8 @@ def _get_virtual_candidates(model_full: str) -> list[tuple[str, dict, str]]:
     if split is not None:
         return _get_provider_virtual_candidates(*split)
     name = _strip_virtual_prefix(model_full)
+    if name == "loadbalanced":
+        return _get_loadbalanced_candidates()
     if name == "free":
         return _get_free_model_candidates()
     if name == "local":
@@ -3016,6 +3221,8 @@ def _virtual_model_hint(model_full: str) -> str:
             return f"Tag at least one of provider '{provider_name}'s models with '{dim}' in config['model_reasoning']."
         return f"Tag at least one of provider '{provider_name}'s models with '{dim}' in config['model_capabilities']."
     name = _strip_virtual_prefix(model_full)
+    if name == "loadbalanced":
+        return "Check that at least one provider exposes any model to virtual routing."
     if name == "free":
         return (
             "Check that at least one provider exposes a free-tier model "
@@ -3476,7 +3683,12 @@ def _proxy_endpoint(
                 + _virtual_model_hint(model_full),
                 status=503,
             )
-        if _is_free_virtual_model(model_full):
+        if _is_loadbalanced_model(model_full):
+            # Cost waterfall (free → local → paid), optimized per-prompt within
+            # each tier. Owns its full ordering, so the capability/reasoning
+            # passes below are stable no-ops over it.
+            ordered = _loadbalanced_ordered_candidates(candidates, payload, config)
+        elif _is_free_virtual_model(model_full):
             free_limits = _get_normalized_free_limits(config)
             ordered = _capacity_ordered_candidates(candidates, free_limits)
         else:

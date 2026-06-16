@@ -28,6 +28,22 @@ def test_free_chat_models_emitted(fixtures_dir: Path, monkeypatch):
 
 
 @responses.activate
+def test_paid_models_carry_per_token_pricing(fixtures_dir: Path, monkeypatch):
+    _set_key(monkeypatch)
+    body = (fixtures_dir / "together_models.json").read_text()
+    responses.add(responses.GET, TOGETHER_URL, body=body, status=200,
+                  content_type="application/json")
+    by_id = {e.model_id: e for e in TogetherSource().fetch()}
+    # Together quotes prices per 1M tokens (3.5) → convert to per token (3.5e-6).
+    assert by_id["together/meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo"].pricing == {
+        "input_cost_per_token": 3.5e-6,
+        "output_cost_per_token": 3.5e-6,
+    }
+    # Free models carry no pricing opinion.
+    assert by_id["together/meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"].pricing is None
+
+
+@responses.activate
 def test_embeddings_dropped(fixtures_dir: Path, monkeypatch):
     _set_key(monkeypatch)
     body = (fixtures_dir / "together_models.json").read_text()

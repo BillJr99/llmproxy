@@ -90,3 +90,37 @@ def test_limits_taken_from_high_confidence_source():
     ]
     out = aggregate(ev, _sidecar("p", []), api_succeeded=set())
     assert out["p"]["limits"]["p/m"]["requests_per_minute"] == 30
+
+
+# ── pricing merge ───────────────────────────────────────────────────────────
+
+def test_pricing_taken_from_high_confidence_source():
+    low = {"input_cost_per_token": 9e-7, "output_cost_per_token": 9e-7}
+    high = {"input_cost_per_token": 1e-7, "output_cost_per_token": 2e-7}
+    ev = [
+        Evidence(provider="p", model_id="p/paid", is_free=False, source="community",
+                 confidence="low", url="u", pricing=low),
+        Evidence(provider="p", model_id="p/paid", is_free=False, source="openrouter",
+                 confidence="high", url="u", pricing=high),
+    ]
+    out = aggregate(ev, _sidecar("p", []), api_succeeded=set())
+    assert out["p"]["pricing"]["p/paid"] == high
+
+
+def test_zero_pricing_is_not_emitted():
+    # A zero-cost record belongs in believed_free, never the paid pricing block.
+    ev = [Evidence(provider="p", model_id="p/free", is_free=True, source="openrouter",
+                   confidence="high", url="u",
+                   pricing={"input_cost_per_token": 0.0, "output_cost_per_token": 0.0})]
+    out = aggregate(ev, _sidecar("p", []), api_succeeded=set())
+    assert out["p"]["pricing"] == {}
+
+
+def test_pricing_skipped_for_believed_free_model():
+    # Even if a source reports a price, a model that is (becoming) free carries no
+    # paid price.
+    ev = [Evidence(provider="p", model_id="p/m", is_free=True, source="openrouter",
+                   confidence="high", url="u",
+                   pricing={"input_cost_per_token": 1e-7, "output_cost_per_token": 1e-7})]
+    out = aggregate(ev, _sidecar("p", ["p/m"]), api_succeeded=set())
+    assert out["p"]["pricing"] == {}
