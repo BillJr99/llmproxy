@@ -881,8 +881,7 @@
     ],
     "openrouter/openai/gpt-oss-20b:free": [
       "tools",
-      "reasoning",
-      "json"
+      "reasoning"
     ],
     "openrouter/nvidia/nemotron-nano-9b-v2:free": [
       "tools",
@@ -1142,35 +1141,12 @@
       "tokens_per_day": null
     }
   },
-  "free_tier": {
-    "sync_on_startup": true,
-    "update_on_startup": false,
-    "probe": {
-      "enabled": false,
-      "autoremove": false,
-      "frequency_days": 0
-    }
-  },
-  "providers_pr": {
-    "enabled": false,
-    "repo": null,
-    "base": "main",
-    "branch": "llmproxy-auto/providers",
-    "token": null
-  },
-  "fusion": {
-    "enabled": true,
-    "panel": null,
-    "panel_size": 4,
-    "diversity": "provider",
-    "judge_model": null,
-    "synthesizer_model": null,
-    "allow_paid": true,
-    "report": {
-      "metadata": true
-    },
-    "forced_capability": "restrict"
-  },
+  "probe_cost": false,
+  "autoremove_believed_free": false,
+  "probe_frequency_days": 0,
+  "update_believed_free_on_startup": false,
+  "sync_believed_free_on_startup": true,
+  "pr_providers_list": false,
   "server": {
     "host": "0.0.0.0",
     "port": 8080,
