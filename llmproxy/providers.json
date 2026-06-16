@@ -552,16 +552,48 @@
       "key_required": true,
       "key_hint": "Get your API key at console.groq.com/keys",
       "believed_free": [
+        "groq/allam-2-7b",
+        "groq/canopylabs/orpheus-arabic-saudi",
+        "groq/canopylabs/orpheus-v1-english",
         "groq/gemma2-9b-it",
+        "groq/groq/compound",
+        "groq/groq/compound-mini",
+        "groq/llama-3.1-8b-instant",
+        "groq/llama-3.3-70b-versatile",
         "groq/llama-4-scout-17b-16e-instruct",
-        "groq/mixtral-8x7b-32768"
+        "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+        "groq/meta-llama/llama-prompt-guard-2-22m",
+        "groq/meta-llama/llama-prompt-guard-2-86m",
+        "groq/mixtral-8x7b-32768",
+        "groq/openai/gpt-oss-120b",
+        "groq/openai/gpt-oss-20b",
+        "groq/openai/gpt-oss-safeguard-20b",
+        "groq/qwen/qwen3-32b",
+        "groq/qwen/qwen3.6-27b",
+        "groq/whisper-large-v3",
+        "groq/whisper-large-v3-turbo"
       ],
       "model_reasoning": {
         "groq/llama-3.3-70b-versatile": "standard",
         "groq/llama-4-scout-17b-16e-instruct": "standard",
         "groq/llama-3.1-8b-instant": "exploratory",
         "groq/mixtral-8x7b-32768": "standard",
-        "groq/gemma2-9b-it": "exploratory"
+        "groq/gemma2-9b-it": "exploratory",
+        "groq/allam-2-7b": "exploratory",
+        "groq/canopylabs/orpheus-arabic-saudi": "exploratory",
+        "groq/canopylabs/orpheus-v1-english": "exploratory",
+        "groq/groq/compound": "exploratory",
+        "groq/groq/compound-mini": "exploratory",
+        "groq/meta-llama/llama-4-scout-17b-16e-instruct": "standard",
+        "groq/meta-llama/llama-prompt-guard-2-22m": "exploratory",
+        "groq/meta-llama/llama-prompt-guard-2-86m": "exploratory",
+        "groq/openai/gpt-oss-120b": "deep",
+        "groq/openai/gpt-oss-20b": "standard",
+        "groq/openai/gpt-oss-safeguard-20b": "standard",
+        "groq/qwen/qwen3-32b": "standard",
+        "groq/qwen/qwen3.6-27b": "standard",
+        "groq/whisper-large-v3": "standard",
+        "groq/whisper-large-v3-turbo": "standard"
       },
       "model_capabilities": {
         "groq/llama-4-scout-17b-16e-instruct": [
@@ -591,6 +623,108 @@
           "requests_per_minute": 30,
           "requests_per_day": 14400,
           "tokens_per_minute": null,
+          "tokens_per_day": null
+        },
+        "groq/groq/compound-mini": {
+          "requests_per_minute": 30,
+          "requests_per_day": 250,
+          "tokens_per_minute": 70000,
+          "tokens_per_day": null
+        },
+        "groq/openai/gpt-oss-20b": {
+          "requests_per_minute": 30,
+          "requests_per_day": 1000,
+          "tokens_per_minute": 8000,
+          "tokens_per_day": 200000
+        },
+        "groq/meta-llama/llama-prompt-guard-2-86m": {
+          "requests_per_minute": 30,
+          "requests_per_day": 14400,
+          "tokens_per_minute": 15000,
+          "tokens_per_day": 500000
+        },
+        "groq/whisper-large-v3-turbo": {
+          "requests_per_minute": 20,
+          "requests_per_day": 2000,
+          "tokens_per_minute": null,
+          "tokens_per_day": null
+        },
+        "groq/openai/gpt-oss-120b": {
+          "requests_per_minute": 30,
+          "requests_per_day": 1000,
+          "tokens_per_minute": 8000,
+          "tokens_per_day": 200000
+        },
+        "groq/canopylabs/orpheus-v1-english": {
+          "requests_per_minute": 10,
+          "requests_per_day": 100,
+          "tokens_per_minute": 1200,
+          "tokens_per_day": 3600
+        },
+        "groq/qwen/qwen3.6-27b": {
+          "requests_per_minute": 30,
+          "requests_per_day": 1000,
+          "tokens_per_minute": 8000,
+          "tokens_per_day": 200000
+        },
+        "groq/allam-2-7b": {
+          "requests_per_minute": 30,
+          "requests_per_day": 7000,
+          "tokens_per_minute": 6000,
+          "tokens_per_day": 500000
+        },
+        "groq/llama-3.3-70b-versatile": {
+          "requests_per_minute": 30,
+          "requests_per_day": 1000,
+          "tokens_per_minute": 12000,
+          "tokens_per_day": 100000
+        },
+        "groq/meta-llama/llama-prompt-guard-2-22m": {
+          "requests_per_minute": 30,
+          "requests_per_day": 14400,
+          "tokens_per_minute": 15000,
+          "tokens_per_day": 500000
+        },
+        "groq/openai/gpt-oss-safeguard-20b": {
+          "requests_per_minute": 30,
+          "requests_per_day": 1000,
+          "tokens_per_minute": 8000,
+          "tokens_per_day": 200000
+        },
+        "groq/qwen/qwen3-32b": {
+          "requests_per_minute": 60,
+          "requests_per_day": 1000,
+          "tokens_per_minute": 6000,
+          "tokens_per_day": 500000
+        },
+        "groq/meta-llama/llama-4-scout-17b-16e-instruct": {
+          "requests_per_minute": 30,
+          "requests_per_day": 1000,
+          "tokens_per_minute": 30000,
+          "tokens_per_day": 500000
+        },
+        "groq/whisper-large-v3": {
+          "requests_per_minute": 20,
+          "requests_per_day": 2000,
+          "tokens_per_minute": null,
+          "tokens_per_day": null
+        },
+        "groq/canopylabs/orpheus-arabic-saudi": {
+          "requests_per_minute": 10,
+          "requests_per_day": 100,
+          "tokens_per_minute": 1200,
+          "tokens_per_day": 3600
+        },
+        "groq/llama-3.1-8b-instant": {
+          "requests_per_minute": 30,
+          "requests_per_day": 14400,
+          "tokens_per_minute": 6000,
+          "tokens_per_day": 500000
+        },
+        "groq/groq/compound": {
+          "requests_per_minute": 30,
+          "requests_per_day": 250,
+          "tokens_per_minute": 70000,
           "tokens_per_day": null
         }
       },
@@ -1004,7 +1138,8 @@
         ],
         "openrouter/openai/gpt-oss-20b:free": [
           "tools",
-          "reasoning"
+          "reasoning",
+          "json"
         ],
         "openrouter/nvidia/nemotron-nano-9b-v2:free": [
           "tools",
