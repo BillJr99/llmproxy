@@ -80,6 +80,40 @@ def test_reasoning_values_are_valid(pkey):
         )
 
 
+def test_pricing_block_shape():
+    """The top-level pricing block: '<provider>/<model>' → two non-negative
+    per-token costs. Guards the loadbalanced paid-tier ranking input."""
+    pricing = SIDE.get("pricing", {})
+    assert isinstance(pricing, dict)
+    for key, val in pricing.items():
+        assert isinstance(key, str) and "/" in key, f"bad pricing key {key!r}"
+        assert key == key.lower(), f"pricing key not lowercased: {key!r}"
+        assert set(val.keys()) == {"input_cost_per_token", "output_cost_per_token"}, (
+            f"{key} pricing keys {set(val.keys())} unexpected"
+        )
+        for k, v in val.items():
+            assert isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0, (
+                f"{key}.{k} must be a non-negative number, got {v!r}"
+            )
+
+
+@pytest.mark.parametrize("pkey", list(SIDE["providers"].keys()))
+def test_free_allowance_has_canonical_shape(pkey):
+    """When a provider declares a provider-wide free_allowance it must use the
+    same 4-key int|null shape as free_limits."""
+    prov = SIDE["providers"][pkey]
+    allowance = prov.get("free_allowance")
+    if allowance is None:
+        return
+    assert set(allowance.keys()) == set(FREE_LIMIT_KEYS), (
+        f"{pkey}.free_allowance keys {set(allowance.keys())} != {set(FREE_LIMIT_KEYS)}"
+    )
+    for k, v in allowance.items():
+        assert v is None or (isinstance(v, int) and not isinstance(v, bool)), (
+            f"{pkey}.free_allowance.{k} must be int|null, got {type(v).__name__}={v!r}"
+        )
+
+
 @pytest.mark.parametrize("pkey", list(SIDE["providers"].keys()))
 def test_template_required_fields(pkey):
     prov = SIDE["providers"][pkey]

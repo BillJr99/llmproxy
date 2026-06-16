@@ -150,6 +150,7 @@ The families are:
 
 | Family                    | Examples                                              | Pool |
 |---------------------------|------------------------------------------------------|------|
+| Cost-tiered (default)     | `llmproxy__loadbalanced`                             | The whole pool, walked free → local → paid |
 | General                   | `llmproxy__free`, `llmproxy__local`                  | All free / all localhost-served models |
 | Reasoning level           | `llmproxy__exploratory`, `llmproxy__standard`, `llmproxy__deep` (+ `/free`, `/local`) | Models tagged at that reasoning tier |
 | Capability                | `llmproxy__tools`, `llmproxy__vision` (+ `/free`)    | Models tagged with that capability |
@@ -275,6 +276,45 @@ drops a candidate, so failover behavior is unchanged. It needs no configuration 
 thresholds live in `server.py` (`_TIER_SMALL_MAX_TOKENS`, `_TIER_MEDIUM_MAX_TOKENS`).
 The categorized families (`llmproxy__deep/free`, `llmproxy__tools`, …) already encode
 intent and are untouched.
+
+### The `loadbalanced` virtual model
+
+`llmproxy__loadbalanced` (legacy `llmproxy/loadbalanced`) is the "just pick
+something sensible and cheap" default. For each request it inspects what the
+prompt needs (tools / vision / explicit thinking, plus its size) and walks a
+**cost waterfall**, keeping spend at or near zero:
+
+1. **Free-tier cloud** models first — ordered by remaining session capacity, so a
+   model with quota left (see [`free_limits`](#free_limits)) is preferred and load
+   is spread. A provider that grants a provider-wide free quota/session is also
+   treated as free *while that allowance has headroom* (see
+   [`free_allowance`](#free_allowance)).
+2. **Local** models next — also $0, but kept a step below free *cloud* so local
+   compute is reserved for when free cloud is exhausted. Local models are ranked
+   for the request exactly like the cloud tier: a short prompt prefers a small,
+   fast model; a large or `reasoning_effort: "high"` prompt prefers a bigger,
+   deeper one (using [`model_reasoning`](#reasoning-level-virtual-models) tags).
+3. **Cheapest capable paid** model as a last resort — only reached when no free
+   or local model can serve the request. Among paid candidates the least
+   expensive (per the [`pricing`](#configuration) block) is tried first.
+
+Cost is the dominant rule: a paid model is **never** tried before a free or local
+one, even when only a paid model is tagged for a needed capability — failover is
+silent and robust, so the free/local attempts are made first and the request only
+falls through to paid if they can't answer. Transient failures (HTTP 429/5xx,
+timeouts) **fail over immediately** to the next candidate down the waterfall while
+alternatives remain (see [cycling & failover](#how-cycling--failover-works)), so a
+rate-limited free model never stalls the request.
+
+```bash
+# Keep costs near zero; let llmproxy choose a reasonable model per request.
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "llmproxy__loadbalanced", "messages": [{"role": "user", "content": "Hello!"}]}'
+```
+
+`llmproxy__loadbalanced` appears in `GET /v1/models` whenever at least one model
+is exposed to virtual routing.
 
 ### Reasoning-level virtual models
 
@@ -748,6 +788,37 @@ one that hit its request cap, which keeps traffic inside the free tier for
 providers that meter by tokens. Any field set to `null` is ignored. Counters are
 in-memory and **per worker process** (see the note on multi-worker below).
 
+<a name="free_allowance"></a>
+### `free_allowance` — provider-wide free quota ("free in the moment")
+
+Some providers grant a **provider-wide** free allowance or session that applies
+across their models, on top of any explicitly free models. `free_allowance` is an
+**optional** per-provider object (inside a provider's block in `config.json` /
+`providers.json`) using the same four keys as `free_limits`:
+
+```json
+"providers": {
+  "someprovider": {
+    "base_url": "https://api.someprovider.example/v1",
+    "free_allowance": {
+      "requests_per_minute": 20,
+      "requests_per_day": 200,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
+    }
+  }
+}
+```
+
+The cost-tiered [`llmproxy__loadbalanced`](#the-loadbalanced-virtual-model) virtual
+uses it to decide what counts as free *right now*: while the provider's aggregated
+recent usage is within this allowance, its models are treated as **free** (tried
+before paid); once the allowance is exhausted in the current window they fall back
+to the **paid** tier. This is best-effort — counters are in-memory and per worker
+process — so it is "as far as we can tell in the moment". Any field set to `null`
+is ignored; a provider with no `free_allowance` simply never gains free-in-the-
+moment status.
+
 <a name="usage-accounting"></a>
 ### Token + cost accounting — `GET /v1/usage`
 
@@ -1110,12 +1181,21 @@ for human review.
 
 | Source       | Confidence | What it does |
 |--------------|------------|--------------|
-| `openrouter` | high       | Hits `https://openrouter.ai/api/v1/models` and flags any model with `pricing.prompt == 0` as free. |
+| `openrouter` | high       | Hits `https://openrouter.ai/api/v1/models` and flags any model with `pricing.prompt == 0` as free; also reports per-token prices for paid models into the sidecar `pricing` block. |
 | `docs`       | high       | Per-provider HTML scrapers for published rate-limit / free-tier pages (Google, Groq, Cerebras, Mistral, Cohere). Add more under `scripts/sources/docs/`. |
 | `api`        | medium     | Calls each provider's OpenAI-compatible `/v1/models` endpoint when `<PROVIDER>_API_KEY` is set in your environment. Used to detect *removals* (a believed-free model that's no longer listed). |
 | `litellm_cost_map` | medium | Reads the public [litellm](https://github.com/BerriAI/litellm) pricing map: flags zero-priced models as free **and** snapshots per-token prices for paid ones into the sidecar `pricing` block (used by the proxy to cost tokens offline — see [Token + cost accounting](#usage-accounting)). |
+| `together`   | high       | When `TOGETHER_API_KEY` is set, reads Together's `/v1/models` pricing — zero-priced models are free; paid models contribute per-token prices to the `pricing` block. |
 | `community`  | low        | Pulls the [tashfeenahmed/freellmapi](https://github.com/tashfeenahmed/freellmapi) community list as a sanity signal. |
 | `probe`      | high · **opt-in** | Sends a tiny real chat request to each `believed_free` model and flags any that report a cost. Off by default; enable with `probe_cost: true` in `config.json` or the `--probe` flag. Spends a little quota. |
+
+The top-level **`pricing`** block is assembled from several of these sources: the
+litellm cost map provides broad baseline coverage, and high-confidence live
+provider sources (OpenRouter, Together) override individual models with their
+authoritative per-token prices. The result powers offline cost accounting and the
+[`llmproxy__loadbalanced`](#the-loadbalanced-virtual-model) paid-tier ranking, and
+is committed alongside `believed_free` in the same providers.json refresh (and the
+[automated PR](#keeping-the-free-models-list-current), when enabled).
 
 ### Usage
 

@@ -155,14 +155,37 @@ def test_failover_on_empty_choices(server, monkeypatch):
     assert b"ok" in resp.get_data()
 
 
-def test_transient_retry_same_candidate(server, monkeypatch):
+def test_transient_fails_over_immediately_when_alternatives_remain(server, monkeypatch):
+    # A 429/5xx with another candidate available must fail over at once (no
+    # same-candidate retry) so a rate-limited model never stalls the pipeline.
+    calls: list[str] = []
+    monkeypatch.setattr(server.time, "sleep", lambda _s: None)
+
+    def fake(endpoint, pn, cfg, payload, timeout):
+        calls.append(payload["model"])
+        if payload["model"] == "m1":
+            return _json_resp({"error": "overloaded"}, status=503)
+        return _json_resp(_OK)
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    candidates = [("p1", {}, "m1"), ("p2", {}, "m2")]
+    resp = server._proxy_cycling_non_streaming("chat/completions", "t", candidates, {}, 5)
+    assert calls == ["m1", "m2"]  # m1 tried once, immediately failed over to m2
+    assert resp.status_code == 200
+
+
+def test_transient_retry_only_on_last_candidate(server, monkeypatch):
+    # The last candidate has no fallback, so it gets the same-candidate retries.
     calls: list[str] = []
     state = {"first": True}
     monkeypatch.setattr(server.time, "sleep", lambda _s: None)
 
     def fake(endpoint, pn, cfg, payload, timeout):
         calls.append(payload["model"])
-        if payload["model"] == "m1" and state["first"]:
+        # m1 (not last) always 503; m2 (last) 503 once then succeeds.
+        if payload["model"] == "m1":
+            return _json_resp({"error": "overloaded"}, status=503)
+        if payload["model"] == "m2" and state["first"]:
             state["first"] = False
             return _json_resp({"error": "overloaded"}, status=503)
         return _json_resp(_OK)
@@ -170,7 +193,7 @@ def test_transient_retry_same_candidate(server, monkeypatch):
     monkeypatch.setattr(server, "_proxy_request", fake)
     candidates = [("p1", {}, "m1"), ("p2", {}, "m2")]
     resp = server._proxy_cycling_non_streaming("chat/completions", "t", candidates, {}, 5)
-    assert calls == ["m1", "m1"]  # retried the SAME candidate, then it succeeded
+    assert calls == ["m1", "m2", "m2"]  # m1 once, then m2 retried on itself
     assert resp.status_code == 200
 
 

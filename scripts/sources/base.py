@@ -28,6 +28,11 @@ class Evidence:
     # Capabilities the model supports, e.g. ["tools", "vision", "reasoning", "json"].
     # None = the source has no opinion (don't touch existing capability metadata).
     capabilities: list[str] | None = None
+    # Per-token USD pricing for a PAID model, as
+    # {"input_cost_per_token": float, "output_cost_per_token": float}.
+    # None = the source has no pricing opinion. Sources should set this only for
+    # non-zero-priced models (zero cost is captured by believed_free instead).
+    pricing: dict | None = None
     notes: str = ""
 
 

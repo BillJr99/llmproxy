@@ -43,6 +43,7 @@ class OpenRouterSource(Source):
                 confidence="high",
                 url=self.url,
                 capabilities=_capabilities(model),
+                pricing=_pricing(prompt_price, completion_price),
                 notes=f"prompt={pricing.get('prompt')!r} completion={pricing.get('completion')!r}",
             ))
         return out
@@ -70,6 +71,24 @@ def _capabilities(model: dict) -> list[str]:
     if "structured_outputs" in supported or "response_format" in supported:
         caps.append("json")
     return caps
+
+
+def _pricing(prompt_price: float, completion_price: float) -> dict | None:
+    """Build a pricing record for a PAID model, or None when free/unknown.
+
+    Zero-priced models are captured by believed_free, not the pricing block, so
+    they contribute no pricing opinion. ``inf`` means OpenRouter omitted/garbled
+    the price — also no opinion.
+    """
+    in_ok = prompt_price != float("inf")
+    out_ok = completion_price != float("inf")
+    if not in_ok and not out_ok:
+        return None
+    in_cost = prompt_price if in_ok else 0.0
+    out_cost = completion_price if out_ok else 0.0
+    if in_cost == 0.0 and out_cost == 0.0:
+        return None
+    return {"input_cost_per_token": in_cost, "output_cost_per_token": out_cost}
 
 
 def _to_float(v) -> float:

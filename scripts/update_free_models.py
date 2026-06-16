@@ -149,6 +149,7 @@ def aggregate(
         removes: list[str] = []
         limits: dict[str, dict] = {}
         capabilities: dict[str, list[str]] = {}
+        pricing: dict[str, dict] = {}
 
         # Adds — high-confidence positive, no high-confidence negative.
         candidates = set(by_model[provider_key].keys())
@@ -169,6 +170,17 @@ def aggregate(
                 if e.capabilities is not None:
                     capabilities[model_id] = list(e.capabilities)
                     break
+            # Merge pricing — prefer the highest-confidence record with a pricing
+            # opinion. These per-source paid prices override the broad litellm
+            # baseline; the two are combined in _merge_pricing. A model that is
+            # (or is becoming) believed-free is excluded — free cost belongs in
+            # believed_free, not the paid pricing block.
+            if model_id not in current_free and model_id not in adds:
+                for e in sorted(evs, key=lambda x: 0 if x.confidence == "high" else 1):
+                    norm = _normalize_pricing(e.pricing)
+                    if norm is not None:
+                        pricing[model_id] = norm
+                        break
 
         # Removes — high-confidence negative OR absent from a successful
         # /v1/models fetch (only for providers where api_succeeded).
@@ -188,6 +200,7 @@ def aggregate(
             "remove": sorted(set(removes)),
             "limits": limits,
             "capabilities": capabilities,
+            "pricing": pricing,
         }
     return out
 
@@ -204,12 +217,39 @@ def _normalize_limits(raw: dict) -> dict:
     return out
 
 
+def _normalize_pricing(raw: dict | None) -> dict | None:
+    """Validate a per-token pricing record into the canonical 2-key shape.
+
+    Returns ``{input_cost_per_token, output_cost_per_token}`` with non-negative
+    floats, or None when *raw* is missing/malformed or both prices are zero
+    (zero cost belongs in believed_free, not the paid pricing block). Bools are
+    rejected (``True`` is an int subclass).
+    """
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, float] = {}
+    for k in ("input_cost_per_token", "output_cost_per_token"):
+        v = raw.get(k)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+            out[k] = 0.0
+        else:
+            out[k] = float(v)
+    if out["input_cost_per_token"] == 0.0 and out["output_cost_per_token"] == 0.0:
+        return None
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Apply updates to the sidecar dict
 # ---------------------------------------------------------------------------
 
 def apply_updates(sidecar: dict, updates: dict) -> bool:
-    """Apply updates in-place. Returns True if anything changed."""
+    """Apply updates in-place. Returns True if anything changed.
+
+    Note: the top-level ``pricing`` block is handled separately in
+    :func:`_merge_pricing` (combining the litellm baseline with per-source
+    overrides), not here — ``change['pricing']`` is consumed there.
+    """
     changed = False
     for provider_key, change in updates.items():
         prov = sidecar["providers"].get(provider_key)
@@ -273,23 +313,49 @@ def apply_updates(sidecar: dict, updates: dict) -> bool:
     return changed
 
 
-def _refresh_pricing(sidecar: dict) -> bool:
-    """Fetch the litellm per-token pricing snapshot into sidecar['pricing'].
+def _collect_source_pricing(updates: dict) -> dict[str, dict]:
+    """Flatten per-provider live pricing from ``aggregate`` into one block.
 
-    Returns True if the block changed. Network/parse failures are non-fatal —
-    a stale pricing block is better than aborting the whole run.
+    Returns ``<provider>/<model>`` (lowercased) → {input_cost_per_token,
+    output_cost_per_token} for every paid model a high-confidence live source
+    priced. These override the broad litellm baseline in :func:`_merge_pricing`.
     """
-    try:
-        pricing = fetch_pricing_map()
-    except Exception as exc:  # noqa: BLE001
-        print(_warn(f"  pricing snapshot refresh failed: {exc}"))
+    out: dict[str, dict] = {}
+    for change in updates.values():
+        for model_id, price in change.get("pricing", {}).items():
+            out[model_id.lower()] = price
+    return out
+
+
+def _merge_pricing(sidecar: dict, updates: dict, litellm_ran: bool) -> bool:
+    """Combine the litellm baseline with per-source overrides into sidecar['pricing'].
+
+    The baseline gives breadth (many providers); the high-confidence live sources
+    (OpenRouter, Together, …) override individual models. When the litellm map
+    could not be fetched this run, the existing block is kept as the baseline so a
+    transient outage never wipes pricing. Returns True if the block changed.
+    Network/parse failures are non-fatal — stale pricing beats aborting the run.
+    """
+    existing = sidecar.get("pricing")
+    if not isinstance(existing, dict):
+        existing = {}
+    baseline = existing
+    if litellm_ran:
+        try:
+            baseline = fetch_pricing_map()
+        except Exception as exc:  # noqa: BLE001
+            print(_warn(f"  pricing baseline refresh failed: {exc}"))
+            baseline = existing
+    overrides = _collect_source_pricing(updates)
+    merged = {**baseline, **overrides}
+    final = dict(sorted(merged.items()))
+    if final == existing:
         return False
-    if not pricing:
-        return False
-    if sidecar.get("pricing") == pricing:
-        return False
-    sidecar["pricing"] = dict(sorted(pricing.items()))
-    print(_ok(f"  pricing snapshot: {len(pricing)} model(s)"))
+    sidecar["pricing"] = final
+    print(_ok(
+        f"  pricing: {len(final)} model(s) "
+        f"({len(overrides)} from live source(s))"
+    ))
     return True
 
 
@@ -308,7 +374,8 @@ def print_diff(updates: dict, source_status: dict[str, bool]) -> None:
     print(_h("\n=== Proposed changes ==="))
     any_change = False
     for provider_key, change in sorted(updates.items()):
-        if not (change["add"] or change["remove"] or change["limits"]):
+        pricing = change.get("pricing", {})
+        if not (change["add"] or change["remove"] or change["limits"] or pricing):
             continue
         any_change = True
         print(f"\n  {_h(provider_key)}:")
@@ -318,6 +385,11 @@ def print_diff(updates: dict, source_status: dict[str, bool]) -> None:
             print(_err(f"    - {mid}"))
         for mid, lim in change["limits"].items():
             print(_dim(f"    ~ {mid}  limits: {lim}"))
+        for mid, price in pricing.items():
+            print(_dim(
+                f"    $ {mid}  pricing: in={price['input_cost_per_token']:g} "
+                f"out={price['output_cost_per_token']:g}"
+            ))
     if not any_change:
         print(_dim("  (no changes)"))
 
@@ -876,11 +948,11 @@ def main(argv: list[str] | None = None) -> int:
 
     print_diff(updates, source_status)
 
-    # Refresh the per-token pricing snapshot (used by the proxy to cost tokens
-    # offline) whenever the litellm cost map ran cleanly.
-    pricing_changed = False
-    if source_status.get("litellm_cost_map") and not args.provider:
-        pricing_changed = _refresh_pricing(sidecar)
+    # Refresh the per-token pricing block: litellm baseline (when its map ran
+    # cleanly) combined with the per-source paid prices merged in `updates`. Used
+    # by the proxy to cost tokens offline and to rank the loadbalanced paid tier.
+    litellm_ran = bool(source_status.get("litellm_cost_map")) and not args.provider
+    pricing_changed = _merge_pricing(sidecar, updates, litellm_ran)
 
     if args.dry_run:
         # Reflect the would-be sidecar state in the user-config diff without

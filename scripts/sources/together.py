@@ -78,9 +78,31 @@ class TogetherSource(Source):
                 source=self.name,
                 confidence="high",
                 url=self.url,
+                pricing=_pricing(in_cost, out_cost),
                 notes=f"input={pricing.get('input')!r} output={pricing.get('output')!r}",
             ))
         return out
+
+
+# Together expresses prices per 1M tokens; providers.json pricing is per token.
+_PER_MILLION = 1_000_000.0
+
+
+def _pricing(in_per_million: float, out_per_million: float) -> dict | None:
+    """Per-token pricing for a PAID model, or None when free/unknown.
+
+    Inputs are Together's per-1M-token prices; convert to per-token. Zero stays
+    in believed_free (no pricing opinion); ``inf`` means the field was missing.
+    """
+    in_ok = in_per_million != float("inf")
+    out_ok = out_per_million != float("inf")
+    if not in_ok and not out_ok:
+        return None
+    in_cost = (in_per_million / _PER_MILLION) if in_ok else 0.0
+    out_cost = (out_per_million / _PER_MILLION) if out_ok else 0.0
+    if in_cost == 0.0 and out_cost == 0.0:
+        return None
+    return {"input_cost_per_token": in_cost, "output_cost_per_token": out_cost}
 
 
 def _to_float(v) -> float:

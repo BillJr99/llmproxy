@@ -92,7 +92,7 @@ if [ "$HAVE_JQ" -eq 1 ]; then
 fi
 has_model() { echo "$ALL_IDS" | grep -qx "$1"; }
 
-for vm in llmproxy__free llmproxy__local llmproxy__tools llmproxy__tools/free llmproxy__vision llmproxy__vision/free llmproxy__fusion llmproxy__fusion/free; do
+for vm in llmproxy__loadbalanced llmproxy__free llmproxy__local llmproxy__tools llmproxy__tools/free llmproxy__vision llmproxy__vision/free llmproxy__fusion llmproxy__fusion/free; do
   if has_model "$vm"; then pass "advertised: $vm"; else skip "not advertised: $vm (no matching tagged models)"; fi
 done
 
@@ -342,6 +342,30 @@ else
   ok2xx "$code" && pass "small prompt routed → $code" || warn "small prompt → $code"
   code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy__free\",\"reasoning_effort\":\"high\",\"messages\":[{\"role\":\"user\",\"content\":\"Think carefully, then answer: 2+2?\"}],\"max_tokens\":16}")
   ok2xx "$code" && pass "thinking request routed → $code" || warn "thinking request → $code"
+fi
+
+# ── cost-tiered loadbalanced virtual ────────────────────────────────────────
+hdr "Loadbalanced (cost waterfall)"
+if ! has_model llmproxy__loadbalanced; then
+  skip "llmproxy__loadbalanced not advertised (no providers exposed to virtual routing)"
+else
+  # Inspect the candidate pool (whole pool: free + local + paid).
+  code=$(req GET "/v1/models/llmproxy__loadbalanced")
+  if ok2xx "$code"; then
+    c=$(jqr '._candidates | length'); pass "GET /v1/models/llmproxy__loadbalanced → $code ${DIM}(${c:-?} candidates)${RST}"
+  else warn "GET /v1/models/llmproxy__loadbalanced → $code"; fi
+
+  # A plain prompt and a 'think hard' prompt should both get a usable reply. The
+  # waterfall prefers free → local → paid and fails over silently, so this checks
+  # that a reasonable model answers, not which tier served it.
+  code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy__loadbalanced\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}")
+  if ok2xx "$code"; then
+    content=$(jqr '.choices[0].message.content')
+    [ -n "$content" ] && pass "plain prompt → $code ${DIM}(replied)${RST}" || fail "plain prompt → $code but empty body"
+  else fail "plain prompt → $code"; fi
+
+  code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy__loadbalanced\",\"reasoning_effort\":\"high\",\"messages\":[{\"role\":\"user\",\"content\":\"Think carefully, then answer: what is 17*23?\"}],\"max_tokens\":64}")
+  ok2xx "$code" && pass "think-hard prompt → $code" || warn "think-hard prompt → $code"
 fi
 
 # ── summary ─────────────────────────────────────────────────────────────────
