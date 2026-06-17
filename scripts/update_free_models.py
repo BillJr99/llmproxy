@@ -110,10 +110,26 @@ def _dim(s: str) -> str: return f"{_DIM}{s}{_RESET}"
 # Aggregation
 # ---------------------------------------------------------------------------
 
+# Config key holding qualified ids the proxy observed reporting a cost at runtime
+# (see server._persist_cost_observed). Treated as a hard "not free" signal here.
+COST_OBSERVED_KEY = "cost_observed_free_tier"
+
+
+def cost_observed_denylist(cfg: dict | None) -> set[str]:
+    """Lowercased set of cost_observed qualified ids from a (user) config dict."""
+    if not isinstance(cfg, dict):
+        return set()
+    raw = cfg.get(COST_OBSERVED_KEY)
+    if not isinstance(raw, list):
+        return set()
+    return {x.lower() for x in raw if isinstance(x, str)}
+
+
 def aggregate(
     evidence: Iterable[Evidence],
     current_sidecar: dict,
     api_succeeded: set[str],
+    denylist: set[str] | None = None,
 ) -> dict:
     """Compute proposed sidecar updates from a flat list of Evidence records.
 
@@ -143,6 +159,7 @@ def aggregate(
 
     out: dict[str, dict] = {}
     providers = current_sidecar["providers"]
+    deny = denylist or set()
 
     for provider_key, prov_cfg in providers.items():
         current_free: list[str] = list(prov_cfg.get("believed_free", []))
@@ -158,6 +175,10 @@ def aggregate(
             evs = by_model[provider_key][model_id]
             high_pos = any(e.confidence == "high" and e.is_free is True for e in evs)
             high_neg = any(e.confidence == "high" and e.is_free is False for e in evs)
+            # A cost was observed for this model at runtime — never (re)add it,
+            # regardless of what the scrape sources claim.
+            if model_id.lower() in deny:
+                high_pos = False
             if high_pos and not high_neg and model_id not in current_free:
                 adds.append(model_id)
             # Merge limits — prefer the highest-confidence non-empty record.
@@ -186,6 +207,9 @@ def aggregate(
         # Removes — high-confidence negative OR absent from a successful
         # /v1/models fetch (only for providers where api_succeeded).
         for model_id in current_free:
+            if model_id.lower() in deny:
+                removes.append(model_id)  # observed paid at runtime
+                continue
             evs = by_model[provider_key].get(model_id, [])
             if any(e.confidence == "high" and e.is_free is False for e in evs):
                 removes.append(model_id)
@@ -517,6 +541,11 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         "_note": note,
         "providers": providers_block,
         "believed_free": believed_free,
+        # Auto-managed denylist: the proxy appends a qualified id here when a
+        # believed_free model serves a request reporting a non-zero cost, and the
+        # updater then refuses to re-add it to believed_free (removing it if
+        # present). Operator-editable; start empty.
+        "cost_observed_free_tier": [],
         "model_reasoning": model_reasoning,
         "model_capabilities": model_capabilities,
         "free_limits": free_limits_with_note,
@@ -645,6 +674,10 @@ def reconcile_user_config(sidecar: dict, user_cfg: dict) -> dict:
     """
     providers: dict = sidecar.get("providers", {})
     configured = set(user_cfg.get("providers", {})) & set(providers)
+    # Models observed to cost money at runtime: never sync them into believed_free,
+    # and remove them if already present. This is the deterministic guard that runs
+    # on every startup sync, independent of the cost probe.
+    deny = cost_observed_denylist(user_cfg)
 
     # Sidecar aggregates restricted to configured providers.
     sc_believed: set[str] = set()
@@ -657,6 +690,9 @@ def reconcile_user_config(sidecar: dict, user_cfg: dict) -> dict:
         sc_limits.update(prov.get("free_limits", {}))
         sc_reasoning.update(prov.get("model_reasoning", {}))
         sc_capabilities.update(prov.get("model_capabilities", {}))
+
+    # Drop cost-observed models from the set we'd otherwise sync in as free.
+    sc_believed = {m for m in sc_believed if m.lower() not in deny}
 
     changes = {
         "believed_free": {"add": [], "remove": []},
@@ -674,7 +710,9 @@ def reconcile_user_config(sidecar: dict, user_cfg: dict) -> dict:
         if not isinstance(mid, str):
             new_bf.append(mid)  # leave anything unexpected alone
             continue
-        if _provider_of(mid) in configured and mid not in sc_believed:
+        if mid.lower() in deny:
+            changes["believed_free"]["remove"].append(mid)  # observed paid at runtime
+        elif _provider_of(mid) in configured and mid not in sc_believed:
             changes["believed_free"]["remove"].append(mid)  # no longer free
         else:
             new_bf.append(mid)  # untouched provider, or still free
@@ -981,7 +1019,8 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     sidecar = load_data()
-    updates = aggregate(all_evidence, sidecar, api_succeeded)
+    updates = aggregate(all_evidence, sidecar, api_succeeded,
+                        denylist=cost_observed_denylist(user_cfg))
 
     # Provider filter
     if args.provider:

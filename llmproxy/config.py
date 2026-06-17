@@ -171,6 +171,12 @@ DEFAULT_FUSION_CONFIG = {
 DEFAULT_CONFIG: dict = {
     "providers": {},
     "believed_free": [],
+    # Qualified provider/model ids that served a request reporting a non-zero cost
+    # while marked believed_free. The proxy appends to this set at runtime (see
+    # server._persist_cost_observed); the updater treats membership as a hard
+    # "not free" signal — such models are never re-added to believed_free and are
+    # removed if present. Operator-editable.
+    "cost_observed_free_tier": [],
     "model_reasoning": {},
     "model_capabilities": {},
     "free_limits": {},

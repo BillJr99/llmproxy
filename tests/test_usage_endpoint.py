@@ -26,6 +26,9 @@ def usage_server(tmp_path, monkeypatch):
         },
         "believed_free": ["groq/free-model"],
         "free_limits": {},
+        # Keep the on-disk config stable: don't let the background startup sync
+        # rewrite it (it would race the runtime cost_observed_free_tier write).
+        "sync_believed_free_on_startup": False,
         "server": {"host": "127.0.0.1", "port": 8080, "log_level": "ERROR",
                    "request_timeout": 5, "stream_timeout": 5, "models_cache_ttl": 0,
                    "response_cache_ttl": 0},
@@ -79,8 +82,72 @@ def test_believed_free_cost_is_flagged(usage_server):
     assert flagged[0]["model"] == "groq/free-model"
     assert flagged[0]["observed_cost"] == pytest.approx(0.002)
     assert flagged[0]["cost_source"] == "provider"
-    # And the per-model row marks the unexpected cost.
-    assert body["models"][0]["unexpected_cost"] is True
+    # The observation reclassifies the model as paid (recorded in
+    # cost_observed_free_tier), so the per-model row is no longer believed_free
+    # and the cost is no longer "unexpected" — the durable signal is the
+    # flagged_paid_free_models list above.
+    assert body["models"][0]["believed_free"] is False
+    assert body["models"][0]["unexpected_cost"] is False
+
+
+def test_cost_observed_persisted_to_config(usage_server, tmp_path):
+    # First observation of a cost on a believed_free model is appended to the live
+    # config's cost_observed_free_tier (original-cased qualified id), exactly once.
+    usage_server._record_usage(
+        "groq", "free-model",
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cost": 0.002},
+        config=usage_server.load_config(),
+    )
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert written["cost_observed_free_tier"] == ["groq/free-model"]
+
+    # A second hit must not duplicate the entry.
+    usage_server._record_usage(
+        "groq", "free-model",
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "cost": 0.003},
+        config=usage_server.load_config(),
+    )
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert written["cost_observed_free_tier"] == ["groq/free-model"]
+
+
+def test_flag_paid_free_reports_first_observation_only(usage_server):
+    assert usage_server._flag_paid_free("groq/m", 0.002, "provider") is True
+    assert usage_server._flag_paid_free("groq/m", 0.004, "provider") is False
+
+
+def test_cost_observed_makes_model_not_free_immediately(usage_server):
+    s = usage_server
+    cfg = {"believed_free": ["groq/m"], "cost_observed_free_tier": ["groq/m"]}
+    # Even though it's still in believed_free, the cost-observed entry wins.
+    assert s._is_model_free("groq", "m", cfg) is False
+    # And without the cost-observed entry it would be free.
+    assert s._is_model_free("groq", "m", {"believed_free": ["groq/m"]}) is True
+
+
+def test_cost_observed_overrides_free_substring(usage_server):
+    s = usage_server
+    cfg = {"believed_free": [], "cost_observed_free_tier": ["groq/some-free-model"]}
+    # 'free' substring would normally force free; cost-observed overrides it.
+    assert s._is_model_free("groq", "some-free-model", cfg) is False
+
+
+def test_cost_observed_is_paid_tier_in_loadbalancer(usage_server):
+    s = usage_server
+    pc = {"base_url": "http://groq.example/v1", "api_key": "k"}
+    cfg = {"believed_free": ["groq/m"], "cost_observed_free_tier": ["groq/m"]}
+    assert s._cost_tier("groq", "m", pc, cfg) == s._TIER_PAID
+
+
+def test_no_cost_observed_when_model_not_free(usage_server, tmp_path):
+    # A model that isn't believed_free reporting a cost is expected — don't record it.
+    usage_server._record_usage(
+        "groq", "paid-model",
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "cost": 0.01},
+        config=usage_server.load_config(),
+    )
+    written = json.loads((tmp_path / "config.json").read_text())
+    assert "paid-model" not in str(written.get("cost_observed_free_tier", []))
 
 
 def test_usage_reset_clears_and_requires_no_token_on_loopback(usage_server):
