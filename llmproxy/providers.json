@@ -817,7 +817,6 @@
         "cloudflare-workers/@cf/stabilityai/stable-diffusion-xl-base-1.0",
         "cloudflare-workers/@cf/unum/uform-gen2-qwen-500m",
         "cloudflare-workers/@cf/zai-org/glm-4.7-flash",
-        "cloudflare-workers/@cf/zai-org/glm-5.2",
         "cloudflare-workers/@hf/google/gemma-7b-it",
         "cloudflare-workers/@hf/meta-llama/meta-llama-3-8b-instruct",
         "cloudflare-workers/@hf/mistral/mistral-7b-instruct-v0.2",
@@ -902,8 +901,7 @@
         "cloudflare-workers/@hf/google/gemma-7b-it": "exploratory",
         "cloudflare-workers/@hf/meta-llama/meta-llama-3-8b-instruct": "exploratory",
         "cloudflare-workers/@hf/mistral/mistral-7b-instruct-v0.2": "exploratory",
-        "cloudflare-workers/@hf/nousresearch/hermes-2-pro-mistral-7b": "exploratory",
-        "cloudflare-workers/@cf/zai-org/glm-5.2": "exploratory"
+        "cloudflare-workers/@hf/nousresearch/hermes-2-pro-mistral-7b": "exploratory"
       },
       "model_capabilities": {
         "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct": [
@@ -3413,8 +3411,8 @@
       "output_cost_per_token": 4.1e-07
     },
     "openrouter/deepseek/deepseek-v4-flash": {
-      "input_cost_per_token": 9e-08,
-      "output_cost_per_token": 1.8e-07
+      "input_cost_per_token": 9.8e-08,
+      "output_cost_per_token": 1.96e-07
     },
     "openrouter/deepseek/deepseek-v4-pro": {
       "input_cost_per_token": 4.35e-07,
@@ -3757,7 +3755,7 @@
       "output_cost_per_token": 3.41e-06
     },
     "openrouter/moonshotai/kimi-k2.7-code": {
-      "input_cost_per_token": 7.4e-07,
+      "input_cost_per_token": 7.5e-07,
       "output_cost_per_token": 3.5e-06
     },
     "openrouter/morph/morph-v3-fast": {
@@ -3798,7 +3796,7 @@
     },
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b": {
       "input_cost_per_token": 5e-07,
-      "output_cost_per_token": 2.2e-06
+      "output_cost_per_token": 2.5e-06
     },
     "openrouter/openai/gpt-3.5-turbo": {
       "input_cost_per_token": 5e-07,
@@ -4415,10 +4413,6 @@
     "openrouter/z-ai/glm-5.1": {
       "input_cost_per_token": 9.8e-07,
       "output_cost_per_token": 3.08e-06
-    },
-    "openrouter/z-ai/glm-5.2": {
-      "input_cost_per_token": 1.4e-06,
-      "output_cost_per_token": 4.4e-06
     },
     "openrouter/~anthropic/claude-fable-latest": {
       "input_cost_per_token": 1e-05,
