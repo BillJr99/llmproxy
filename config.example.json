@@ -435,61 +435,38 @@
   "cost_observed_free_tier": [],
   "model_reasoning": {
     "nvidia/meta/llama-3.1-70b-instruct": "standard",
+    "google/gemini-2.5-pro": "deep",
+    "google/gemini-2.5-flash": "standard",
+    "google/gemini-2.5-flash-lite": "exploratory",
+    "google/gemini-3-flash-preview": "standard",
+    "google/gemini-3.1-flash-lite-preview": "exploratory",
+    "google/gemma-3-27b-it": "standard",
+    "google/gemma-3-12b-it": "exploratory",
+    "google/gemma-3-4b-it": "exploratory",
+    "google/gemma-3-1b-it": "exploratory",
     "google/gemini-2.0-flash": "exploratory",
     "google/gemini-2.0-flash-lite": "exploratory",
-    "google/gemini-2.5-flash": "standard",
     "google/gemini-2.5-flash-image": "exploratory",
-    "google/gemini-2.5-flash-lite": "exploratory",
     "google/gemini-2.5-flash-lite-preview-09-2025": "exploratory",
     "google/gemini-2.5-flash-native-audio-preview-12-2025": "exploratory",
     "google/gemini-2.5-flash-preview-09-2025": "exploratory",
-    "google/gemini-2.5-pro": "deep",
-    "google/gemini-3-flash-preview": "standard",
     "google/gemini-3-pro-image": "exploratory",
     "google/gemini-3-pro-preview": "exploratory",
     "google/gemini-3.1-flash-image": "exploratory",
     "google/gemini-3.1-flash-lite": "exploratory",
-    "google/gemini-3.1-flash-lite-preview": "exploratory",
     "google/gemini-3.1-flash-tts-preview": "exploratory",
     "google/gemini-3.1-pro-preview": "exploratory",
     "google/gemini-3.5-flash": "exploratory",
     "google/gemini-3.5-live-translate-preview": "exploratory",
-    "google/gemma-3-12b-it": "exploratory",
-    "google/gemma-3-1b-it": "exploratory",
-    "google/gemma-3-27b-it": "standard",
-    "google/gemma-3-4b-it": "exploratory",
-    "cerebras/gpt-oss-120b": "deep",
     "cerebras/llama3.1-8b": "exploratory",
+    "cerebras/gpt-oss-120b": "deep",
     "cerebras/qwen-3-235b-a22b-instruct-2507": "deep",
     "cerebras/zai-glm-4.7": "standard",
-    "github/ai21-labs/AI21-Jamba-1.5-Large": "standard",
-    "github/cohere/Cohere-command-r-08-2024": "exploratory",
-    "github/cohere/Cohere-command-r-plus-08-2024": "standard",
-    "github/deepseek/DeepSeek-R1": "deep",
-    "github/deepseek/DeepSeek-R1-0528": "deep",
-    "github/deepseek/DeepSeek-V3-0324": "standard",
-    "github/meta/Llama-3.2-11B-Vision-Instruct": "exploratory",
-    "github/meta/Llama-3.2-90B-Vision-Instruct": "standard",
-    "github/meta/Llama-3.3-70B-Instruct": "standard",
-    "github/meta/Llama-4-Maverick-17B-128E-Instruct-FP8": "standard",
-    "github/meta/Llama-4-Scout-17B-16E-Instruct": "standard",
-    "github/meta/Meta-Llama-3.1-405B-Instruct": "deep",
-    "github/meta/Meta-Llama-3.1-8B-Instruct": "exploratory",
-    "github/microsoft/MAI-DS-R1": "deep",
-    "github/microsoft/Phi-4": "standard",
-    "github/microsoft/Phi-4-mini-instruct": "exploratory",
-    "github/microsoft/Phi-4-mini-reasoning": "deep",
-    "github/microsoft/Phi-4-multimodal-instruct": "standard",
-    "github/microsoft/Phi-4-reasoning": "deep",
-    "github/mistral-ai/Codestral-2501": "exploratory",
-    "github/mistral-ai/Ministral-3B": "exploratory",
-    "github/mistral-ai/mistral-medium-2505": "standard",
-    "github/mistral-ai/mistral-small-2503": "exploratory",
+    "github/openai/gpt-4o": "standard",
+    "github/openai/gpt-4o-mini": "exploratory",
     "github/openai/gpt-4.1": "standard",
     "github/openai/gpt-4.1-mini": "exploratory",
     "github/openai/gpt-4.1-nano": "exploratory",
-    "github/openai/gpt-4o": "standard",
-    "github/openai/gpt-4o-mini": "exploratory",
     "github/openai/gpt-5": "deep",
     "github/openai/gpt-5-mini": "standard",
     "github/openai/gpt-5-nano": "exploratory",
@@ -498,25 +475,48 @@
     "github/openai/o3": "deep",
     "github/openai/o3-mini": "standard",
     "github/openai/o4-mini": "deep",
+    "github/meta/Llama-3.3-70B-Instruct": "standard",
+    "github/meta/Llama-3.2-90B-Vision-Instruct": "standard",
+    "github/meta/Llama-3.2-11B-Vision-Instruct": "exploratory",
+    "github/meta/Meta-Llama-3.1-405B-Instruct": "deep",
+    "github/meta/Meta-Llama-3.1-8B-Instruct": "exploratory",
+    "github/meta/Llama-4-Scout-17B-16E-Instruct": "standard",
+    "github/meta/Llama-4-Maverick-17B-128E-Instruct-FP8": "standard",
+    "github/microsoft/Phi-4": "standard",
+    "github/microsoft/Phi-4-mini-instruct": "exploratory",
+    "github/microsoft/Phi-4-reasoning": "deep",
+    "github/microsoft/Phi-4-mini-reasoning": "deep",
+    "github/microsoft/Phi-4-multimodal-instruct": "standard",
+    "github/microsoft/MAI-DS-R1": "deep",
+    "github/mistral-ai/Codestral-2501": "exploratory",
+    "github/mistral-ai/Ministral-3B": "exploratory",
+    "github/mistral-ai/mistral-medium-2505": "standard",
+    "github/mistral-ai/mistral-small-2503": "exploratory",
+    "github/cohere/Cohere-command-r-plus-08-2024": "standard",
+    "github/cohere/Cohere-command-r-08-2024": "exploratory",
+    "github/ai21-labs/AI21-Jamba-1.5-Large": "standard",
+    "github/deepseek/DeepSeek-R1": "deep",
+    "github/deepseek/DeepSeek-R1-0528": "deep",
+    "github/deepseek/DeepSeek-V3-0324": "standard",
     "github/xai/grok-3": "standard",
     "github/xai/grok-3-mini": "exploratory",
     "sambanova/Meta-Llama-3.3-70B-Instruct": "standard",
-    "mistral/codestral-latest": "exploratory",
-    "mistral/magistral-medium-latest": "standard",
     "mistral/mistral-large-latest": "standard",
+    "mistral/magistral-medium-latest": "standard",
+    "mistral/codestral-latest": "exploratory",
+    "groq/llama-3.3-70b-versatile": "standard",
+    "groq/llama-4-scout-17b-16e-instruct": "standard",
+    "groq/llama-3.1-8b-instant": "exploratory",
+    "groq/mixtral-8x7b-32768": "standard",
+    "groq/gemma2-9b-it": "exploratory",
     "groq/allam-2-7b": "exploratory",
     "groq/canopylabs/orpheus-arabic-saudi": "exploratory",
     "groq/canopylabs/orpheus-v1-english": "exploratory",
-    "groq/gemma2-9b-it": "exploratory",
     "groq/groq/compound": "exploratory",
     "groq/groq/compound-mini": "exploratory",
-    "groq/llama-3.1-8b-instant": "exploratory",
-    "groq/llama-3.3-70b-versatile": "standard",
-    "groq/llama-4-scout-17b-16e-instruct": "standard",
     "groq/meta-llama/llama-4-scout-17b-16e-instruct": "standard",
     "groq/meta-llama/llama-prompt-guard-2-22m": "exploratory",
     "groq/meta-llama/llama-prompt-guard-2-86m": "exploratory",
-    "groq/mixtral-8x7b-32768": "standard",
     "groq/openai/gpt-oss-120b": "deep",
     "groq/openai/gpt-oss-20b": "standard",
     "groq/openai/gpt-oss-safeguard-20b": "standard",
@@ -524,6 +524,9 @@
     "groq/qwen/qwen3.6-27b": "standard",
     "groq/whisper-large-v3": "standard",
     "groq/whisper-large-v3-turbo": "standard",
+    "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct": "standard",
+    "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct": "exploratory",
+    "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
     "cloudflare-workers/@cf/ai4bharat/indictrans2-en-indic-1B": "exploratory",
     "cloudflare-workers/@cf/aisingapore/gemma-sea-lion-v4-27b-it": "standard",
     "cloudflare-workers/@cf/baai/bge-base-en-v1.5": "exploratory",
@@ -561,8 +564,6 @@
     "cloudflare-workers/@cf/meta/llama-2-7b-chat-int8": "exploratory",
     "cloudflare-workers/@cf/meta/llama-3-8b-instruct": "exploratory",
     "cloudflare-workers/@cf/meta/llama-3-8b-instruct-awq": "exploratory",
-    "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct": "standard",
-    "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct": "exploratory",
     "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct-awq": "exploratory",
     "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct-fast": "exploratory",
     "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct-fp8": "exploratory",
@@ -575,7 +576,6 @@
     "cloudflare-workers/@cf/meta/m2m100-1.2b": "exploratory",
     "cloudflare-workers/@cf/microsoft/phi-2": "exploratory",
     "cloudflare-workers/@cf/microsoft/resnet-50": "exploratory",
-    "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
     "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.2-lora": "exploratory",
     "cloudflare-workers/@cf/mistralai/mistral-small-3.1-24b-instruct": "standard",
     "cloudflare-workers/@cf/moonshotai/kimi-k2.5": "exploratory",
@@ -599,15 +599,16 @@
     "cloudflare-workers/@cf/stabilityai/stable-diffusion-xl-base-1.0": "exploratory",
     "cloudflare-workers/@cf/unum/uform-gen2-qwen-500m": "exploratory",
     "cloudflare-workers/@cf/zai-org/glm-4.7-flash": "exploratory",
-    "cloudflare-workers/@cf/zai-org/glm-5.2": "exploratory",
     "cloudflare-workers/@hf/google/gemma-7b-it": "exploratory",
     "cloudflare-workers/@hf/meta-llama/meta-llama-3-8b-instruct": "exploratory",
     "cloudflare-workers/@hf/mistral/mistral-7b-instruct-v0.2": "exploratory",
     "cloudflare-workers/@hf/nousresearch/hermes-2-pro-mistral-7b": "exploratory",
+    "cloudflare-workers/@cf/zai-org/glm-5.2": "exploratory",
     "zhipu/glm-4.5-flash": "standard",
-    "z-ai/glm-4.5": "deep",
     "z-ai/glm-4.5-air": "exploratory",
     "z-ai/glm-4.5-flash": "standard",
+    "z-ai/glm-4.5": "deep",
+    "cohere/command-r-plus-08-2024": "standard",
     "cohere/command-a": "exploratory",
     "cohere/command-a-plus": "exploratory",
     "cohere/command-a-reasoning": "deep",
@@ -615,22 +616,24 @@
     "cohere/command-a-vision": "exploratory",
     "cohere/command-r": "exploratory",
     "cohere/command-r-plus": "exploratory",
-    "cohere/command-r-plus-08-2024": "standard",
     "cohere/command-r7b": "exploratory",
-    "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "standard",
     "openrouter/deepseek/deepseek-v3.1:free": "deep",
+    "openrouter/moonshotai/kimi-k2:free": "deep",
+    "openrouter/qwen/qwen3-coder:free": "deep",
+    "openrouter/z-ai/glm-4.5-air:free": "standard",
+    "openrouter/mistralai/mistral-7b-instruct:free": "exploratory",
+    "openrouter/meta-llama/llama-3.2-3b-instruct:free": "exploratory",
+    "openrouter/meta-llama/llama-3.1-8b-instruct:free": "exploratory",
     "openrouter/google/gemma-2-9b-it:free": "exploratory",
+    "openrouter/qwen/qwen-2.5-7b-instruct:free": "exploratory",
+    "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "standard",
     "openrouter/google/gemma-4-26b-a4b-it:free": "standard",
     "openrouter/google/gemma-4-31b-it:free": "standard",
     "openrouter/google/lyria-3-clip-preview": "exploratory",
     "openrouter/google/lyria-3-pro-preview": "exploratory",
     "openrouter/liquid/lfm-2.5-1.2b-instruct:free": "exploratory",
     "openrouter/liquid/lfm-2.5-1.2b-thinking:free": "exploratory",
-    "openrouter/meta-llama/llama-3.1-8b-instruct:free": "exploratory",
-    "openrouter/meta-llama/llama-3.2-3b-instruct:free": "exploratory",
     "openrouter/meta-llama/llama-3.3-70b-instruct:free": "standard",
-    "openrouter/mistralai/mistral-7b-instruct:free": "exploratory",
-    "openrouter/moonshotai/kimi-k2:free": "deep",
     "openrouter/nex-agi/nex-n2-pro:free": "exploratory",
     "openrouter/nousresearch/hermes-3-llama-3.1-405b:free": "deep",
     "openrouter/nvidia/nemotron-3-nano-30b-a3b:free": "standard",
@@ -646,15 +649,12 @@
     "openrouter/openrouter/owl-alpha": "exploratory",
     "openrouter/poolside/laguna-m.1:free": "exploratory",
     "openrouter/poolside/laguna-xs.2:free": "exploratory",
-    "openrouter/qwen/qwen-2.5-7b-instruct:free": "exploratory",
-    "openrouter/qwen/qwen3-coder:free": "deep",
     "openrouter/qwen/qwen3-next-80b-a3b-instruct:free": "standard",
-    "openrouter/z-ai/glm-4.5-air:free": "standard",
     "moonshot/kimi-latest": "standard",
     "minimax/MiniMax-M1": "standard",
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": "standard",
-    "xai/grok-3": "deep",
     "xai/grok-3-mini": "standard",
+    "xai/grok-3": "deep",
     "cloudflare-ai-gateway/@cf/meta/llama-3.1-70b-instruct": "standard",
     "cloudflare-ai-gateway/@cf/meta/llama-3.1-8b-instruct": "exploratory",
     "cloudflare-ai-gateway/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
@@ -674,10 +674,10 @@
       "reasoning",
       "json"
     ],
-    "google/gemma-3-12b-it": [
+    "google/gemma-3-27b-it": [
       "vision"
     ],
-    "google/gemma-3-27b-it": [
+    "google/gemma-3-12b-it": [
       "vision"
     ],
     "google/gemma-3-4b-it": [
@@ -692,94 +692,12 @@
       "reasoning",
       "json"
     ],
-    "github/ai21-labs/AI21-Jamba-1.5-Large": [
-      "tools",
-      "json"
-    ],
-    "github/cohere/Cohere-command-r-08-2024": [
-      "tools",
-      "json"
-    ],
-    "github/cohere/Cohere-command-r-plus-08-2024": [
-      "tools",
-      "json"
-    ],
-    "github/deepseek/DeepSeek-R1-0528": [
-      "reasoning",
-      "json"
-    ],
-    "github/deepseek/DeepSeek-V3-0324": [
-      "tools",
-      "json"
-    ],
-    "github/meta/Llama-3.2-11B-Vision-Instruct": [
-      "vision",
-      "json"
-    ],
-    "github/meta/Llama-3.2-90B-Vision-Instruct": [
-      "vision",
-      "json"
-    ],
-    "github/meta/Llama-3.3-70B-Instruct": [
-      "tools",
-      "json"
-    ],
-    "github/meta/Llama-4-Maverick-17B-128E-Instruct-FP8": [
+    "github/openai/gpt-4o": [
       "tools",
       "vision",
       "json"
     ],
-    "github/meta/Llama-4-Scout-17B-16E-Instruct": [
-      "tools",
-      "vision",
-      "json"
-    ],
-    "github/meta/Meta-Llama-3.1-405B-Instruct": [
-      "tools",
-      "json"
-    ],
-    "github/meta/Meta-Llama-3.1-8B-Instruct": [
-      "tools",
-      "json"
-    ],
-    "github/microsoft/MAI-DS-R1": [
-      "reasoning",
-      "json"
-    ],
-    "github/microsoft/Phi-4": [
-      "tools",
-      "json"
-    ],
-    "github/microsoft/Phi-4-mini-instruct": [
-      "tools",
-      "json"
-    ],
-    "github/microsoft/Phi-4-mini-reasoning": [
-      "reasoning",
-      "json"
-    ],
-    "github/microsoft/Phi-4-multimodal-instruct": [
-      "vision",
-      "json"
-    ],
-    "github/microsoft/Phi-4-reasoning": [
-      "reasoning",
-      "json"
-    ],
-    "github/mistral-ai/Codestral-2501": [
-      "tools",
-      "json"
-    ],
-    "github/mistral-ai/Ministral-3B": [
-      "tools",
-      "json"
-    ],
-    "github/mistral-ai/mistral-medium-2505": [
-      "tools",
-      "vision",
-      "json"
-    ],
-    "github/mistral-ai/mistral-small-2503": [
+    "github/openai/gpt-4o-mini": [
       "tools",
       "vision",
       "json"
@@ -795,16 +713,6 @@
       "json"
     ],
     "github/openai/gpt-4.1-nano": [
-      "tools",
-      "vision",
-      "json"
-    ],
-    "github/openai/gpt-4o": [
-      "tools",
-      "vision",
-      "json"
-    ],
-    "github/openai/gpt-4o-mini": [
       "tools",
       "vision",
       "json"
@@ -854,6 +762,98 @@
       "reasoning",
       "json"
     ],
+    "github/meta/Llama-3.3-70B-Instruct": [
+      "tools",
+      "json"
+    ],
+    "github/meta/Llama-3.2-90B-Vision-Instruct": [
+      "vision",
+      "json"
+    ],
+    "github/meta/Llama-3.2-11B-Vision-Instruct": [
+      "vision",
+      "json"
+    ],
+    "github/meta/Meta-Llama-3.1-405B-Instruct": [
+      "tools",
+      "json"
+    ],
+    "github/meta/Meta-Llama-3.1-8B-Instruct": [
+      "tools",
+      "json"
+    ],
+    "github/meta/Llama-4-Scout-17B-16E-Instruct": [
+      "tools",
+      "vision",
+      "json"
+    ],
+    "github/meta/Llama-4-Maverick-17B-128E-Instruct-FP8": [
+      "tools",
+      "vision",
+      "json"
+    ],
+    "github/microsoft/Phi-4": [
+      "tools",
+      "json"
+    ],
+    "github/microsoft/Phi-4-mini-instruct": [
+      "tools",
+      "json"
+    ],
+    "github/microsoft/Phi-4-reasoning": [
+      "reasoning",
+      "json"
+    ],
+    "github/microsoft/Phi-4-mini-reasoning": [
+      "reasoning",
+      "json"
+    ],
+    "github/microsoft/Phi-4-multimodal-instruct": [
+      "vision",
+      "json"
+    ],
+    "github/microsoft/MAI-DS-R1": [
+      "reasoning",
+      "json"
+    ],
+    "github/mistral-ai/Codestral-2501": [
+      "tools",
+      "json"
+    ],
+    "github/mistral-ai/Ministral-3B": [
+      "tools",
+      "json"
+    ],
+    "github/mistral-ai/mistral-medium-2505": [
+      "tools",
+      "vision",
+      "json"
+    ],
+    "github/mistral-ai/mistral-small-2503": [
+      "tools",
+      "vision",
+      "json"
+    ],
+    "github/cohere/Cohere-command-r-plus-08-2024": [
+      "tools",
+      "json"
+    ],
+    "github/cohere/Cohere-command-r-08-2024": [
+      "tools",
+      "json"
+    ],
+    "github/ai21-labs/AI21-Jamba-1.5-Large": [
+      "tools",
+      "json"
+    ],
+    "github/deepseek/DeepSeek-R1-0528": [
+      "reasoning",
+      "json"
+    ],
+    "github/deepseek/DeepSeek-V3-0324": [
+      "tools",
+      "json"
+    ],
     "github/xai/grok-3": [
       "tools",
       "json"
@@ -895,10 +895,56 @@
       "reasoning",
       "json"
     ],
+    "openrouter/nvidia/nemotron-nano-12b-v2-vl:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "openrouter/openrouter/owl-alpha": [
+      "tools",
+      "json"
+    ],
+    "openrouter/nvidia/nemotron-3-super-120b-a12b:free": [
+      "tools",
+      "reasoning",
+      "json"
+    ],
+    "openrouter/openai/gpt-oss-20b:free": [
+      "tools",
+      "reasoning",
+      "json"
+    ],
+    "openrouter/nvidia/nemotron-nano-9b-v2:free": [
+      "tools",
+      "reasoning",
+      "json"
+    ],
+    "openrouter/poolside/laguna-m.1:free": [
+      "tools",
+      "reasoning"
+    ],
+    "openrouter/google/lyria-3-clip-preview": [
+      "vision",
+      "json"
+    ],
+    "openrouter/poolside/laguna-xs.2:free": [
+      "tools",
+      "reasoning"
+    ],
     "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": [
       "json"
     ],
+    "openrouter/google/lyria-3-pro-preview": [
+      "vision",
+      "json"
+    ],
     "openrouter/google/gemma-4-26b-a4b-it:free": [
+      "tools",
+      "vision",
+      "reasoning",
+      "json"
+    ],
+    "openrouter/nex-agi/nex-n2-pro:free": [
       "tools",
       "vision",
       "reasoning",
@@ -910,27 +956,28 @@
       "reasoning",
       "json"
     ],
-    "openrouter/google/lyria-3-clip-preview": [
-      "vision",
+    "openrouter/qwen/qwen3-next-80b-a3b-instruct:free": [
+      "tools",
       "json"
     ],
-    "openrouter/google/lyria-3-pro-preview": [
+    "openrouter/nvidia/nemotron-3.5-content-safety:free": [
       "vision",
-      "json"
-    ],
-    "openrouter/liquid/lfm-2.5-1.2b-thinking:free": [
       "reasoning"
     ],
-    "openrouter/meta-llama/llama-3.3-70b-instruct:free": [
+    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free": [
+      "tools",
+      "reasoning"
+    ],
+    "openrouter/qwen/qwen3-coder:free": [
       "tools"
     ],
-    "openrouter/nex-agi/nex-n2-pro:free": [
+    "openrouter/openrouter/free": [
       "tools",
       "vision",
       "reasoning",
       "json"
     ],
-    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free": [
+    "openrouter/openai/gpt-oss-120b:free": [
       "tools",
       "reasoning"
     ],
@@ -939,62 +986,15 @@
       "vision",
       "reasoning"
     ],
-    "openrouter/nvidia/nemotron-3-super-120b-a12b:free": [
-      "tools",
-      "reasoning",
-      "json"
-    ],
-    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free": [
+    "openrouter/nvidia/nemotron-3-nano-30b-a3b:free": [
       "tools",
       "reasoning"
     ],
-    "openrouter/nvidia/nemotron-3.5-content-safety:free": [
-      "vision",
-      "reasoning"
-    ],
-    "openrouter/nvidia/nemotron-nano-12b-v2-vl:free": [
-      "tools",
-      "vision",
-      "reasoning"
-    ],
-    "openrouter/nvidia/nemotron-nano-9b-v2:free": [
-      "tools",
-      "reasoning",
-      "json"
-    ],
-    "openrouter/openai/gpt-oss-120b:free": [
-      "tools",
-      "reasoning"
-    ],
-    "openrouter/openai/gpt-oss-20b:free": [
-      "tools",
-      "reasoning",
-      "json"
-    ],
-    "openrouter/openrouter/free": [
-      "tools",
-      "vision",
-      "reasoning",
-      "json"
-    ],
-    "openrouter/openrouter/owl-alpha": [
-      "tools",
-      "json"
-    ],
-    "openrouter/poolside/laguna-m.1:free": [
-      "tools",
-      "reasoning"
-    ],
-    "openrouter/poolside/laguna-xs.2:free": [
-      "tools",
-      "reasoning"
-    ],
-    "openrouter/qwen/qwen3-coder:free": [
+    "openrouter/meta-llama/llama-3.3-70b-instruct:free": [
       "tools"
     ],
-    "openrouter/qwen/qwen3-next-80b-a3b-instruct:free": [
-      "tools",
-      "json"
+    "openrouter/liquid/lfm-2.5-1.2b-thinking:free": [
+      "reasoning"
     ],
     "moonshot/kimi-latest": [
       "tools",
@@ -1033,25 +1033,25 @@
       "tokens_per_minute": 250000,
       "tokens_per_day": null
     },
-    "google/gemma-3-12b-it": {
-      "requests_per_minute": 30,
-      "requests_per_day": 14400,
-      "tokens_per_minute": 15000,
-      "tokens_per_day": null
-    },
-    "google/gemma-3-1b-it": {
-      "requests_per_minute": 30,
-      "requests_per_day": 14400,
-      "tokens_per_minute": 15000,
-      "tokens_per_day": null
-    },
     "google/gemma-3-27b-it": {
       "requests_per_minute": 30,
       "requests_per_day": 14400,
       "tokens_per_minute": 15000,
       "tokens_per_day": null
     },
+    "google/gemma-3-12b-it": {
+      "requests_per_minute": 30,
+      "requests_per_day": 14400,
+      "tokens_per_minute": 15000,
+      "tokens_per_day": null
+    },
     "google/gemma-3-4b-it": {
+      "requests_per_minute": 30,
+      "requests_per_day": 14400,
+      "tokens_per_minute": 15000,
+      "tokens_per_day": null
+    },
+    "google/gemma-3-1b-it": {
       "requests_per_minute": 30,
       "requests_per_day": 14400,
       "tokens_per_minute": 15000,
@@ -1075,34 +1075,22 @@
       "tokens_per_minute": null,
       "tokens_per_day": null
     },
-    "groq/allam-2-7b": {
+    "groq/llama-4-scout-17b-16e-instruct": {
       "requests_per_minute": 30,
-      "requests_per_day": 7000,
+      "requests_per_day": 1000,
       "tokens_per_minute": 6000,
-      "tokens_per_day": 500000
+      "tokens_per_day": 1000000
     },
-    "groq/canopylabs/orpheus-arabic-saudi": {
-      "requests_per_minute": 10,
-      "requests_per_day": 100,
-      "tokens_per_minute": 1200,
-      "tokens_per_day": 3600
-    },
-    "groq/canopylabs/orpheus-v1-english": {
-      "requests_per_minute": 10,
-      "requests_per_day": 100,
-      "tokens_per_minute": 1200,
-      "tokens_per_day": 3600
-    },
-    "groq/gemma2-9b-it": {
+    "groq/mixtral-8x7b-32768": {
       "requests_per_minute": 30,
       "requests_per_day": 14400,
       "tokens_per_minute": null,
       "tokens_per_day": null
     },
-    "groq/groq/compound": {
+    "groq/gemma2-9b-it": {
       "requests_per_minute": 30,
-      "requests_per_day": 250,
-      "tokens_per_minute": 70000,
+      "requests_per_day": 14400,
+      "tokens_per_minute": null,
       "tokens_per_day": null
     },
     "groq/groq/compound-mini": {
@@ -1111,28 +1099,34 @@
       "tokens_per_minute": 70000,
       "tokens_per_day": null
     },
-    "groq/llama-3.1-8b-instant": {
+    "groq/meta-llama/llama-prompt-guard-2-86m": {
       "requests_per_minute": 30,
       "requests_per_day": 14400,
-      "tokens_per_minute": 6000,
+      "tokens_per_minute": 15000,
       "tokens_per_day": 500000
     },
-    "groq/llama-3.3-70b-versatile": {
-      "requests_per_minute": 30,
-      "requests_per_day": 1000,
-      "tokens_per_minute": 12000,
-      "tokens_per_day": 100000
+    "groq/whisper-large-v3-turbo": {
+      "requests_per_minute": 20,
+      "requests_per_day": 2000,
+      "tokens_per_minute": null,
+      "tokens_per_day": null
     },
-    "groq/llama-4-scout-17b-16e-instruct": {
+    "groq/canopylabs/orpheus-v1-english": {
+      "requests_per_minute": 10,
+      "requests_per_day": 100,
+      "tokens_per_minute": 1200,
+      "tokens_per_day": 3600
+    },
+    "groq/qwen/qwen3.6-27b": {
       "requests_per_minute": 30,
       "requests_per_day": 1000,
+      "tokens_per_minute": 8000,
+      "tokens_per_day": 200000
+    },
+    "groq/allam-2-7b": {
+      "requests_per_minute": 30,
+      "requests_per_day": 7000,
       "tokens_per_minute": 6000,
-      "tokens_per_day": 1000000
-    },
-    "groq/meta-llama/llama-4-scout-17b-16e-instruct": {
-      "requests_per_minute": 30,
-      "requests_per_day": 1000,
-      "tokens_per_minute": 30000,
       "tokens_per_day": 500000
     },
     "groq/meta-llama/llama-prompt-guard-2-22m": {
@@ -1141,17 +1135,29 @@
       "tokens_per_minute": 15000,
       "tokens_per_day": 500000
     },
-    "groq/meta-llama/llama-prompt-guard-2-86m": {
-      "requests_per_minute": 30,
-      "requests_per_day": 14400,
-      "tokens_per_minute": 15000,
-      "tokens_per_day": 500000
-    },
-    "groq/mixtral-8x7b-32768": {
-      "requests_per_minute": 30,
-      "requests_per_day": 14400,
+    "groq/whisper-large-v3": {
+      "requests_per_minute": 20,
+      "requests_per_day": 2000,
       "tokens_per_minute": null,
       "tokens_per_day": null
+    },
+    "groq/canopylabs/orpheus-arabic-saudi": {
+      "requests_per_minute": 10,
+      "requests_per_day": 100,
+      "tokens_per_minute": 1200,
+      "tokens_per_day": 3600
+    },
+    "groq/groq/compound": {
+      "requests_per_minute": 30,
+      "requests_per_day": 250,
+      "tokens_per_minute": 70000,
+      "tokens_per_day": null
+    },
+    "groq/meta-llama/llama-4-scout-17b-16e-instruct": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 30000,
+      "tokens_per_day": 500000
     },
     "groq/openai/gpt-oss-120b": {
       "requests_per_minute": 30,
@@ -1165,11 +1171,11 @@
       "tokens_per_minute": 8000,
       "tokens_per_day": 200000
     },
-    "groq/openai/gpt-oss-safeguard-20b": {
+    "groq/llama-3.3-70b-versatile": {
       "requests_per_minute": 30,
       "requests_per_day": 1000,
-      "tokens_per_minute": 8000,
-      "tokens_per_day": 200000
+      "tokens_per_minute": 12000,
+      "tokens_per_day": 100000
     },
     "groq/qwen/qwen3-32b": {
       "requests_per_minute": 60,
@@ -1177,23 +1183,17 @@
       "tokens_per_minute": 6000,
       "tokens_per_day": 500000
     },
-    "groq/qwen/qwen3.6-27b": {
+    "groq/llama-3.1-8b-instant": {
+      "requests_per_minute": 30,
+      "requests_per_day": 14400,
+      "tokens_per_minute": 6000,
+      "tokens_per_day": 500000
+    },
+    "groq/openai/gpt-oss-safeguard-20b": {
       "requests_per_minute": 30,
       "requests_per_day": 1000,
       "tokens_per_minute": 8000,
       "tokens_per_day": 200000
-    },
-    "groq/whisper-large-v3": {
-      "requests_per_minute": 20,
-      "requests_per_day": 2000,
-      "tokens_per_minute": null,
-      "tokens_per_day": null
-    },
-    "groq/whisper-large-v3-turbo": {
-      "requests_per_minute": 20,
-      "requests_per_day": 2000,
-      "tokens_per_minute": null,
-      "tokens_per_day": null
     },
     "zhipu/glm-4.5-flash": {
       "requests_per_minute": null,
