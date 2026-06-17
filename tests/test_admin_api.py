@@ -248,9 +248,9 @@ def test_virtual_models_preview(client):
     assert resp.status_code == 200
     ids = [v["id"] for v in resp.get_json()["virtual_models"]]
     # BASE_CONFIG tags a deep model and a tools capability and a believed_free
-    assert "llmproxy__deep" in ids
-    assert "llmproxy__tools" in ids
-    assert "llmproxy__free" in ids
+    assert "llmproxy/deep" in ids
+    assert "llmproxy/tools" in ids
+    assert "llmproxy/free" in ids
 
 
 def test_validate(client):

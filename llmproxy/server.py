@@ -31,14 +31,20 @@ carries at most one "/": all but the last slash become "_".  For example an
 "openrouter__meta-llama_llama-3/instruct".  Routing always uses the original
 (un-flattened) upstream id when forwarding upstream.
 
-Virtual models additionally carry a human-readable, slash-free ``name`` (e.g.
-"[llmproxy] Deep — Free") so picker UIs that display the ``name`` field show a
-distinct label rather than a bare repeated dimension word.
+Virtual models (the reserved "llmproxy" namespace) are the exception: they are
+advertised in the "llmproxy/<name>" slash form, with any "/" inside <name>
+encoded as "__" (e.g. "llmproxy/deep__free", "llmproxy/loadbalanced").  This puts
+every virtual under one "llmproxy" picker group with a distinct label per entry
+instead of collapsing them.  Each virtual also carries a human-readable,
+slash-free ``name`` (e.g. "[llmproxy] Deep — Free") for UIs that display the
+``name`` field.
 
 The following input forms are also accepted on every proxied endpoint:
     <provider_name>/<upstream_model_id>     (slash form; interior "/" as "__")
     <upstream_model_id>__<provider_name>    (PR #27 legacy display form)
     <upstream_model_id> (<provider_name>)   (pre-PR #27 legacy display form)
+For virtual models the canonical "llmproxy__<name>" form, the legacy three-part
+"llmproxy/<name>/<dimension>" form, and an all-"__" spelling are also accepted.
 
 The server strips the provider prefix/suffix before forwarding each request
 to the appropriate upstream base URL.
@@ -690,6 +696,10 @@ def _display_id(canonical_id: str) -> str:
 
     The inverse is handled inbound by ``_canonicalize_model_id``. Ids with no ``__``
     (already-foreign ``provider/model`` ids) are returned unchanged.
+
+    Used both inbound (to dual-key the route cache) and outbound (to advertise
+    virtual model ids in ``/v1/models`` so clients like opencode show a distinct
+    label per virtual, e.g. ``llmproxy/deep__free``, ``llmproxy/loadbalanced``).
     """
     provider, sep, model = canonical_id.partition("__")
     if not sep:
@@ -1761,16 +1771,19 @@ def list_models() -> Response:
 
     full_list = synthetic + all_models
 
-    # Give virtual models a human-readable, slash-free `name` so client pickers
-    # that derive a display label from it (e.g. opencode) show a distinct,
-    # readable label instead of a bare repeated dimension word like "free". The
-    # advertised `id` stays the canonical "provider__model" form: clients that
-    # group the listing by the segment before the first "/" (again, opencode)
-    # must not see a leading "provider/…" or every model collapses under one
-    # group. All internal state is already canonical; this only touches `name`.
+    # Advertise virtual models in "llmproxy/model" slash form so opencode's
+    # model picker shows a distinct, readable label for each virtual. opencode
+    # groups entries by the segment before the first "/" — using "llmproxy/" as
+    # the prefix puts all virtuals in one group with unique suffixes like
+    # "deep__free", "loadbalanced", "free". Internal "/" in the model part
+    # becomes "__" so the suffix is unambiguous (e.g. "llmproxy/deep__free").
+    # The friendly `name` field is also set for clients that use it.
+    # Internal state (route cache, frozensets) stays canonical; only the
+    # outbound `id` and `name` fields are rewritten here.
     for model in full_list:
         if _is_virtual_model(model["id"]):
             model["name"] = _virtual_display_name(model["id"])
+            model["id"] = _display_id(model["id"])
 
     if models_ttl > 0:
         with _models_list_cache_lock:
@@ -1802,7 +1815,7 @@ def get_model(model_id: str) -> Response:
     if _is_virtual_model(model_id):
         candidates = _get_virtual_candidates(model_id)
         return jsonify({
-            "id": model_id,
+            "id": _display_id(model_id),
             "object": "model",
             "owned_by": "llmproxy",
             "name": _virtual_display_name(model_id),
@@ -3453,34 +3466,53 @@ def _get_virtual_candidates(model_full: str) -> list[tuple[str, dict, str]]:
 # ---------------------------------------------------------------------------
 
 def _canonicalize_model_id(model_full: str, config: dict) -> str:
-    """Map an advertised slash-form id back to the canonical ``provider__model`` form.
+    """Map any client-supplied virtual or real-model id to the canonical ``provider__model`` form.
 
-    The advertised form (see ``_display_id``) is ``provider/model`` where the single
-    ``/`` is the provider separator and any ``/`` inside the model portion was rewritten
-    to ``__``. The inverse splits on the FIRST ``/`` (the separator the proxy/client
-    introduced) and rewrites ``__`` in the remainder back to ``/``.
+    **Virtual models** are advertised as ``llmproxy/model`` where any ``/`` inside the
+    model part is encoded as ``__`` (e.g. ``llmproxy/deep__free``).  Inbound ids are
+    accepted in all of these equivalent forms:
 
-    Resolution stays lossless on the hot path via the dual-keyed route cache: when the
-    raw id is already a cache key (an advertised or canonical real-model id), it is
-    returned unchanged so the caller's cache lookup hits directly — this avoids the
-    only string-level ambiguity (an upstream id that itself contains ``__``).
+    * ``llmproxy/deep__free``   — new advertised form
+    * ``llmproxy/deep/free``    — legacy slash form (pre-PR #88)
+    * ``llmproxy__deep/free``   — canonical internal form
+    * ``llmproxy__deep__free``  — ``__`` used everywhere (robust fuzzy match)
 
-    Otherwise, when the leading token names a configured provider or the reserved
-    ``llmproxy`` virtual namespace, the slash form is reversed. This also covers the
-    legacy slash form (first ``__`` rewritten to ``/`` with no interior ``__``), where
-    the ``__``→``/`` rewrite is a no-op. Foreign ``provider/model`` ids (leading token
-    is neither a provider nor ``llmproxy``) and ids already in ``provider__model`` form
-    are returned unchanged and flow through the existing virtual/route resolution.
+    All four resolve to the canonical ``llmproxy__deep/free`` that the virtual-model
+    frozensets and routing use internally.
+
+    **Real models** are advertised in canonical ``provider__model`` form.  The dual-keyed
+    route cache means the raw id hits directly without any string manipulation.
+
+    Resolution priority:
+    1. Route cache hit → return unchanged (hot path, lossless for real models).
+    2. ``/`` present and leading token is a provider or ``llmproxy`` → reverse the
+       slash-form encoding (split on first ``/``, rewrite ``__`` → ``/`` in remainder).
+    3. No ``/`` but starts with ``llmproxy__`` → fuzzy virtual match: compare each
+       known virtual's suffix with ``__``/``/`` collapsed, return the match if found.
+    4. Otherwise → return unchanged (foreign id or already canonical).
     """
-    if "/" not in model_full:
-        return model_full
     with _model_route_cache_lock:
         in_cache = model_full in _model_route_cache
     if in_cache:
         return model_full
-    left, _, rest = model_full.partition("/")
-    if left == "llmproxy" or get_provider(config, left):
-        return left + "__" + rest.replace("__", "/")
+
+    if "/" in model_full:
+        left, _, rest = model_full.partition("/")
+        if left == "llmproxy" or get_provider(config, left):
+            return left + "__" + rest.replace("__", "/")
+        return model_full
+
+    # No "/" — check if it's an llmproxy virtual with "__" used where "/" is expected.
+    if model_full.startswith("llmproxy__") and model_full not in _VIRTUAL_MODELS:
+        suffix = model_full[len("llmproxy__"):]
+        # Normalise: collapse "__" → "/" so we can compare against canonical suffixes.
+        normalised = suffix.replace("__", "/")
+        for vid in _VIRTUAL_MODELS:
+            if not vid.startswith("llmproxy__"):
+                continue
+            vsuffix = vid[len("llmproxy__"):]
+            if vsuffix.replace("__", "/") == normalised:
+                return vid
     return model_full
 
 
