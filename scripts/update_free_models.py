@@ -314,6 +314,41 @@ def apply_updates(sidecar: dict, updates: dict) -> bool:
     return changed
 
 
+# Per-provider blocks whose key order otherwise follows scrape/insertion order.
+# Sorting them on write keeps the serialized sidecar byte-stable across runs, so
+# a re-scrape that changes nothing produces no diff (and the optional providers
+# PR isn't reopened for cosmetic key-order churn). believed_free is a list; the
+# rest are dicts keyed by model id. Top-level `pricing` is already sorted by its
+# own merge path.
+_SORTED_LIST_KEYS = ("believed_free",)
+_SORTED_DICT_KEYS = ("free_limits", "model_reasoning", "model_capabilities")
+
+
+def canonicalize_sidecar(sidecar: dict) -> None:
+    """Sort the order-unstable per-provider blocks in place (model id, lowercased).
+
+    Reorders keys only — never adds, drops, or changes a value — so the logical
+    content is identical; only the serialization becomes deterministic.
+    """
+    for prov in sidecar.get("providers", {}).values():
+        if not isinstance(prov, dict):
+            continue
+        for key in _SORTED_LIST_KEYS:
+            val = prov.get(key)
+            if isinstance(val, list):
+                prov[key] = sorted(val, key=str.lower)
+        for key in _SORTED_DICT_KEYS:
+            val = prov.get(key)
+            if isinstance(val, dict):
+                prov[key] = {k: val[k] for k in sorted(val, key=str.lower)}
+
+
+def dump_sidecar(sidecar: dict) -> str:
+    """Canonicalize *sidecar* and serialize it to the on-disk JSON form."""
+    canonicalize_sidecar(sidecar)
+    return json.dumps(sidecar, indent=2) + "\n"
+
+
 def _collect_source_pricing(updates: dict) -> dict[str, dict]:
     """Flatten per-provider live pricing from ``aggregate`` into one block.
 
@@ -565,7 +600,7 @@ def _write_sidecar_fallback(sidecar: dict, config_path: str | None) -> None:
     providers_path, example_path = paths
     try:
         providers_path.parent.mkdir(parents=True, exist_ok=True)
-        providers_path.write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
+        providers_path.write_text(dump_sidecar(sidecar), encoding="utf-8")
         example_path.write_text(
             json.dumps(regenerate_config_example(sidecar), indent=2) + "\n", encoding="utf-8"
         )
@@ -976,7 +1011,7 @@ def main(argv: list[str] | None = None) -> int:
     changed = apply_updates(sidecar, updates) or pricing_changed
     if changed:
         try:
-            DATA_PATH.write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
+            DATA_PATH.write_text(dump_sidecar(sidecar), encoding="utf-8")
             print(_ok(f"\nUpdated {DATA_PATH}"))
             write_config_example()
             print(_ok(f"Regenerated {CONFIG_EXAMPLE_PATH}"))
