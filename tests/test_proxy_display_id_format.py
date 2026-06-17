@@ -416,3 +416,97 @@ def test_canonicalized_virtual_slash_id_is_recognized_as_virtual(server):
     canonical = server._canonicalize_model_id("llmproxy/free", config)
     assert canonical == "llmproxy__free"
     assert server._is_virtual_model(canonical)
+
+
+# ── advertised "provider/model" display form (_display_id) ────────────────────
+# The /v1/models endpoint advertises the client-friendly form: the provider
+# separator is "/" (exactly once) and interior slashes of the model portion are
+# rewritten to "__". This lets clients that derive a name by stripping to the last
+# "/" (e.g. opencode's lmstudio plugin) show the full model portion, not a bare
+# trailing segment like "free".
+
+def test_display_id_swaps_separators(server):
+    f = server._display_id
+    assert f("openrouter__deepseek/deepseek-chat-v3") == "openrouter/deepseek__deepseek-chat-v3"
+    assert f("llmproxy__exploratory/free") == "llmproxy/exploratory__free"
+    assert f("llmproxy__free") == "llmproxy/free"            # no interior slash
+    assert f("ollama__qwen2.5vl:3b") == "ollama/qwen2.5vl:3b"
+    # already-foreign ids (no "__") are returned unchanged
+    assert f("gpt-4") == "gpt-4"
+
+
+def test_display_id_round_trips_through_canonicalize(server):
+    """_canonicalize_model_id inverts _display_id back to the canonical form so
+    an advertised id sent back by a client resolves to the same route. Verified
+    on a cold cache (the string-level path), where the leading token is a provider."""
+    config = server.load_config()
+    with server._model_route_cache_lock:
+        server._model_route_cache.clear()
+    for canonical in (
+        "fakeprov__qwen2.5vl:3b",
+        "fakeprov__meta-llama/llama-3.3",
+        "llmproxy__deep/free",
+    ):
+        advertised = server._display_id(canonical)
+        assert server._canonicalize_model_id(advertised, config) == canonical
+
+
+def test_models_list_advertises_slash_form_and_is_opencode_readable(server, monkeypatch):
+    """The /v1/models payload uses the advertised "provider/model" form, and
+    stripping to the last "/" yields the full model portion — never a bare
+    dimension word like "free" repeated across many virtuals."""
+    routes = {
+        "openrouter__deepseek/deepseek-chat-v3:free": ("openrouter", "deepseek/deepseek-chat-v3:free"),
+        "openrouter__qwen/qwen-2.5:free": ("openrouter", "qwen/qwen-2.5:free"),
+    }
+
+    def _fake_rebuild(providers_cfg, timeout):
+        with server._model_route_cache_lock:
+            server._model_route_cache.clear()
+            server._model_route_cache.update(routes)
+            for cid, route in list(routes.items()):
+                server._model_route_cache[server._display_id(cid)] = route
+        return [{"id": k, "name": k, "object": "model"} for k in routes]
+
+    monkeypatch.setattr(server, "_rebuild_route_cache", _fake_rebuild)
+    monkeypatch.setattr(server, "_sync_local_provider_models_once", lambda: None)
+    server._models_list_cache = None
+
+    data = server.app.test_client().get("/v1/models").get_json()["data"]
+    ids = [m["id"] for m in data]
+
+    # every advertised id has exactly one "/" right after the provider
+    for mid in ids:
+        assert mid.count("/") == 1, f"advertised id must carry one slash: {mid!r}"
+
+    # the two free models are distinguishable after strip-to-last-slash — not both "free"
+    assert "openrouter/deepseek__deepseek-chat-v3:free" in ids
+    assert "openrouter/qwen__qwen-2.5:free" in ids
+    last_segments = [mid.rsplit("/", 1)[-1] for mid in ids]
+    assert "deepseek__deepseek-chat-v3:free" in last_segments
+    assert "qwen__qwen-2.5:free" in last_segments
+
+    with server._model_route_cache_lock:
+        server._model_route_cache.clear()
+
+
+def test_advertised_real_id_resolves_losslessly_via_dual_keyed_cache(server):
+    """An inbound advertised id whose upstream legitimately contains "__" resolves
+    to the exact upstream via the dual-keyed route cache (the hot path), with no
+    string-level reverse ambiguity."""
+    config = server.load_config()
+    canonical = "fakeprov__weird__name"          # upstream literally contains "__"
+    advertised = server._display_id(canonical)   # -> "fakeprov/weird__name"
+    route = ("fakeprov", "weird__name")
+    with server._model_route_cache_lock:
+        server._model_route_cache.clear()
+        server._model_route_cache[canonical] = route
+        server._model_route_cache[advertised] = route
+    # canonicalize returns the advertised id unchanged (it is a cache key), so the
+    # resolver's cache lookup hits the exact upstream.
+    assert server._canonicalize_model_id(advertised, config) == advertised
+    pn, _cfg, upstream, err = server._resolve_provider(advertised)
+    assert err is None, f"unexpected error: {err}"
+    assert (pn, upstream) == ("fakeprov", "weird__name")
+    with server._model_route_cache_lock:
+        server._model_route_cache.clear()
