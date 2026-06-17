@@ -67,60 +67,53 @@ the upstream provider's base URL.
 
 ### Display format returned by `GET /v1/models`
 
-While the slash form above is the canonical **input** form (accepted by every
-endpoint), `GET /v1/models` advertises ids in a different **display** form:
+`GET /v1/models` advertises ids in a **display** form built from the provider and
+the upstream model id:
 
 ```
-<provider_name>__<upstream_model_id>
+<provider_name>/<upstream_model_id>
 ```
 
-For example, an Ollama model with upstream id `qwen2.5vl:3b` is listed as
-`ollama__qwen2.5vl:3b`. The double-underscore separator avoids two real-world
-client bugs:
+The single `/` sits right after the provider, and any `/` *inside* the upstream
+model id is rewritten to `__`. For example, an Ollama model with upstream id
+`qwen2.5vl:3b` is listed as `ollama/qwen2.5vl:3b`, and OpenRouter's
+`deepseek/deepseek-chat-v3` is listed as `openrouter/deepseek__deepseek-chat-v3`.
+This shape avoids two real-world client bugs:
 
 - Spaces and parentheses break strict client validators (e.g. Hermes rejects
-  any model name containing whitespace).
-- A `/` separator causes some clients to silently truncate the id at the first
-  `/`, hiding the provider suffix in their menus.
+  any model name containing whitespace) — the display form has neither.
+- Many clients derive the *display name* by stripping everything up to the last
+  `/` (e.g. opencode's lmstudio plugin turns `qwen/qwen3-30b` into "Qwen3 30B").
+  Because the advertised id carries exactly **one** `/`, that strip leaves the
+  full model portion intact instead of collapsing many ids to a bare suffix like
+  "free".
 
-Putting the provider on the left mirrors the canonical `provider/model` slash
-form, so the two ids read consistently across logs, configs, and menus.
+| Upstream model (under `openrouter`)   | Display id                                  |
+|---------------------------------------|---------------------------------------------|
+| `gpt-4o`                              | `openrouter/gpt-4o`                         |
+| `anthropic/claude-3.5-sonnet`         | `openrouter/anthropic__claude-3.5-sonnet`  |
+| `meta-llama/llama-3/instruct`         | `openrouter/meta-llama_llama-3__instruct`  |
 
-**Single-slash flattening.** Some upstream ids contain *multiple* slashes
-(e.g. OpenRouter's `meta-llama/llama-3/instruct`). In the display form, all but
-the **last** slash are collapsed into `_`, so a display id always carries at most
-one `/`:
+(Upstream ids with *multiple* slashes — like the third row — keep the last slash
+as the one rewritten to `__`; any earlier slashes collapse to a single `_`, so the
+provider separator stays unambiguous.)
 
-| Upstream model (under `openrouter`)   | Display id                               |
-|---------------------------------------|------------------------------------------|
-| `gpt-4o`                              | `openrouter__gpt-4o`                     |
-| `anthropic/claude-3.5-sonnet`         | `openrouter__anthropic/claude-3.5-sonnet`|
-| `meta-llama/llama-3/instruct`         | `openrouter__meta-llama_llama-3/instruct`|
+Routing always forwards to the upstream under the **original** id; the display
+form is purely cosmetic. Internally the proxy still uses a canonical
+`provider__model` form (the route cache is keyed on both, so resolution is
+lossless even when an upstream id itself contains `__`).
 
-This keeps the proxy grammar unambiguous — `__` always separates the provider
-and there is never more than a single `/` — which also matters for the
-per-provider virtual models below. Routing always forwards to the upstream under
-the **original** (un-flattened) id, and the **input** forms are unchanged: you can
-still send the canonical `provider/upstream` slash form with a multi-slash
-upstream (e.g. `openrouter/meta-llama/llama-3/instruct`).
+Clients may submit any of these forms in `"model"` on chat/completions requests —
+they all resolve identically:
 
-Clients may submit any of these four forms in `"model"` on chat/completions
-requests:
-
-- `provider/model` — canonical slash form
-- `provider__model` — current display form
+- `provider/model` — current display / canonical slash form
+- `provider__model` — previous display form (still accepted)
 - `model__provider` — legacy display form from PR #27
 - `model (provider)` — pre-PR #27 legacy display form
 
-All four resolve identically.
-
-**Slash-form request ids.** Some clients prefer to display and send model ids in
-the `provider/model` slash form (e.g. `openrouter/gpt-4`, `llmproxy/free`) rather
-than `provider__model`. llmproxy accepts those on requests and canonicalizes them
-back to the `__` form before routing — rewriting only the first `/` when the
-leading token is a configured provider or `llmproxy` — so this round-trips for both
-real and virtual models without changing what `GET /v1/models` advertises (still
-`provider__model` for every other client).
+So nothing pinned in an existing client config breaks: a request for
+`openrouter__gpt-4o` resolves exactly like the newly advertised
+`openrouter/gpt-4o`.
 
 #### Classification fields in the model object
 
@@ -134,7 +127,7 @@ fields so clients can infer a model's type without a separate probe:
 
 These are additive — strict OpenAI clients ignore the extra keys, while clients that
 read the OpenRouter schema (e.g. Hermes) can classify models from the listing alone.
-The synthetic virtual models (`llmproxy__free`, `llmproxy__tools`, `llmproxy__vision`,
+The synthetic virtual models (`llmproxy/free`, `llmproxy/tools`, `llmproxy/vision`,
 …) carry the same fields.
 
 ## Virtual models
@@ -148,11 +141,19 @@ pool and **cycles** through them until one returns a usable answer. This gives y
 automatic load-spreading and failover without pinning a specific upstream in your
 client config.
 
-Every virtual model is advertised in the display form `llmproxy__<name>` (double
-underscore). The legacy slash form `llmproxy/<name>` is still accepted on **input**
-for backward compatibility with pinned client configs, but it is no longer
-advertised in `GET /v1/models`. A virtual model only appears in the listing when at
-least one eligible backend currently exists for it.
+Every virtual model is advertised in the display form `llmproxy/<name>`, with any
+dimension separator rewritten to `__` — so `llmproxy/free`, `llmproxy/tools`, and
+the sliced `llmproxy/deep__free`, `llmproxy/<provider>__free`, etc. The earlier
+`llmproxy__<name>` spelling (e.g. `llmproxy__free`, `llmproxy__deep/free`) and the
+legacy `llmproxy/<name>/<dimension>` slash form are both still accepted on **input**
+for backward compatibility with pinned client configs. A virtual model only appears
+in the listing when at least one eligible backend currently exists for it.
+
+> **Note on the tables below.** For readability the reference tables and `curl`
+> examples in this section spell virtual ids in the `llmproxy__<name>` form. That
+> spelling still works on every request, but `GET /v1/models` now advertises the
+> slash form (`llmproxy/<name>`, with `__` between sliced dimensions, e.g.
+> `llmproxy/deep__free`).
 
 The families are:
 
