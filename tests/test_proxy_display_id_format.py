@@ -319,9 +319,10 @@ def test_models_id_field_and_keep_task_adapt_cloudflare_shape(server, monkeypatc
     assert models[0]["id"] == "cloudflare-workers__@cf_meta/llama-3.1-8b-instruct"
 
 
-def test_virtual_ids_advertised_with_double_underscore(server):
-    """Every virtual id in _VIRTUAL_MODELS that the server emits as primary
-    (i.e. the NEW set) must start with `llmproxy__`, never `llmproxy/`."""
+def test_canonical_virtual_ids_use_double_underscore(server):
+    """Every virtual id in _NEW_VIRTUAL_MODELS (the canonical internal set)
+    must start with `llmproxy__`.  The advertised form uses `llmproxy/` but
+    internal routing state stays in canonical form."""
     new = server._NEW_VIRTUAL_MODELS
     assert new, "expected _NEW_VIRTUAL_MODELS to be non-empty"
     for vid in new:

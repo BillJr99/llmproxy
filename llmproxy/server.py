@@ -14,21 +14,27 @@ Implements the following OpenAI API endpoints:
 Model naming convention
 -----------------------
 GET /v1/models advertises every model in the display form:
-    <provider_name>__<upstream_model_id>
+    <provider_name>/<model_id>
 
-For example, an "ollama" provider serving "qwen2.5vl:3b" is shown as
-"ollama__qwen2.5vl:3b".  Spaces in either side are replaced with "_".
+where any "/" that appears *inside* the upstream model id is rewritten to
+"__".  For example, an "ollama" provider serving "qwen2.5vl:3b" is shown as
+"ollama/qwen2.5vl:3b", and an "openrouter" provider serving
+"deepseek/deepseek-chat-v3" is shown as "openrouter/deepseek__deepseek-chat-v3".
+Spaces in either side are replaced with "_".
 
 Upstream ids that contain multiple slashes are flattened so the display id
-carries at most one "/": all but the last slash become "_".  For example an
-"openrouter" provider serving "meta-llama/llama-3/instruct" is shown as
-"openrouter__meta-llama_llama-3/instruct".  This keeps "__" the unambiguous
-provider separator and leaves at most a single "/" in any id.  Routing always
-uses the original (un-flattened) upstream id when forwarding upstream.
+carries at most one "/": all but the last slash become "_", and the last
+becomes "__".  For example an "openrouter" provider serving
+"meta-llama/llama-3/instruct" is shown as
+"openrouter/meta-llama_llama-3__instruct".  Routing always uses the original
+(un-flattened) upstream id when forwarding upstream.
 
-Three additional input forms also resolve on every proxied endpoint, for
-backward compatibility with pinned client configs:
-    <provider_name>/<upstream_model_id>     (canonical slash form)
+Internally all routing state uses the canonical form
+`<provider_name>__<upstream_model_id>` (single "__", no leading "/").  The
+display form is applied only at the HTTP boundary (GET /v1/models responses).
+
+The following input forms are also accepted on every proxied endpoint:
+    <provider_name>__<upstream_model_id>    (canonical / older client form)
     <upstream_model_id>__<provider_name>    (PR #27 legacy display form)
     <upstream_model_id> (<provider_name>)   (pre-PR #27 legacy display form)
 

@@ -223,18 +223,23 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
         # display format ("provider__model"), the slash format ("provider/model"),
         # or one of the two legacy display formats ("model__provider" from PR #27
         # or "model (provider)" from before that) for backward compat.
-        # Virtual cycling models all live under the reserved "llmproxy" namespace
-        # (new "llmproxy__..." form, or legacy "llmproxy/..." form).
+        # Virtual cycling models all live under the reserved "llmproxy" namespace.
+        # Advertised form (GET /v1/models): "llmproxy/<name>" with "__" between dims.
+        # Canonical/older form ("llmproxy__<name>"): still accepted as input.
         SYNTHETIC_IDS = {
-            # New form (advertised by /v1/models)
+            # Canonical form (internal; still accepted as input)
             "llmproxy__free", "llmproxy__local",
             "llmproxy__exploratory", "llmproxy__standard", "llmproxy__deep",
             "llmproxy__exploratory/free", "llmproxy__exploratory/local",
             "llmproxy__standard/free", "llmproxy__standard/local",
             "llmproxy__deep/free", "llmproxy__deep/local",
-            # Legacy form (still accepted as input)
+            # Advertised form (current /v1/models output) and legacy slash form
             "llmproxy/free", "llmproxy/local",
             "llmproxy/exploratory", "llmproxy/standard", "llmproxy/deep",
+            "llmproxy/exploratory__free", "llmproxy/exploratory__local",
+            "llmproxy/standard__free", "llmproxy/standard__local",
+            "llmproxy/deep__free", "llmproxy/deep__local",
+            # Legacy three-part slash form (still accepted as input)
             "llmproxy/exploratory/free", "llmproxy/exploratory/local",
             "llmproxy/standard/free", "llmproxy/standard/local",
             "llmproxy/deep/free", "llmproxy/deep/local",
