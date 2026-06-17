@@ -68,6 +68,7 @@ from . import __version__
 from . import fusion as _fusion
 from .config import (
     RESERVED_PROVIDER_NAMES,
+    get_config_path,
     get_provider,
     load_config,
     model_is_allowed,
@@ -226,9 +227,20 @@ _usage_registry_lock = threading.Lock()
 _usage_since: str = datetime.datetime.now(datetime.UTC).isoformat()
 
 # believed_free models that served a request reporting a non-zero cost. Surfaced
-# (not auto-removed) via GET /v1/usage so the operator can review them.
+# via GET /v1/usage and persisted to config['cost_observed_free_tier'] so the
+# updater stops re-adding them to believed_free.
 _paid_free_flags: dict[str, dict] = {}
 _paid_free_lock = threading.Lock()
+
+# Serializes the best-effort config.json append in _persist_cost_observed so two
+# concurrent first-observations don't race the read-modify-write.
+_cost_observed_persist_lock = threading.Lock()
+# At most one background sidecar-update+PR reaction runs at a time; a run reads
+# the freshly-persisted config, so it covers every entry recorded before it
+# started. Concurrent observations skip rather than pile up duplicate scrapes.
+_cost_observed_reaction_lock = threading.Lock()
+_cost_observed_reaction_inflight = False
+COST_OBSERVED_KEY = "cost_observed_free_tier"
 
 
 def _get_or_create_tracker(key: str) -> ModelUsage:
@@ -240,8 +252,13 @@ def _get_or_create_tracker(key: str) -> ModelUsage:
     return tracker
 
 
-def _flag_paid_free(key: str, cost: float, source: str) -> None:
-    """Record (once-warned) that a believed-free model reported a cost."""
+def _flag_paid_free(key: str, cost: float, source: str) -> bool:
+    """Record (once-warned) that a believed-free model reported a cost.
+
+    Returns True only on the *first* observation of this model, so the caller can
+    persist it to ``cost_observed_free_tier`` exactly once rather than on every
+    request.
+    """
     with _paid_free_lock:
         entry = _paid_free_flags.get(key)
         if entry is None:
@@ -252,12 +269,99 @@ def _flag_paid_free(key: str, cost: float, source: str) -> None:
             }
             logger.warning(
                 "[usage] believed_free model %s reported a cost (%.8f, source=%s); "
-                "review whether it belongs in believed_free / the /free set.",
-                key, cost, source,
+                "adding to %s so the updater stops re-adding it to believed_free.",
+                key, cost, source, COST_OBSERVED_KEY,
             )
-        else:
-            entry["samples"] += 1
-            entry["observed_cost"] = round(max(entry["observed_cost"], cost), 8)
+            return True
+        entry["samples"] += 1
+        entry["observed_cost"] = round(max(entry["observed_cost"], cost), 8)
+        return False
+
+
+def _persist_cost_observed(qualified_id: str) -> None:
+    """Append *qualified_id* (``provider/model``) to config['cost_observed_free_tier'].
+
+    Best-effort and idempotent: reads the on-disk config.json directly (so the
+    hand-edited file is preserved rather than overwritten with merged defaults),
+    adds the id if absent (case-insensitive), and writes it back atomically. Any
+    failure is logged and swallowed — a usage-accounting side effect must never
+    break request handling.
+    """
+    try:
+        with _cost_observed_persist_lock:
+            path = get_config_path()
+            raw: dict = {}
+            if path.exists():
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    raw = {}
+            if not isinstance(raw, dict):
+                return
+            existing = raw.get(COST_OBSERVED_KEY)
+            ids = [x for x in existing if isinstance(x, str)] if isinstance(existing, list) else []
+            if qualified_id.lower() in {x.lower() for x in ids}:
+                return  # already recorded
+            ids.append(qualified_id)
+            raw[COST_OBSERVED_KEY] = sorted(set(ids), key=str.lower)
+            # Also drop it from the live believed_free right now, so the config on
+            # disk is self-consistent even before the updater/PR runs. Routing
+            # already avoids it via _is_cost_observed, but this keeps the file clean.
+            bf = raw.get("believed_free")
+            if isinstance(bf, list):
+                raw["believed_free"] = [
+                    m for m in bf
+                    if not (isinstance(m, str) and m.lower() == qualified_id.lower())
+                ]
+            save_config(raw)
+            logger.info("[usage] recorded %s in %s and dropped it from live believed_free",
+                        qualified_id, COST_OBSERVED_KEY)
+    except Exception as exc:  # noqa: BLE001 — never let persistence break a request
+        logger.warning("[usage] could not persist %s to %s: %s",
+                       qualified_id, COST_OBSERVED_KEY, exc)
+        return
+    # Propagate to the bundled sidecar + config.example.json and open a providers
+    # PR (best-effort, in the background) so the change isn't just local.
+    _react_to_cost_observed_async()
+
+
+def _react_to_cost_observed_async() -> None:
+    """Run the updater + providers-PR in the background after a cost observation.
+
+    Reuses the startup updater path: with the model now in
+    ``cost_observed_free_tier``, the updater's denylist removes it from the
+    bundled providers.json believed_free, regenerates config.example.json, and
+    opens/refreshes the providers PR. Gated on the same opt-in flags as the
+    startup flow, and limited to one in-flight run (which picks up every recorded
+    entry, so concurrent observations don't spawn duplicate scrapes).
+    """
+    config = load_config()
+    free_tier = config.get("free_tier", {}) if isinstance(config.get("free_tier"), dict) else {}
+    pr_enabled = config.get("providers_pr", {}).get("enabled") is True
+    if not (pr_enabled or free_tier.get("update_on_startup") is True):
+        return  # operator hasn't opted into sidecar updates / PRs
+
+    global _cost_observed_reaction_inflight
+    with _cost_observed_reaction_lock:
+        if _cost_observed_reaction_inflight:
+            return
+        _cost_observed_reaction_inflight = True
+
+    def _run() -> None:
+        global _cost_observed_reaction_inflight
+        try:
+            logger.info("[usage] propagating cost_observed change to sidecar / PR")
+            _run_free_models_update(load_config(), None)
+            with _models_list_cache_lock:
+                global _models_list_cache
+                _models_list_cache = None
+        except Exception as exc:  # noqa: BLE001 — background best-effort
+            logger.warning("[usage] cost_observed propagation failed: %s", exc)
+        finally:
+            with _cost_observed_reaction_lock:
+                _cost_observed_reaction_inflight = False
+
+    threading.Thread(target=_run, daemon=True, name="cost-observed-react").start()
 
 
 def _record_usage(
@@ -296,7 +400,10 @@ def _record_usage(
     if usage and cost > 0:
         cfg = config if config is not None else load_config()
         if _is_model_free(provider_name, upstream_model, cfg):
-            _flag_paid_free(key, cost, source or "unknown")
+            if _flag_paid_free(key, cost, source or "unknown"):
+                # First observation — persist the original-cased qualified id so
+                # the updater never re-adds it to believed_free.
+                _persist_cost_observed(f"{provider_name}/{upstream_model}")
 
 
 def _record_stream_usage(provider_name: str, upstream_model: str, tail: bytes, config: dict | None) -> None:
@@ -2640,13 +2747,37 @@ def _normalized_believed_free(config: dict) -> set[str]:
     return valid
 
 
+def _normalized_cost_observed(config: dict) -> set[str]:
+    """Lowercased set of config['cost_observed_free_tier'] qualified ids.
+
+    These are models that served a request reporting a real cost while marked
+    free; they are treated as paid everywhere from that moment on. Defensive
+    against malformed config in the same spirit as _normalized_believed_free.
+    """
+    raw = config.get(COST_OBSERVED_KEY)
+    if not isinstance(raw, list):
+        return set()
+    return {e.lower() for e in raw if isinstance(e, str)}
+
+
+def _is_cost_observed(provider_name: str, upstream_id: str, config: dict) -> bool:
+    """True when this model has been observed reporting a cost at runtime."""
+    return f"{provider_name}/{upstream_id}".lower() in _normalized_cost_observed(config)
+
+
 def _is_model_free(provider_name: str, upstream_id: str, config: dict) -> bool:
     """True when a model is treated as free-tier: its upstream id contains 'free'
     or it appears (bare or provider-qualified) in config['believed_free'].
 
+    A model in config['cost_observed_free_tier'] is never free — a real cost was
+    seen for it at runtime, so it is excluded here even if its id contains 'free'
+    or it lingers in believed_free. This makes /free avoid it immediately.
+
     Shared by the /free candidate selector and the runtime cost flagger so both
     agree on what "free" means.
     """
+    if _is_cost_observed(provider_name, upstream_id, config):
+        return False
     believed_free = _normalized_believed_free(config)
     uid = upstream_id.lower()
     return (
@@ -2949,6 +3080,10 @@ def _cost_tier(provider_name: str, upstream_id: str, provider_cfg: dict, config:
     """
     if _is_local_url(provider_base_url(provider_cfg)):
         return _TIER_LOCAL
+    # A model observed reporting a cost is paid, full stop — never let the
+    # provider's free-allowance headroom pull it back into the free tier.
+    if _is_cost_observed(provider_name, upstream_id, config):
+        return _TIER_PAID
     if _is_model_free(provider_name, upstream_id, config):
         return _TIER_FREE
     if _provider_free_headroom(provider_name, provider_cfg):

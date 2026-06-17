@@ -868,9 +868,17 @@ curl http://localhost:8080/v1/usage | jq
   per-token `pricing` snapshot bundled into `llmproxy/providers.json` by the
   scraper (`cost_sources` tells you which was used for how many requests).
 - **`flagged_paid_free_models`** lists any model in `believed_free` that served
-  a request reporting a **non-zero** cost. These are surfaced for review only —
-  the proxy never edits `believed_free` at runtime. Use this to spot a model
-  that has quietly left its free tier.
+  a request reporting a **non-zero** cost. Use this to spot a model that has
+  quietly left its free tier.
+
+  On the **first** such observation the proxy also appends the model's qualified
+  id to **`cost_observed_free_tier`** in your live `config.json` (a best-effort,
+  idempotent, operator-editable denylist). The updater treats anything in that
+  list as a hard *"not free"* signal: it is **never re-added** to `believed_free`
+  and is **removed** if present — both during a full scrape and during the
+  per-boot startup sync. This stops a paid model from being repeatedly re-added
+  (and re-opening a providers PR) every restart, without needing the cost probe.
+  The proxy still never edits `believed_free` directly at runtime.
 
 `POST /v1/usage/reset` clears the counters for the current worker; it is gated by
 the same auth policy as the [admin API](#security--localhost-only-by-default)
