@@ -353,12 +353,12 @@ def test_virtual_candidates_dispatch_matches_for_legacy_and_new(server):
     assert new_tiered == legacy_tiered
 
 
-# ── pi-openai-compat slash-id round-trip (_canonicalize_model_id) ──────────────
-# The pi shim rewrites the first `__` of every advertised id to `/` because pi
-# rejects `__` in model ids, then sends that slash form back on each request.
-# _canonicalize_model_id must invert that (first `/` -> `__`) so the existing
-# resolver/virtual machinery sees the canonical form — but only for ids whose
-# leading token is a configured provider or the `llmproxy` virtual namespace.
+# ── slash-form id round-trip (_canonicalize_model_id) ─────────────────────────
+# Some clients display and send the first `__` of an advertised id rewritten to
+# `/` (the `provider/model` slash form) on each request. _canonicalize_model_id
+# must invert that (first `/` -> `__`) so the existing resolver/virtual machinery
+# sees the canonical form — but only for ids whose leading token is a configured
+# provider or the `llmproxy` virtual namespace.
 
 def test_canonicalize_rewrites_first_slash_for_known_provider(server):
     config = server.load_config()
