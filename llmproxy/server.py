@@ -644,6 +644,30 @@ def _flatten_display_model(stripped: str) -> str:
     return stripped[:last].replace("/", "_") + "/" + stripped[last + 1:]
 
 
+def _virtual_display_name(canonical_vid: str) -> str:
+    """Return a human-readable ``name`` for a virtual model id.
+
+    The name is suitable for display in client model pickers: it contains no
+    ``/`` so clients that derive a label by stripping to the last ``/`` (e.g.
+    opencode's lmstudio plugin) show it verbatim rather than just a trailing
+    segment like a bare ``free``.
+
+    Examples
+    --------
+    >>> _virtual_display_name("llmproxy__free")
+    '[llmproxy] Free'
+    >>> _virtual_display_name("llmproxy__exploratory/free")
+    '[llmproxy] Exploratory — Free'
+    >>> _virtual_display_name("llmproxy__openrouter/free")
+    '[llmproxy] Openrouter — Free'
+    """
+    _, sep, rest = canonical_vid.partition("__")
+    if not sep:
+        return canonical_vid
+    parts = [p.replace("_", " ").title() for p in rest.replace("/", "__").split("__")]
+    return "[llmproxy] " + " — ".join(parts)
+
+
 def _display_id(canonical_id: str) -> str:
     """Convert a canonical ``provider__model`` id to the advertised ``provider/model`` form.
 
@@ -1735,11 +1759,21 @@ def list_models() -> Response:
         disp = _display_id(cid)
         if disp == cid:
             continue
-        name = model.get("name", cid)
-        # name may carry a " (believed_free[, local])" suffix appended during annotation.
-        suffix = name[len(cid):] if name.startswith(cid) else ""
         model["id"] = disp
-        model["name"] = disp + suffix
+        if _is_virtual_model(cid):
+            # Give virtual models a human-readable name with no "/" so client pickers
+            # that strip to the last "/" (e.g. opencode) show the full label verbatim.
+            model["name"] = _virtual_display_name(cid)
+        else:
+            name = model.get("name", cid)
+            if name == cid:
+                # No upstream-provided name — use the display id.
+                model["name"] = disp
+            elif name.startswith(cid):
+                # Name carries a " (believed_free[, local])" suffix — rebase onto display id.
+                model["name"] = disp + name[len(cid):]
+            # else: upstream provided a different friendly name (e.g. "Aion Labs Aion 1.0");
+            # leave it unchanged.
 
     if models_ttl > 0:
         with _models_list_cache_lock:
@@ -1775,7 +1809,7 @@ def get_model(model_id: str) -> Response:
             "id": disp,
             "object": "model",
             "owned_by": "llmproxy",
-            "name": disp,
+            "name": _virtual_display_name(model_id),
             "_note": f"Virtual model: '{disp}' cycles through matching candidates until one succeeds.",
             "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
         })
