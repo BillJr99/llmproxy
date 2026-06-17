@@ -1588,6 +1588,7 @@ def get_model(model_id: str) -> Response:
     plus the legacy "llmproxy/free" forms) are
     handled here via the _VIRTUAL_MODELS membership check.
     """
+    model_id = _canonicalize_model_id(model_id, load_config())
     if _is_virtual_model(model_id):
         candidates = _get_virtual_candidates(model_id)
         return jsonify({
@@ -3129,6 +3130,30 @@ def _get_virtual_candidates(model_full: str) -> list[tuple[str, dict, str]]:
 # Shared routing logic for all proxied endpoints
 # ---------------------------------------------------------------------------
 
+def _canonicalize_model_id(model_full: str, config: dict) -> str:
+    """Map a pi-style slash id back to the canonical ``provider__model`` form.
+
+    The pi-openai-compat shim rewrites the first ``__`` of every advertised model
+    id to ``/`` (pi rejects ``__`` in model ids) and sends that slash form back on
+    each request. Rewriting only the FIRST ``/`` back to ``__`` is the exact
+    inverse: the provider / ``llmproxy`` virtual segment never contains ``/`` and
+    the advertised model segment carries at most one ``/`` (see
+    ``_flatten_display_model``), so the first ``/`` is always the separator the
+    shim introduced.
+
+    Gated on the leading token naming a configured provider or the reserved
+    ``llmproxy`` virtual namespace, so an id that already uses ``__`` and ordinary
+    ``provider/model`` ids from other clients are returned unchanged and still flow
+    through the existing virtual/route resolution below.
+    """
+    if "__" in model_full or "/" not in model_full:
+        return model_full
+    left = model_full.partition("/")[0]
+    if left == "llmproxy" or get_provider(config, left):
+        return left + "__" + model_full[len(left) + 1:]
+    return model_full
+
+
 def _resolve_provider(model_full: str) -> tuple[str | None, dict | None, str | None, Response | None]:
     """
     Parse *model_full* into (provider_name, provider_cfg, upstream_model).
@@ -3645,6 +3670,11 @@ def _proxy_endpoint(
         return _error("Request body must include a 'model' field.", status=400)
 
     config = load_config()
+    # Accept the pi-style slash id (provider/model) the pi-openai-compat shim emits
+    # and normalize it back to the canonical provider__model form before any
+    # virtual/route resolution runs.
+    model_full = _canonicalize_model_id(model_full, config)
+    payload["model"] = model_full
     server_cfg = config.get("server", {})
     is_streaming: bool = payload.get("stream", False)
 
@@ -3846,11 +3876,12 @@ def embeddings() -> Response:
     if not model_full:
         return _error("Request body must include a 'model' field.", status=400)
 
+    config = load_config()
+    model_full = _canonicalize_model_id(model_full, config)
     provider_name, provider_cfg, upstream_model, err = _resolve_provider(model_full)
     if err is not None:
         return err
 
-    config = load_config()
     timeout = config.get("server", {}).get("request_timeout", 120)
     upstream_payload = {**payload, "model": upstream_model}
     resp = _proxy_request("embeddings", provider_name, provider_cfg, upstream_payload, timeout)
@@ -3959,6 +3990,7 @@ def passthrough(subpath: str) -> Response:
         provider_name_hint = request.args.get("provider", "")
 
         if model_full:
+            model_full = _canonicalize_model_id(model_full, config)
             provider_name, provider_cfg, upstream_model, err = _resolve_provider(model_full)
             if err:
                 return err

@@ -351,3 +351,68 @@ def test_virtual_candidates_dispatch_matches_for_legacy_and_new(server):
     new_tiered = server._get_virtual_candidates("llmproxy__deep/free")
     legacy_tiered = server._get_virtual_candidates("llmproxy/deep/free")
     assert new_tiered == legacy_tiered
+
+
+# ── pi-openai-compat slash-id round-trip (_canonicalize_model_id) ──────────────
+# The pi shim rewrites the first `__` of every advertised id to `/` because pi
+# rejects `__` in model ids, then sends that slash form back on each request.
+# _canonicalize_model_id must invert that (first `/` -> `__`) so the existing
+# resolver/virtual machinery sees the canonical form — but only for ids whose
+# leading token is a configured provider or the `llmproxy` virtual namespace.
+
+def test_canonicalize_rewrites_first_slash_for_known_provider(server):
+    config = server.load_config()
+    f = server._canonicalize_model_id
+    # 0-slash model part: provider/model -> provider__model
+    assert f("fakeprov/qwen2.5vl:3b", config) == "fakeprov__qwen2.5vl:3b"
+    # 1-slash model part: only the FIRST slash (the shim separator) is rewritten,
+    # preserving the interior slash of the upstream id.
+    assert f("fakeprov/meta-llama/llama-3.3", config) == "fakeprov__meta-llama/llama-3.3"
+
+
+def test_canonicalize_rewrites_llmproxy_virtuals(server):
+    config = server.load_config()
+    f = server._canonicalize_model_id
+    assert f("llmproxy/free", config) == "llmproxy__free"
+    assert f("llmproxy/loadbalanced", config) == "llmproxy__loadbalanced"
+    assert f("llmproxy/deep/free", config) == "llmproxy__deep/free"
+
+
+def test_canonicalize_leaves_unknown_and_canonical_ids_untouched(server):
+    config = server.load_config()
+    f = server._canonicalize_model_id
+    # Already-canonical (__) ids pass through unchanged.
+    assert f("fakeprov__qwen2.5vl:3b", config) == "fakeprov__qwen2.5vl:3b"
+    assert f("llmproxy__free", config) == "llmproxy__free"
+    # Bare ids with no slash are unchanged.
+    assert f("gpt-4", config) == "gpt-4"
+    # A leading token that is neither a configured provider nor `llmproxy` is left
+    # alone so ordinary slash ids still flow through parse_model_string.
+    assert f("unknownprov/some-model", config) == "unknownprov/some-model"
+
+
+def test_canonicalized_slash_id_resolves_to_same_route(server):
+    """A real model requested in the pi slash form resolves to the same upstream
+    as its canonical `__` spelling."""
+    config = server.load_config()
+    with server._model_route_cache_lock:
+        server._model_route_cache.clear()
+        server._model_route_cache["fakeprov__meta-llama/llama-3.3"] = (
+            "fakeprov", "meta-llama/llama-3.3",
+        )
+    canonical = server._canonicalize_model_id("fakeprov/meta-llama/llama-3.3", config)
+    provider_name, _cfg, upstream_model, err = server._resolve_provider(canonical)
+    assert err is None, f"unexpected error: {err}"
+    assert provider_name == "fakeprov"
+    assert upstream_model == "meta-llama/llama-3.3"
+    with server._model_route_cache_lock:
+        server._model_route_cache.clear()
+
+
+def test_canonicalized_virtual_slash_id_is_recognized_as_virtual(server):
+    """`llmproxy/free` canonicalizes to `llmproxy__free` and is recognized as a
+    virtual model so it dispatches to the cycling handler, not provider routing."""
+    config = server.load_config()
+    canonical = server._canonicalize_model_id("llmproxy/free", config)
+    assert canonical == "llmproxy__free"
+    assert server._is_virtual_model(canonical)
