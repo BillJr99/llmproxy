@@ -256,26 +256,27 @@ def test_models(base_url: str, **_) -> Optional[list[str]]:
         else:
             results.ok("All model IDs follow proxy naming convention")
 
-        if any(m.get("id") == "llmproxy__free" for m in models):
-            results.ok("Synthetic 'llmproxy__free' cycling model is advertised")
+        if any(m.get("id") == "llmproxy/free" for m in models):
+            results.ok("Synthetic 'llmproxy/free' cycling model is advertised")
         else:
-            results.skip("Synthetic 'llmproxy__free' model", "no free-tier models found across providers")
+            results.skip("Synthetic 'llmproxy/free' model", "no free-tier models found across providers")
 
-        if any(m.get("id") == "llmproxy__local" for m in models):
-            results.ok("Synthetic 'llmproxy__local' cycling model is advertised")
+        if any(m.get("id") == "llmproxy/local" for m in models):
+            results.ok("Synthetic 'llmproxy/local' cycling model is advertised")
         else:
-            results.skip("Synthetic 'llmproxy__local' model", "no providers with a localhost base_url found")
+            results.skip("Synthetic 'llmproxy/local' model", "no providers with a localhost base_url found")
 
         for _level in ("exploratory", "standard", "deep"):
-            if any(m.get("id") == f"llmproxy__{_level}" for m in models):
-                results.ok(f"Synthetic 'llmproxy__{_level}' reasoning model is advertised")
+            if any(m.get("id") == f"llmproxy/{_level}" for m in models):
+                results.ok(f"Synthetic 'llmproxy/{_level}' reasoning model is advertised")
             else:
                 results.skip(
-                    f"Synthetic 'llmproxy__{_level}' reasoning model",
+                    f"Synthetic 'llmproxy/{_level}' reasoning model",
                     f"no models tagged '{_level}' in config['model_reasoning']",
                 )
             for _suffix in ("free", "local"):
-                _combo = f"llmproxy__{_level}/{_suffix}"
+                # Advertised combo form: the dimension separator is "__" (see _display_id).
+                _combo = f"llmproxy/{_level}__{_suffix}"
                 if any(m.get("id") == _combo for m in models):
                     results.ok(f"Synthetic '{_combo}' combo model is advertised")
 
@@ -1230,8 +1231,8 @@ def _pick_model(models: list[str], preferred: Optional[str]) -> Optional[str]:
         return None
     # Prefer the synthetic "free" cycling model when it's available — it
     # automatically routes to a working free-tier backend.
-    if "llmproxy__free" in models:
-        return "llmproxy__free"
+    if "llmproxy/free" in models:
+        return "llmproxy/free"
     # Fall back to other free or small models by name.
     for keyword in ("free", "mini", "flash", "haiku", "small", "tiny", "7b", "8b"):
         for m in models:
