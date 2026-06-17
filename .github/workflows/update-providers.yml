@@ -1,21 +1,18 @@
 name: Update providers.json
 
-# Keeps llmproxy/providers.json (and the regenerated config.example.json) current
-# by running the free-models scraper on a schedule and opening a pull request
-# against main whenever the data changes. It uses only the read-only sources
-# (provider docs, /models catalogs, OpenRouter, the litellm cost map, the
-# community list) — it never runs the opt-in `probe` source, so no real model
-# requests / quota are spent here.
+# Refreshes llmproxy/providers.json (and the regenerated config.example.json) by
+# running the free-models scraper and opening a pull request against main when the
+# data changes. It uses only the read-only sources (provider docs, /models
+# catalogs, OpenRouter, the litellm cost map, the community list) — it never runs
+# the opt-in `probe` source, so no real model requests / quota are spent here.
 #
-# Toggle: set a repository variable PROVIDERS_AUTOUPDATE to "false" to disable the
-# scheduled run (Settings → Secrets and variables → Actions → Variables). It is
-# treated as enabled unless explicitly set to "false". You can always trigger a
-# run manually from the Actions tab (workflow_dispatch).
+# Manual only: trigger it from the Actions tab → "Update providers.json" → Run
+# workflow (or via `gh workflow run update-providers.yml`). There is no schedule,
+# so a refresh happens exactly when you ask for it. Because it runs in Actions on
+# the current main code, its output is always self-consistent (canonical
+# providers.json + a matching config.example.json), so the PR it opens passes CI.
 
 on:
-  schedule:
-    # Mondays at 06:00 UTC.
-    - cron: "0 6 * * 1"
   workflow_dispatch: {}
 
 permissions:
@@ -24,8 +21,6 @@ permissions:
 
 jobs:
   update:
-    # Run on schedule only when not disabled; manual dispatch always runs.
-    if: github.event_name == 'workflow_dispatch' || vars.PROVIDERS_AUTOUPDATE != 'false'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
