@@ -4358,8 +4358,8 @@
       "output_cost_per_token": 2.8e-07
     },
     "openrouter/xiaomi/mimo-v2.5-pro": {
-      "input_cost_per_token": 1e-06,
-      "output_cost_per_token": 3e-06
+      "input_cost_per_token": 4.35e-07,
+      "output_cost_per_token": 8.7e-07
     },
     "openrouter/z-ai/glm-4.5": {
       "input_cost_per_token": 6e-07,
