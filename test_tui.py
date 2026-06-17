@@ -60,19 +60,19 @@ RED     = "\033[31m"
 _W = 72   # display width
 
 _VIRTUAL_IDS = frozenset({
-    # Advertised "llmproxy/..." form (current /v1/models output)
+    # Advertised form (current /v1/models output): "llmproxy/<name>" with "__" between dims
     "llmproxy/free", "llmproxy/local",
     "llmproxy/exploratory", "llmproxy/standard", "llmproxy/deep",
     "llmproxy/exploratory__free", "llmproxy/exploratory__local",
     "llmproxy/standard__free", "llmproxy/standard__local",
     "llmproxy/deep__free", "llmproxy/deep__local",
-    # Earlier "llmproxy__..." form (still accepted as input)
+    # Canonical form ("llmproxy__<name>"): still accepted as input
     "llmproxy__free", "llmproxy__local",
     "llmproxy__exploratory", "llmproxy__standard", "llmproxy__deep",
     "llmproxy__exploratory/free", "llmproxy__exploratory/local",
     "llmproxy__standard/free", "llmproxy__standard/local",
     "llmproxy__deep/free", "llmproxy__deep/local",
-    # Legacy "llmproxy/<name>/<dimension>" slash form (still accepted as input)
+    # Legacy three-part slash form: still accepted as input
     "llmproxy/exploratory/free", "llmproxy/exploratory/local",
     "llmproxy/standard/free", "llmproxy/standard/local",
     "llmproxy/deep/free", "llmproxy/deep/local",

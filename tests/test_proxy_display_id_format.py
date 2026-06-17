@@ -319,9 +319,10 @@ def test_models_id_field_and_keep_task_adapt_cloudflare_shape(server, monkeypatc
     assert models[0]["id"] == "cloudflare-workers__@cf_meta/llama-3.1-8b-instruct"
 
 
-def test_virtual_ids_advertised_with_double_underscore(server):
-    """Every virtual id in _VIRTUAL_MODELS that the server emits as primary
-    (i.e. the NEW set) must start with `llmproxy__`, never `llmproxy/`."""
+def test_canonical_virtual_ids_use_double_underscore(server):
+    """Every virtual id in _NEW_VIRTUAL_MODELS (the canonical internal set)
+    must start with `llmproxy__`.  The advertised form uses `llmproxy/` but
+    internal routing state stays in canonical form."""
     new = server._NEW_VIRTUAL_MODELS
     assert new, "expected _NEW_VIRTUAL_MODELS to be non-empty"
     for vid in new:
@@ -508,5 +509,108 @@ def test_advertised_real_id_resolves_losslessly_via_dual_keyed_cache(server):
     pn, _cfg, upstream, err = server._resolve_provider(advertised)
     assert err is None, f"unexpected error: {err}"
     assert (pn, upstream) == ("fakeprov", "weird__name")
+    with server._model_route_cache_lock:
+        server._model_route_cache.clear()
+
+
+# ── virtual model friendly names (_virtual_display_name) ─────────────────────
+# Virtual models must have a `name` that contains no "/" so client pickers that
+# derive a label by stripping to the last "/" (e.g. opencode) show the full
+# label verbatim rather than a bare word like "free".
+
+def test_virtual_display_name_simple(server):
+    f = server._virtual_display_name
+    assert f("llmproxy__free") == "[llmproxy] Free"
+    assert f("llmproxy__local") == "[llmproxy] Local"
+    assert f("llmproxy__loadbalanced") == "[llmproxy] Loadbalanced"
+    assert f("llmproxy__tools") == "[llmproxy] Tools"
+    assert f("llmproxy__fusion") == "[llmproxy] Fusion"
+
+
+def test_virtual_display_name_compound(server):
+    f = server._virtual_display_name
+    assert f("llmproxy__exploratory/free") == "[llmproxy] Exploratory — Free"
+    assert f("llmproxy__deep/free") == "[llmproxy] Deep — Free"
+    assert f("llmproxy__standard/local") == "[llmproxy] Standard — Local"
+    assert f("llmproxy__tools/free") == "[llmproxy] Tools — Free"
+    assert f("llmproxy__openrouter/free") == "[llmproxy] Openrouter — Free"
+
+
+def test_virtual_display_name_has_no_slash(server):
+    """name must contain no "/" so strip-to-last-slash clients show it verbatim."""
+    for vid in server._NEW_VIRTUAL_MODELS:
+        name = server._virtual_display_name(vid)
+        assert "/" not in name, f"virtual name contains slash: {vid!r} -> {name!r}"
+        assert name.startswith("[llmproxy]"), f"virtual name missing prefix: {vid!r} -> {name!r}"
+
+
+def test_models_list_virtual_names_are_friendly(server, monkeypatch):
+    """/v1/models emits human-readable names for virtual models with no "/"."""
+    # Seed the route cache with a believed_free model so llmproxy/free appears.
+    seed_cid = "fakeprov__free-model"
+    seed_route = ("fakeprov", "free-model")
+
+    def _fake_rebuild(providers_cfg, timeout, only_if_empty=False):
+        with server._model_route_cache_lock:
+            server._model_route_cache.clear()
+            server._model_route_cache[seed_cid] = seed_route
+            server._model_route_cache[server._display_id(seed_cid)] = seed_route
+        return [{"id": seed_cid, "name": seed_cid, "object": "model"}]
+
+    monkeypatch.setattr(server, "_rebuild_route_cache", _fake_rebuild)
+    monkeypatch.setattr(server, "_sync_local_provider_models_once", lambda: None)
+    server._models_list_cache = None
+
+    data = server.app.test_client().get("/v1/models").get_json()["data"]
+    virtual = [m for m in data if m["id"].startswith("llmproxy/")]
+    assert virtual, "expected virtual models in /v1/models listing"
+    for m in virtual:
+        assert "/" not in m["name"], \
+            f"virtual model name contains slash: id={m['id']!r} name={m['name']!r}"
+        assert m["name"].startswith("[llmproxy]"), \
+            f"virtual model name missing [llmproxy] prefix: {m['name']!r}"
+
+    with server._model_route_cache_lock:
+        server._model_route_cache.clear()
+
+
+def test_get_model_virtual_name_is_friendly(server):
+    """GET /v1/models/<virtual_id> returns a friendly name with no "/"."""
+    resp = server.app.test_client().get("/v1/models/llmproxy__free")
+    body = resp.get_json()
+    assert resp.status_code == 200
+    assert body["name"] == "[llmproxy] Free"
+    assert "/" not in body["name"]
+
+    resp2 = server.app.test_client().get("/v1/models/llmproxy__deep/free")
+    body2 = resp2.get_json()
+    assert resp2.status_code == 200
+    assert body2["name"] == "[llmproxy] Deep — Free"
+    assert "/" not in body2["name"]
+
+
+def test_real_model_name_unchanged(server, monkeypatch):
+    """Real model names from upstream are passed through without modification."""
+    routes = {"openrouter__aion-labs/aion-1.0": ("openrouter", "aion-labs/aion-1.0")}
+
+    def _fake_rebuild(providers_cfg, timeout, only_if_empty=False):
+        with server._model_route_cache_lock:
+            server._model_route_cache.clear()
+            server._model_route_cache.update(routes)
+            for cid, route in list(routes.items()):
+                server._model_route_cache[server._display_id(cid)] = route
+        return [{"id": "openrouter__aion-labs/aion-1.0",
+                 "name": "Aion Labs Aion 1.0", "object": "model"}]
+
+    monkeypatch.setattr(server, "_rebuild_route_cache", _fake_rebuild)
+    monkeypatch.setattr(server, "_sync_local_provider_models_once", lambda: None)
+    server._models_list_cache = None
+
+    data = server.app.test_client().get("/v1/models").get_json()["data"]
+    real = next((m for m in data if m["id"] == "openrouter/aion-labs__aion-1.0"), None)
+    assert real is not None, "expected the real model in the listing"
+    assert real["name"] == "Aion Labs Aion 1.0", \
+        f"real model name should be unchanged: {real['name']!r}"
+
     with server._model_route_cache_lock:
         server._model_route_cache.clear()

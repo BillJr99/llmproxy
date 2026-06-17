@@ -14,21 +14,27 @@ Implements the following OpenAI API endpoints:
 Model naming convention
 -----------------------
 GET /v1/models advertises every model in the display form:
-    <provider_name>__<upstream_model_id>
+    <provider_name>/<model_id>
 
-For example, an "ollama" provider serving "qwen2.5vl:3b" is shown as
-"ollama__qwen2.5vl:3b".  Spaces in either side are replaced with "_".
+where any "/" that appears *inside* the upstream model id is rewritten to
+"__".  For example, an "ollama" provider serving "qwen2.5vl:3b" is shown as
+"ollama/qwen2.5vl:3b", and an "openrouter" provider serving
+"deepseek/deepseek-chat-v3" is shown as "openrouter/deepseek__deepseek-chat-v3".
+Spaces in either side are replaced with "_".
 
 Upstream ids that contain multiple slashes are flattened so the display id
-carries at most one "/": all but the last slash become "_".  For example an
-"openrouter" provider serving "meta-llama/llama-3/instruct" is shown as
-"openrouter__meta-llama_llama-3/instruct".  This keeps "__" the unambiguous
-provider separator and leaves at most a single "/" in any id.  Routing always
-uses the original (un-flattened) upstream id when forwarding upstream.
+carries at most one "/": all but the last slash become "_", and the last
+becomes "__".  For example an "openrouter" provider serving
+"meta-llama/llama-3/instruct" is shown as
+"openrouter/meta-llama_llama-3__instruct".  Routing always uses the original
+(un-flattened) upstream id when forwarding upstream.
 
-Three additional input forms also resolve on every proxied endpoint, for
-backward compatibility with pinned client configs:
-    <provider_name>/<upstream_model_id>     (canonical slash form)
+Internally all routing state uses the canonical form
+`<provider_name>__<upstream_model_id>` (single "__", no leading "/").  The
+display form is applied only at the HTTP boundary (GET /v1/models responses).
+
+The following input forms are also accepted on every proxied endpoint:
+    <provider_name>__<upstream_model_id>    (canonical / older client form)
     <upstream_model_id>__<provider_name>    (PR #27 legacy display form)
     <upstream_model_id> (<provider_name>)   (pre-PR #27 legacy display form)
 
@@ -636,6 +642,30 @@ def _flatten_display_model(stripped: str) -> str:
     if last == -1:
         return stripped
     return stripped[:last].replace("/", "_") + "/" + stripped[last + 1:]
+
+
+def _virtual_display_name(canonical_vid: str) -> str:
+    """Return a human-readable ``name`` for a virtual model id.
+
+    The name is suitable for display in client model pickers: it contains no
+    ``/`` so clients that derive a label by stripping to the last ``/`` (e.g.
+    opencode's lmstudio plugin) show it verbatim rather than just a trailing
+    segment like a bare ``free``.
+
+    Examples
+    --------
+    >>> _virtual_display_name("llmproxy__free")
+    '[llmproxy] Free'
+    >>> _virtual_display_name("llmproxy__exploratory/free")
+    '[llmproxy] Exploratory — Free'
+    >>> _virtual_display_name("llmproxy__openrouter/free")
+    '[llmproxy] Openrouter — Free'
+    """
+    _, sep, rest = canonical_vid.partition("__")
+    if not sep:
+        return canonical_vid
+    parts = [p.replace("_", " ").title() for p in rest.replace("/", "__").split("__")]
+    return "[llmproxy] " + " — ".join(parts)
 
 
 def _display_id(canonical_id: str) -> str:
@@ -1729,11 +1759,21 @@ def list_models() -> Response:
         disp = _display_id(cid)
         if disp == cid:
             continue
-        name = model.get("name", cid)
-        # name may carry a " (believed_free[, local])" suffix appended during annotation.
-        suffix = name[len(cid):] if name.startswith(cid) else ""
         model["id"] = disp
-        model["name"] = disp + suffix
+        if _is_virtual_model(cid):
+            # Give virtual models a human-readable name with no "/" so client pickers
+            # that strip to the last "/" (e.g. opencode) show the full label verbatim.
+            model["name"] = _virtual_display_name(cid)
+        else:
+            name = model.get("name", cid)
+            if name == cid:
+                # No upstream-provided name — use the display id.
+                model["name"] = disp
+            elif name.startswith(cid):
+                # Name carries a " (believed_free[, local])" suffix — rebase onto display id.
+                model["name"] = disp + name[len(cid):]
+            # else: upstream provided a different friendly name (e.g. "Aion Labs Aion 1.0");
+            # leave it unchanged.
 
     if models_ttl > 0:
         with _models_list_cache_lock:
@@ -1769,7 +1809,7 @@ def get_model(model_id: str) -> Response:
             "id": disp,
             "object": "model",
             "owned_by": "llmproxy",
-            "name": disp,
+            "name": _virtual_display_name(model_id),
             "_note": f"Virtual model: '{disp}' cycles through matching candidates until one succeeds.",
             "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
         })
