@@ -769,13 +769,21 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
     return result
 
 
-def _rebuild_route_cache(providers_cfg: dict, timeout: int) -> list[dict]:
+def _rebuild_route_cache(providers_cfg: dict, timeout: int,
+                         only_if_empty: bool = False) -> list[dict]:
     """
     Fetch models from all providers concurrently, rebuild _model_route_cache
     atomically, and return the full flat model list.
 
     The cache is replaced wholesale on each call so that removed or renamed
     upstream models do not linger as stale entries.
+
+    When ``only_if_empty`` is set (the warm-on-empty paths), the freshly fetched
+    cache is applied only if the live cache is *still* empty under the lock — the
+    network fetch can take seconds, and a concurrent request (or, in tests, a
+    direct seed) may have populated the cache meanwhile. Clobbering it then would
+    wipe live routing data; the warm should defer to whoever populated it first.
+    The flat model list is still returned either way.
     """
     if not providers_cfg:
         with _model_route_cache_lock:
@@ -819,6 +827,13 @@ def _rebuild_route_cache(providers_cfg: dict, timeout: int) -> list[dict]:
             new_cache[m["id"]] = route
 
     with _model_route_cache_lock:
+        if only_if_empty and _model_route_cache:
+            logger.info(
+                "[server:_rebuild_route_cache] cache populated concurrently "
+                "(%d entries); keeping it, discarding warm result.",
+                len(_model_route_cache),
+            )
+            return all_models
         _model_route_cache.clear()
         _model_route_cache.update(new_cache)
 
@@ -841,7 +856,7 @@ def _get_route_cache_snapshot() -> dict[str, tuple[str, str]]:
     config = load_config()
     providers_cfg = config.get("providers", {})
     timeout = config.get("server", {}).get("request_timeout", 120)
-    _rebuild_route_cache(providers_cfg, timeout)
+    _rebuild_route_cache(providers_cfg, timeout, only_if_empty=True)
 
     with _model_route_cache_lock:
         return dict(_model_route_cache)
@@ -1009,7 +1024,7 @@ def _warm_route_cache_if_empty() -> None:
         return
     timeout = config.get("server", {}).get("request_timeout", 120)
     try:
-        _rebuild_route_cache(providers_cfg, timeout)
+        _rebuild_route_cache(providers_cfg, timeout, only_if_empty=True)
     except Exception as exc:  # noqa: BLE001 — warming must never crash the worker
         logger.warning("[startup] route-cache warm failed: %s", exc)
 
