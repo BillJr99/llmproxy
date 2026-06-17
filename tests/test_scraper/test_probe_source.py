@@ -83,6 +83,72 @@ def test_probe_fail_soft_on_error(monkeypatch):
 
 
 @responses.activate
+def test_probe_flags_multiple_models_concurrently(monkeypatch):
+    _patch(
+        monkeypatch,
+        believed_free=["groq/m1", "groq/m2", "groq/m3"],
+        providers={"groq": {"base_url": "http://groq.example/v1", "api_key": "k"}},
+    )
+    responses.add(
+        responses.POST, "http://groq.example/v1/chat/completions",
+        json={"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "cost": 0.003}},
+        status=200,
+    )
+    evs = ProbeSource(concurrency=3).fetch()
+    assert {e.model_id for e in evs} == {"groq/m1", "groq/m2", "groq/m3"}
+    assert all(e.is_free is False for e in evs)
+
+
+@responses.activate
+def test_probe_respects_max_models(monkeypatch):
+    _patch(
+        monkeypatch,
+        believed_free=["groq/m1", "groq/m2", "groq/m3"],
+        providers={"groq": {"base_url": "http://groq.example/v1", "api_key": "k"}},
+    )
+    responses.add(
+        responses.POST, "http://groq.example/v1/chat/completions",
+        json={"usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "cost": 0.003}},
+        status=200,
+    )
+    evs = ProbeSource(max_models=2).fetch()
+    assert len(evs) == 2
+    # Only the first two believed_free candidates are probed (budget bound).
+    assert len(responses.calls) == 2
+
+
+def test_probe_caps_concurrency_per_provider(monkeypatch):
+    """No more than ``concurrency`` requests to one provider are in flight at once."""
+    import threading
+
+    _patch(
+        monkeypatch,
+        believed_free=[f"groq/m{i}" for i in range(6)],
+        providers={"groq": {"base_url": "http://groq.example/v1", "api_key": "k"}},
+    )
+    lock = threading.Lock()
+    state = {"in_flight": 0, "peak": 0}
+
+    def fake_probe(self, base_url, api_key, model):
+        with lock:
+            state["in_flight"] += 1
+            state["peak"] = max(state["peak"], state["in_flight"])
+        try:
+            # Hold the slot briefly so overlap is observable.
+            import time
+            time.sleep(0.02)
+            return {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "cost": 0.003}
+        finally:
+            with lock:
+                state["in_flight"] -= 1
+
+    monkeypatch.setattr(ProbeSource, "_probe", fake_probe)
+    evs = ProbeSource(concurrency=2).fetch()
+    assert len(evs) == 6
+    assert state["peak"] <= 2
+
+
+@responses.activate
 def test_probe_computes_cost_from_pricing(monkeypatch):
     _patch(
         monkeypatch,
