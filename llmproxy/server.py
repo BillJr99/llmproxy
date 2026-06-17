@@ -2004,7 +2004,7 @@ def _translated_stream_response(
                         yield c
 
                 yield from inbound.render_stream(teed(outbound.parse_stream(raw())))
-        except requests.exceptions.Timeout:
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
             logger.error("[server:_translated_stream] provider=%s timed out", provider_name)
             yield b'data: {"error":{"message":"Upstream stream timed out."}}\n\n'
         except Exception as e:  # noqa: BLE001
@@ -2101,7 +2101,7 @@ def _proxy_streaming(
                         tail += chunk
                         if len(tail) > _STREAM_TAIL_BYTES:
                             del tail[:-_STREAM_TAIL_BYTES]
-        except requests.exceptions.Timeout:
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
             logger.error(
                 "[server:_proxy_streaming] provider=%s timed out", provider_name
             )
@@ -2625,7 +2625,8 @@ def _proxy_cycling_streaming(
         for attempt in range(max_attempts):
             logger.info("  [%s] trying %s/%s  [streaming]", label, provider_name, upstream_model)
             try:
-                resp = requests.post(url, headers=headers, json=body, stream=True, timeout=candidate_timeout)
+                resp = requests.post(url, headers=headers, json=body, stream=True,
+                                     timeout=(candidate_timeout, timeout))
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 if attempt < max_attempts - 1:
                     logger.warning("  [%s] %s/%s connect error: %s, retrying (%d/%d)",
@@ -2716,7 +2717,7 @@ def _proxy_cycling_streaming(
                             tail += chunk
                             if len(tail) > _STREAM_TAIL_BYTES:
                                 del tail[:-_STREAM_TAIL_BYTES]
-            except requests.exceptions.Timeout:
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
                 logger.error("[%s] provider=%s timed out mid-stream", label, pn)
                 yield b'data: {"error":{"message":"Upstream stream timed out."}}\n\n'
             except Exception as e:
