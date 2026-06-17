@@ -293,7 +293,6 @@
     "groq/llama-3.1-8b-instant",
     "groq/llama-3.3-70b-versatile",
     "groq/llama-4-scout-17b-16e-instruct",
-    "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     "groq/meta-llama/llama-prompt-guard-2-22m",
     "groq/meta-llama/llama-prompt-guard-2-86m",
     "groq/mixtral-8x7b-32768",
@@ -1128,12 +1127,6 @@
       "requests_per_day": 1000,
       "tokens_per_minute": 6000,
       "tokens_per_day": 1000000
-    },
-    "groq/meta-llama/llama-4-scout-17b-16e-instruct": {
-      "requests_per_minute": 30,
-      "requests_per_day": 1000,
-      "tokens_per_minute": 30000,
-      "tokens_per_day": 500000
     },
     "groq/meta-llama/llama-prompt-guard-2-22m": {
       "requests_per_minute": 30,
