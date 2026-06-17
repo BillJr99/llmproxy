@@ -11,8 +11,8 @@ import importlib
 import json
 from pathlib import Path
 
-import requests
 import pytest
+import requests
 from flask import Response
 
 
