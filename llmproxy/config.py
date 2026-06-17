@@ -32,12 +32,12 @@ Schema:
     "<upstream_model_id>": ["tools", "vision"],   // with the capabilities they
     "<provider>/<upstream_model_id>": ["json"]    // support. Drives capability-aware
   },                                              // routing/failover and the
-                                                  // llmproxy__tools / vision virtual
+                                                  // llmproxy/tools / vision virtual
                                                   // endpoints. Valid values:
                                                   // tools, vision, reasoning, json
   "free_limits": {                                // optional; per-model rate limits
     "<provider>/<upstream_model_id>": {           // used for capacity-aware ordering
-      "requests_per_minute": 15,                  // on llmproxy__free and */free
+      "requests_per_minute": 15,                  // on llmproxy/free and /*__free
       "requests_per_day": 1500,                   // endpoints; null = not tracked
       "tokens_per_minute": null,                  // token limits; null = not tracked.
       "tokens_per_day": null                      // Enforced in capacity ordering from
@@ -155,7 +155,7 @@ DEFAULT_PROVIDERS_PR_CONFIG = {
 }
 
 # Fusion (multi-model deliberation) defaults. See llmproxy/fusion.py and the
-# llmproxy__fusion / llmproxy__fusion/free virtual models in server.py.
+# llmproxy/fusion / llmproxy/fusion__free virtual models in server.py.
 DEFAULT_FUSION_CONFIG = {
     "enabled": True,
     "panel": None,            # explicit model list for bare fusion; None -> full pool

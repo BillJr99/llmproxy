@@ -419,12 +419,14 @@ def test_canonicalized_virtual_slash_id_is_recognized_as_virtual(server):
     assert server._is_virtual_model(canonical)
 
 
-# ── slash display form helper (_display_id, inbound-only) ─────────────────────
-# _display_id converts a canonical id to the "provider/model" slash form. The
-# server no longer EMITS this form on /v1/models (clients like opencode group by
-# the segment before the first "/", which collapses every model under one
-# provider). It is retained only so an inbound slash-form id still round-trips
-# and resolves via _canonicalize_model_id + the dual-keyed route cache.
+# ── slash display form helper (_display_id) ──────────────────────────────────
+# _display_id converts a canonical id to the "provider/model" slash form. It is
+# used both inbound (to dual-key the route cache so an advertised id round-trips
+# via _canonicalize_model_id) and outbound: VIRTUAL model ids are advertised on
+# /v1/models in this slash form (e.g. "llmproxy/deep__free") so clients like
+# opencode show a distinct label per virtual. REAL model ids stay canonical
+# ("provider__model") so opencode does not collapse every model from one provider
+# under a single "provider/" group.
 
 def test_display_id_swaps_separators(server):
     f = server._display_id
@@ -560,7 +562,8 @@ def test_models_list_virtual_names_are_friendly(server, monkeypatch):
     server._models_list_cache = None
 
     data = server.app.test_client().get("/v1/models").get_json()["data"]
-    virtual = [m for m in data if m["id"].startswith("llmproxy__")]
+    # Virtual ids are advertised in the "llmproxy/..." slash form.
+    virtual = [m for m in data if m["id"].startswith("llmproxy/")]
     assert virtual, "expected virtual models in /v1/models listing"
     for m in virtual:
         assert "/" not in m["name"], \
@@ -612,3 +615,55 @@ def test_real_model_name_unchanged(server, monkeypatch):
 
     with server._model_route_cache_lock:
         server._model_route_cache.clear()
+
+
+def test_models_list_advertises_virtual_ids_in_slash_form(server, monkeypatch):
+    """Virtual model ids are advertised as "llmproxy/<suffix>" with any interior
+    "/" encoded as "__" (e.g. "llmproxy/deep__free"), so opencode groups every
+    virtual under one "llmproxy/" provider with a distinct label per entry. Real
+    model ids stay canonical "provider__model" (no leading "provider/")."""
+    seed_cid = "fakeprov__free-model"
+    seed_route = ("fakeprov", "free-model")
+
+    def _fake_rebuild(providers_cfg, timeout, only_if_empty=False):
+        with server._model_route_cache_lock:
+            server._model_route_cache.clear()
+            server._model_route_cache[seed_cid] = seed_route
+            server._model_route_cache[server._display_id(seed_cid)] = seed_route
+        return [{"id": seed_cid, "name": seed_cid, "object": "model"}]
+
+    monkeypatch.setattr(server, "_rebuild_route_cache", _fake_rebuild)
+    monkeypatch.setattr(server, "_sync_local_provider_models_once", lambda: None)
+    server._models_list_cache = None
+
+    ids = [m["id"] for m in server.app.test_client().get("/v1/models").get_json()["data"]]
+    # The general free virtual is advertised in slash form.
+    assert "llmproxy/free" in ids
+    # No virtual id retains the canonical "llmproxy__" prefix in the advertised list.
+    assert not any(i.startswith("llmproxy__") for i in ids), \
+        f"virtual ids must be advertised in slash form: {[i for i in ids if i.startswith('llmproxy')]!r}"
+    # Any compound virtual carries exactly one "/" (right after "llmproxy").
+    for i in ids:
+        if i.startswith("llmproxy/"):
+            assert i.count("/") == 1, f"virtual id must carry one slash: {i!r}"
+    # The real model stays canonical (no leading "fakeprov/").
+    assert seed_cid in ids
+
+    with server._model_route_cache_lock:
+        server._model_route_cache.clear()
+
+
+def test_canonicalize_fuzzy_matches_underscores_for_slash(server):
+    """Robustness: an inbound virtual id that uses "__" where the canonical form
+    has "/" (e.g. a client that double-underscores everything) still resolves to
+    the canonical virtual id."""
+    config = server.load_config()
+    f = server._canonicalize_model_id
+    # "__" used in place of the "/" separator between dimension and tier.
+    assert f("llmproxy__deep__free", config) == "llmproxy__deep/free"
+    assert f("llmproxy__standard__local", config) == "llmproxy__standard/local"
+    # The advertised slash form and the legacy all-slash form still work too.
+    assert f("llmproxy/deep__free", config) == "llmproxy__deep/free"
+    assert f("llmproxy/deep/free", config) == "llmproxy__deep/free"
+    # A genuine canonical id is returned unchanged.
+    assert f("llmproxy__deep/free", config) == "llmproxy__deep/free"
