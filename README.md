@@ -114,6 +114,15 @@ requests:
 
 All four resolve identically.
 
+**pi / pi-openai-compat compatibility.** pi rejects model ids containing `__`, so
+the [pi-openai-compat](https://github.com/BillJr99/pi-openai-compat) extension
+rewrites the first `__` of each advertised id to `/` (e.g. `openrouter__gpt-4` →
+`openrouter/gpt-4`, `llmproxy__free` → `llmproxy/free`) and sends that slash form
+back on requests. llmproxy canonicalizes it back to the `__` form before routing —
+rewriting only the first `/` when the leading token is a configured provider or
+`llmproxy` — so this round-trips for both real and virtual models without changing
+what `GET /v1/models` advertises (still `provider__model` for every other client).
+
 #### Classification fields in the model object
 
 Beyond the OpenAI-standard `id` / `object` / `owned_by` / `created`, each entry in
