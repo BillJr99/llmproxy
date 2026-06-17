@@ -638,6 +638,33 @@ def _flatten_display_model(stripped: str) -> str:
     return stripped[:last].replace("/", "_") + "/" + stripped[last + 1:]
 
 
+def _display_id(canonical_id: str) -> str:
+    """Convert a canonical ``provider__model`` id to the advertised ``provider/model`` form.
+
+    The first ``__`` (the provider separator) becomes ``/`` and every remaining ``/``
+    inside the model portion becomes ``__``, so the advertised id carries exactly one
+    ``/`` — right after the provider. Clients that derive a display *name* by stripping
+    to the last ``/`` (e.g. opencode's lmstudio plugin) then show the full model portion
+    instead of just a trailing path segment like a bare ``free``.
+
+    Examples
+    --------
+    >>> _display_id("openrouter__deepseek/deepseek-chat-v3")
+    'openrouter/deepseek__deepseek-chat-v3'
+    >>> _display_id("llmproxy__exploratory/free")
+    'llmproxy/exploratory__free'
+    >>> _display_id("llmproxy__free")
+    'llmproxy/free'
+
+    The inverse is handled inbound by ``_canonicalize_model_id``. Ids with no ``__``
+    (already-foreign ``provider/model`` ids) are returned unchanged.
+    """
+    provider, sep, model = canonical_id.partition("__")
+    if not sep:
+        return canonical_id
+    return provider + "/" + model.replace("/", "__")
+
+
 def _architecture_block(
     input_mods: "list | None", output_mods: "list | None",
 ) -> dict:
@@ -931,7 +958,11 @@ def _rebuild_route_cache(providers_cfg: dict, timeout: int,
     for m in all_models:
         route = m.pop("_route", None)
         if route:
+            # Dual-key on both the canonical "provider__model" id and the advertised
+            # "provider/model" form so an inbound id in either form resolves to the
+            # exact upstream losslessly (no string-level reverse needed on the hot path).
             new_cache[m["id"]] = route
+            new_cache[_display_id(m["id"])] = route
 
     with _model_route_cache_lock:
         if only_if_empty and _model_route_cache:
@@ -1689,6 +1720,21 @@ def list_models() -> Response:
             vmodel["supported_parameters"] = vparams
 
     full_list = synthetic + all_models
+
+    # Advertise the client-friendly "provider/model" form. All internal state (route
+    # cache keys, virtual frozensets, annotation above) stays in canonical
+    # "provider__model"; only the emitted id/name are rewritten here, at the boundary.
+    for model in full_list:
+        cid = model["id"]
+        disp = _display_id(cid)
+        if disp == cid:
+            continue
+        name = model.get("name", cid)
+        # name may carry a " (believed_free[, local])" suffix appended during annotation.
+        suffix = name[len(cid):] if name.startswith(cid) else ""
+        model["id"] = disp
+        model["name"] = disp + suffix
+
     if models_ttl > 0:
         with _models_list_cache_lock:
             _models_list_cache = (full_list, time.monotonic())
@@ -1718,12 +1764,13 @@ def get_model(model_id: str) -> Response:
     model_id = _canonicalize_model_id(model_id, load_config())
     if _is_virtual_model(model_id):
         candidates = _get_virtual_candidates(model_id)
+        disp = _display_id(model_id)
         return jsonify({
-            "id": model_id,
+            "id": disp,
             "object": "model",
             "owned_by": "llmproxy",
-            "name": model_id,
-            "_note": f"Virtual model: '{model_id}' cycles through matching candidates until one succeeds.",
+            "name": disp,
+            "_note": f"Virtual model: '{disp}' cycles through matching candidates until one succeeds.",
             "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
         })
 
@@ -1754,7 +1801,12 @@ def get_model(model_id: str) -> Response:
 
     # Fetch this provider's models and merge new route entries into the cache.
     provider_models = _fetch_provider_models(provider_name, provider_cfg, timeout)
-    new_routes = {m["id"]: m.pop("_route") for m in provider_models if "_route" in m}
+    new_routes: dict[str, tuple[str, str]] = {}
+    for m in provider_models:
+        if "_route" in m:
+            r = m.pop("_route")
+            new_routes[m["id"]] = r
+            new_routes[_display_id(m["id"])] = r
     with _model_route_cache_lock:
         _model_route_cache.update(new_routes)
 
@@ -1764,13 +1816,16 @@ def get_model(model_id: str) -> Response:
             params = _supported_parameters(provider_name, upstream_model, config)
             if params:
                 m["supported_parameters"] = params
+            disp = _display_id(m["id"])
+            m["id"] = disp
+            m["name"] = disp
             return jsonify(m)
 
     # The model passed the filter check but was not returned by the upstream
     # /models listing (e.g. a free-tier model that only appears after a
     # request).  Return a minimal valid object rather than a 404.
     fallback = {
-        "id": model_id,
+        "id": _display_id(model_id),
         "object": "model",
         "owned_by": provider_name,
         "_upstream_id": upstream_model,
@@ -3286,26 +3341,34 @@ def _get_virtual_candidates(model_full: str) -> list[tuple[str, dict, str]]:
 # ---------------------------------------------------------------------------
 
 def _canonicalize_model_id(model_full: str, config: dict) -> str:
-    """Map a slash-form id back to the canonical ``provider__model`` form.
+    """Map an advertised slash-form id back to the canonical ``provider__model`` form.
 
-    Some clients display and send model ids in the ``provider/model`` slash form
-    (the first ``__`` of an advertised id rewritten to ``/``) rather than
-    ``provider__model``. Rewriting only the FIRST ``/`` back to ``__`` is the exact
-    inverse: the provider / ``llmproxy`` virtual segment never contains ``/`` and
-    the advertised model segment carries at most one ``/`` (see
-    ``_flatten_display_model``), so the first ``/`` is always the separator the
-    client introduced.
+    The advertised form (see ``_display_id``) is ``provider/model`` where the single
+    ``/`` is the provider separator and any ``/`` inside the model portion was rewritten
+    to ``__``. The inverse splits on the FIRST ``/`` (the separator the proxy/client
+    introduced) and rewrites ``__`` in the remainder back to ``/``.
 
-    Gated on the leading token naming a configured provider or the reserved
-    ``llmproxy`` virtual namespace, so an id that already uses ``__`` and ordinary
-    ``provider/model`` ids from other clients are returned unchanged and still flow
-    through the existing virtual/route resolution below.
+    Resolution stays lossless on the hot path via the dual-keyed route cache: when the
+    raw id is already a cache key (an advertised or canonical real-model id), it is
+    returned unchanged so the caller's cache lookup hits directly — this avoids the
+    only string-level ambiguity (an upstream id that itself contains ``__``).
+
+    Otherwise, when the leading token names a configured provider or the reserved
+    ``llmproxy`` virtual namespace, the slash form is reversed. This also covers the
+    legacy slash form (first ``__`` rewritten to ``/`` with no interior ``__``), where
+    the ``__``→``/`` rewrite is a no-op. Foreign ``provider/model`` ids (leading token
+    is neither a provider nor ``llmproxy``) and ids already in ``provider__model`` form
+    are returned unchanged and flow through the existing virtual/route resolution.
     """
-    if "__" in model_full or "/" not in model_full:
+    if "/" not in model_full:
         return model_full
-    left = model_full.partition("/")[0]
+    with _model_route_cache_lock:
+        in_cache = model_full in _model_route_cache
+    if in_cache:
+        return model_full
+    left, _, rest = model_full.partition("/")
     if left == "llmproxy" or get_provider(config, left):
-        return left + "__" + model_full[len(left) + 1:]
+        return left + "__" + rest.replace("__", "/")
     return model_full
 
 
