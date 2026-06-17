@@ -11,6 +11,7 @@ import importlib
 import json
 from pathlib import Path
 
+import requests
 import pytest
 from flask import Response
 
@@ -233,6 +234,89 @@ def test_streaming_failover_on_first_chunk_error(server, monkeypatch):
         )
     assert recorded == [("p2", "m2")]  # committed only the healthy candidate
     assert resp.status_code == 200
+
+
+def test_streaming_connect_timeout_causes_failover(server, monkeypatch):
+    # A Timeout on the initial requests.post() must fail over immediately to
+    # the next candidate; the client should never see the timeout error.
+    calls: list[str] = []
+    ok_resp = FakeStreamResp(200, [b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n', b"data: [DONE]\n\n"])
+
+    def fake_post(*a, **k):
+        if not calls:
+            calls.append("p1")
+            raise requests.exceptions.Timeout("connect timed out")
+        calls.append("p2")
+        return ok_resp
+
+    monkeypatch.setattr(server.requests, "post", fake_post)
+    recorded: list[tuple[str, str]] = []
+    candidates = [
+        ("p1", {"base_url": "http://p1/v1", "api_key": "k"}, "m1"),
+        ("p2", {"base_url": "http://p2/v1", "api_key": "k"}, "m2"),
+    ]
+    with server.app.test_request_context():
+        resp = server._proxy_cycling_streaming(
+            "chat/completions", "t", candidates, {"messages": []}, 5,
+            on_success=lambda pn, um: recorded.append((pn, um)),
+        )
+    assert calls == ["p1", "p2"]
+    assert recorded == [("p2", "m2")]
+    assert resp.status_code == 200
+
+
+def test_streaming_connect_error_as_connectionerror_causes_failover(server, monkeypatch):
+    # A ConnectionError (e.g. ReadTimeout wrapped via urllib3 MaxRetryError) on
+    # the initial requests.post() must also fail over — not surface to the client.
+    calls: list[str] = []
+    ok_resp = FakeStreamResp(200, [b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n', b"data: [DONE]\n\n"])
+
+    def fake_post(*a, **k):
+        if not calls:
+            calls.append("p1")
+            raise requests.exceptions.ConnectionError(
+                "HTTPSConnectionPool(host='p1.example', port=443): Read timed out."
+            )
+        calls.append("p2")
+        return ok_resp
+
+    monkeypatch.setattr(server.requests, "post", fake_post)
+    recorded: list[tuple[str, str]] = []
+    candidates = [
+        ("p1", {"base_url": "http://p1/v1", "api_key": "k"}, "m1"),
+        ("p2", {"base_url": "http://p2/v1", "api_key": "k"}, "m2"),
+    ]
+    with server.app.test_request_context():
+        resp = server._proxy_cycling_streaming(
+            "chat/completions", "t", candidates, {"messages": []}, 5,
+            on_success=lambda pn, um: recorded.append((pn, um)),
+        )
+    assert calls == ["p1", "p2"]
+    assert recorded == [("p2", "m2")]
+    assert resp.status_code == 200
+
+
+def test_streaming_mid_stream_connection_error_clean_message(server, monkeypatch):
+    # A ConnectionError (ReadTimeout-as-ConnectionError) that fires mid-stream
+    # after the peek must yield the clean "timed out" message, not the raw
+    # socket exception string (which leaks implementation details to the client).
+    class HangingStreamResp(FakeStreamResp):
+        def iter_content(self, chunk_size=None):
+            yield b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n'
+            raise requests.exceptions.ConnectionError(
+                "HTTPSConnectionPool(host='p1.example', port=443): Read timed out."
+            )
+
+    monkeypatch.setattr(server.requests, "post",
+                        lambda *a, **k: HangingStreamResp(200, []))
+    candidates = [("p1", {"base_url": "http://p1/v1", "api_key": "k"}, "m1")]
+    with server.app.test_request_context():
+        resp = server._proxy_cycling_streaming(
+            "chat/completions", "t", candidates, {"messages": []}, 5,
+        )
+    body = b"".join(resp.response)
+    assert b"Upstream stream timed out." in body
+    assert b"HTTPSConnectionPool" not in body
 
 
 def test_streaming_all_first_chunk_errors_returns_last(server, monkeypatch):
