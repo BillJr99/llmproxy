@@ -114,14 +114,13 @@ requests:
 
 All four resolve identically.
 
-**pi / pi-openai-compat compatibility.** pi rejects model ids containing `__`, so
-the [pi-openai-compat](https://github.com/BillJr99/pi-openai-compat) extension
-rewrites the first `__` of each advertised id to `/` (e.g. `openrouter__gpt-4` →
-`openrouter/gpt-4`, `llmproxy__free` → `llmproxy/free`) and sends that slash form
-back on requests. llmproxy canonicalizes it back to the `__` form before routing —
-rewriting only the first `/` when the leading token is a configured provider or
-`llmproxy` — so this round-trips for both real and virtual models without changing
-what `GET /v1/models` advertises (still `provider__model` for every other client).
+**Slash-form request ids.** Some clients prefer to display and send model ids in
+the `provider/model` slash form (e.g. `openrouter/gpt-4`, `llmproxy/free`) rather
+than `provider__model`. llmproxy accepts those on requests and canonicalizes them
+back to the `__` form before routing — rewriting only the first `/` when the
+leading token is a configured provider or `llmproxy` — so this round-trips for both
+real and virtual models without changing what `GET /v1/models` advertises (still
+`provider__model` for every other client).
 
 #### Classification fields in the model object
 
@@ -1813,11 +1812,6 @@ Add the following to `~/.config/opencode/opencode.json`:
 The `opencode-lmstudio` plugin provides the `@ai-sdk/openai-compatible` adapter.
 The `apiKey` value is not used by llmproxy but is required by the adapter; any
 non-empty string works.
-
-### pi.dev
-
-Install the [pi-openai-compat](https://github.com/BillJr99/pi-openai-compat)
-plugin and point it at `http://localhost:8080`.  No API key is required.
 
 ### curl
 

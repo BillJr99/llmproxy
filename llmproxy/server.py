@@ -3131,15 +3131,15 @@ def _get_virtual_candidates(model_full: str) -> list[tuple[str, dict, str]]:
 # ---------------------------------------------------------------------------
 
 def _canonicalize_model_id(model_full: str, config: dict) -> str:
-    """Map a pi-style slash id back to the canonical ``provider__model`` form.
+    """Map a slash-form id back to the canonical ``provider__model`` form.
 
-    The pi-openai-compat shim rewrites the first ``__`` of every advertised model
-    id to ``/`` (pi rejects ``__`` in model ids) and sends that slash form back on
-    each request. Rewriting only the FIRST ``/`` back to ``__`` is the exact
+    Some clients display and send model ids in the ``provider/model`` slash form
+    (the first ``__`` of an advertised id rewritten to ``/``) rather than
+    ``provider__model``. Rewriting only the FIRST ``/`` back to ``__`` is the exact
     inverse: the provider / ``llmproxy`` virtual segment never contains ``/`` and
     the advertised model segment carries at most one ``/`` (see
     ``_flatten_display_model``), so the first ``/`` is always the separator the
-    shim introduced.
+    client introduced.
 
     Gated on the leading token naming a configured provider or the reserved
     ``llmproxy`` virtual namespace, so an id that already uses ``__`` and ordinary
@@ -3670,9 +3670,8 @@ def _proxy_endpoint(
         return _error("Request body must include a 'model' field.", status=400)
 
     config = load_config()
-    # Accept the pi-style slash id (provider/model) the pi-openai-compat shim emits
-    # and normalize it back to the canonical provider__model form before any
-    # virtual/route resolution runs.
+    # Accept a slash-form id (provider/model) and normalize it back to the
+    # canonical provider__model form before any virtual/route resolution runs.
     model_full = _canonicalize_model_id(model_full, config)
     payload["model"] = model_full
     server_cfg = config.get("server", {})
