@@ -157,7 +157,7 @@
     <h2>Models &amp; Categorizations</h2>
     <div class="card">
       <div class="inline" style="justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-        <div class="muted">Tag models to drive the <code>llmproxy__*</code> virtual endpoints. Discovery queries each provider's <code>/models</code>.</div>
+        <div class="muted">Tag models to drive the <code>llmproxy/*</code> virtual endpoints. Discovery queries each provider's <code>/models</code>.</div>
         <button class="btn" id="discover">Discover models</button>
       </div>
       <input type="text" id="model-filter" placeholder="Filter models…" style="margin-top:12px" />
@@ -170,7 +170,7 @@
   <section class="tab" id="tab-virtual">
     <h2>Virtual endpoints (preview)</h2>
     <div class="card">
-      <p class="muted">These are derived from your categorizations above — call them as a model id, e.g. <code>llmproxy__free</code>.</p>
+      <p class="muted">These are derived from your categorizations above — call them as a model id, e.g. <code>llmproxy/free</code>.</p>
       <button class="btn" id="refresh-vm">Refresh</button>
       <div id="vm-list" style="margin-top:14px"></div>
     </div>

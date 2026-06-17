@@ -900,7 +900,7 @@ def api_virtual_models():
     })
     if free_models or believed_free:
         virtuals.append({
-            "id": "llmproxy__free",
+            "id": "llmproxy/free",
             "description": "Free-tier models (ID contains 'free' or listed in believed_free).",
             "backing": free_models or sorted(believed_free),
         })
@@ -908,7 +908,7 @@ def api_virtual_models():
     local_providers = [n for n, c in providers.items() if server._is_local_url(provider_base_url(c))]
     if local_providers:
         virtuals.append({
-            "id": "llmproxy__local",
+            "id": "llmproxy/local",
             "description": "All models served by localhost providers.",
             "backing": [f"{n}/* (all models)" for n in sorted(local_providers)],
         })
@@ -917,7 +917,7 @@ def api_virtual_models():
         backing = sorted(m for m, lvl in reasoning.items() if lvl == level)
         if backing:
             virtuals.append({
-                "id": f"llmproxy__{level}",
+                "id": f"llmproxy/{level}",
                 "description": f"Models tagged '{level}' reasoning.",
                 "backing": backing,
             })
@@ -926,7 +926,7 @@ def api_virtual_models():
         backing = sorted(m for m, caps in capabilities.items() if cap in (caps or []))
         if backing:
             virtuals.append({
-                "id": f"llmproxy__{cap}",
+                "id": f"llmproxy/{cap}",
                 "description": f"Models tagged '{cap}' in model_capabilities.",
                 "backing": backing,
             })

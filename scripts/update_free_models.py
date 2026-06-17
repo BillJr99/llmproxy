@@ -521,8 +521,8 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         "(/models, /chat/completions, Bearer auth). "
         "The provider name 'llmproxy' is reserved and must not be used. "
         "Optional per-provider flag: set \"expose_to_virtual_models\": false to "
-        "exclude a provider from all virtual endpoints (llmproxy__free, "
-        "llmproxy__deep, llmproxy__tools, etc.) while still allowing direct "
+        "exclude a provider from all virtual endpoints (llmproxy/free, "
+        "llmproxy/deep, llmproxy/tools, etc.) while still allowing direct "
         "calls to its models."
     )
 
