@@ -291,7 +291,6 @@
     "groq/groq/compound",
     "groq/groq/compound-mini",
     "groq/llama-3.1-8b-instant",
-    "groq/llama-3.3-70b-versatile",
     "groq/llama-4-scout-17b-16e-instruct",
     "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     "groq/meta-llama/llama-prompt-guard-2-22m",
@@ -421,7 +420,6 @@
     "openrouter/poolside/laguna-xs.2:free",
     "openrouter/qwen/qwen3-coder:free",
     "openrouter/qwen/qwen3-next-80b-a3b-instruct:free",
-    "openrouter/xiaomi/mimo-v2.5-pro",
     "moonshot/kimi-latest",
     "minimax/MiniMax-M1",
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct",
@@ -998,11 +996,6 @@
       "tools",
       "json"
     ],
-    "openrouter/xiaomi/mimo-v2.5-pro": [
-      "tools",
-      "reasoning",
-      "json"
-    ],
     "moonshot/kimi-latest": [
       "tools",
       "vision",
@@ -1123,12 +1116,6 @@
       "requests_per_day": 14400,
       "tokens_per_minute": 6000,
       "tokens_per_day": 500000
-    },
-    "groq/llama-3.3-70b-versatile": {
-      "requests_per_minute": 30,
-      "requests_per_day": 1000,
-      "tokens_per_minute": 12000,
-      "tokens_per_day": 100000
     },
     "groq/llama-4-scout-17b-16e-instruct": {
       "requests_per_minute": 30,
