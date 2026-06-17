@@ -419,12 +419,12 @@ def test_canonicalized_virtual_slash_id_is_recognized_as_virtual(server):
     assert server._is_virtual_model(canonical)
 
 
-# ── advertised "provider/model" display form (_display_id) ────────────────────
-# The /v1/models endpoint advertises the client-friendly form: the provider
-# separator is "/" (exactly once) and interior slashes of the model portion are
-# rewritten to "__". This lets clients that derive a name by stripping to the last
-# "/" (e.g. opencode's lmstudio plugin) show the full model portion, not a bare
-# trailing segment like "free".
+# ── slash display form helper (_display_id, inbound-only) ─────────────────────
+# _display_id converts a canonical id to the "provider/model" slash form. The
+# server no longer EMITS this form on /v1/models (clients like opencode group by
+# the segment before the first "/", which collapses every model under one
+# provider). It is retained only so an inbound slash-form id still round-trips
+# and resolves via _canonicalize_model_id + the dual-keyed route cache.
 
 def test_display_id_swaps_separators(server):
     f = server._display_id
@@ -452,10 +452,11 @@ def test_display_id_round_trips_through_canonicalize(server):
         assert server._canonicalize_model_id(advertised, config) == canonical
 
 
-def test_models_list_advertises_slash_form_and_is_opencode_readable(server, monkeypatch):
-    """The /v1/models payload uses the advertised "provider/model" form, and
-    stripping to the last "/" yields the full model portion — never a bare
-    dimension word like "free" repeated across many virtuals."""
+def test_models_list_advertises_canonical_form_no_leading_provider_slash(server, monkeypatch):
+    """The /v1/models payload advertises the canonical "provider__model" form.
+    No advertised id begins with "<provider>/" — the provider separator is "__",
+    so clients that group by the segment before the first "/" (e.g. opencode) do
+    not collapse every model under one provider group."""
     routes = {
         "openrouter__deepseek/deepseek-chat-v3:free": ("openrouter", "deepseek/deepseek-chat-v3:free"),
         "openrouter__qwen/qwen-2.5:free": ("openrouter", "qwen/qwen-2.5:free"),
@@ -476,16 +477,13 @@ def test_models_list_advertises_slash_form_and_is_opencode_readable(server, monk
     data = server.app.test_client().get("/v1/models").get_json()["data"]
     ids = [m["id"] for m in data]
 
-    # every advertised id has exactly one "/" right after the provider
+    # canonical form: ids are advertised with the "__" provider separator, never
+    # a leading "provider/" segment.
+    assert "openrouter__deepseek/deepseek-chat-v3:free" in ids
+    assert "openrouter__qwen/qwen-2.5:free" in ids
     for mid in ids:
-        assert mid.count("/") == 1, f"advertised id must carry one slash: {mid!r}"
-
-    # the two free models are distinguishable after strip-to-last-slash — not both "free"
-    assert "openrouter/deepseek__deepseek-chat-v3:free" in ids
-    assert "openrouter/qwen__qwen-2.5:free" in ids
-    last_segments = [mid.rsplit("/", 1)[-1] for mid in ids]
-    assert "deepseek__deepseek-chat-v3:free" in last_segments
-    assert "qwen__qwen-2.5:free" in last_segments
+        assert not mid.startswith("openrouter/"), \
+            f"advertised id must not start with a provider/ segment: {mid!r}"
 
     with server._model_route_cache_lock:
         server._model_route_cache.clear()
@@ -562,7 +560,7 @@ def test_models_list_virtual_names_are_friendly(server, monkeypatch):
     server._models_list_cache = None
 
     data = server.app.test_client().get("/v1/models").get_json()["data"]
-    virtual = [m for m in data if m["id"].startswith("llmproxy/")]
+    virtual = [m for m in data if m["id"].startswith("llmproxy__")]
     assert virtual, "expected virtual models in /v1/models listing"
     for m in virtual:
         assert "/" not in m["name"], \
@@ -607,7 +605,7 @@ def test_real_model_name_unchanged(server, monkeypatch):
     server._models_list_cache = None
 
     data = server.app.test_client().get("/v1/models").get_json()["data"]
-    real = next((m for m in data if m["id"] == "openrouter/aion-labs__aion-1.0"), None)
+    real = next((m for m in data if m["id"] == "openrouter__aion-labs/aion-1.0"), None)
     assert real is not None, "expected the real model in the listing"
     assert real["name"] == "Aion Labs Aion 1.0", \
         f"real model name should be unchanged: {real['name']!r}"

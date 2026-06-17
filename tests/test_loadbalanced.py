@@ -153,17 +153,20 @@ def test_paid_never_before_free_or_local_even_if_only_paid_is_capable(server):
     assert paid_pairs[0] == ("paida", "vision")
 
 
-def test_local_tier_reasoning_fit(server):
+def test_local_tier_best_first_regardless_of_prompt(server):
+    # loadbalanced prefers the most capable $0 model, even for a short prompt:
+    # the deep-tagged "big" local model is ordered ahead of the exploratory
+    # "small" one in both cases (quality over size-fit).
     small = _order(server, {"messages": [{"role": "user", "content": "hi"}]})
     local_small = [(pn, um) for pn, um in small if pn == "localp"]
-    assert local_small[0] == ("localp", "small")   # short prompt -> fast/small
+    assert local_small[0] == ("localp", "big")
 
     deep = _order(server, {
         "messages": [{"role": "user", "content": "think"}],
         "reasoning_effort": "high",
     })
     local_deep = [(pn, um) for pn, um in deep if pn == "localp"]
-    assert local_deep[0] == ("localp", "big")       # thinking -> deep/large
+    assert local_deep[0] == ("localp", "big")
 
 
 def test_paid_tier_cheapest_first(server):
@@ -222,3 +225,75 @@ def test_local_model_is_local_tier_not_free(server):
     config = server.load_config()
     cfg = config["providers"]["localp"]
     assert server._cost_tier("localp", "small", cfg, config) == server._TIER_LOCAL
+
+
+# ── best-first quality ordering (free tier) ─────────────────────────────────
+
+def test_quality_key_orders_by_reasoning_then_size(server):
+    rm = {"freecloud/deep-m": "deep", "freecloud/expl-m": "exploratory"}
+    deep = server._quality_key("freecloud", "deep-m", rm)
+    expl = server._quality_key("freecloud", "expl-m", rm)
+    assert deep > expl                       # deep tier outranks exploratory
+    # Untagged: inferred from the name (param count / known reasoning models).
+    big = server._quality_key("p", "llama-70b", {})
+    small = server._quality_key("p", "llama-7b", {})
+    assert big > small                       # 70b standard > 7b exploratory
+    r1 = server._quality_key("p", "deepseek-r1", {})
+    assert r1[0] == server._REASONING_LEVELS.index("deep")
+
+
+def test_free_tier_prefers_most_sophisticated_with_headroom(server):
+    # Tag the two free models: free-1 deep, free-2 exploratory. With headroom on
+    # both, the deep model must be tried first (best-first), deterministically.
+    cfg_path = Path(os.environ["LLMPROXY_CONFIG"])
+    cfg = json.loads(cfg_path.read_text())
+    cfg["model_reasoning"] = {
+        **cfg.get("model_reasoning", {}),
+        "freecloud/free-1": "deep",
+        "freecloud/free-2": "exploratory",
+    }
+    cfg_path.write_text(json.dumps(cfg))
+
+    for _ in range(5):  # deterministic across runs (no random sampling)
+        pairs = _order(server, {"messages": [{"role": "user", "content": "hi"}]})
+        free = [(pn, um) for pn, um in pairs if pn == "freecloud"]
+        assert free[0] == ("freecloud", "free-1")   # deep beats exploratory
+
+
+def test_free_tier_exhausted_strong_model_falls_after_viable_weak(server):
+    # free-1 is deep but rate-limited (no headroom); free-2 is exploratory but has
+    # capacity. The viable weaker model is tried first; the exhausted strong one is
+    # still present as a last-resort failover.
+    cfg_path = Path(os.environ["LLMPROXY_CONFIG"])
+    cfg = json.loads(cfg_path.read_text())
+    cfg["model_reasoning"] = {
+        **cfg.get("model_reasoning", {}),
+        "freecloud/free-1": "deep",
+        "freecloud/free-2": "exploratory",
+    }
+    cfg["free_limits"] = {"freecloud/free-1": {
+        "requests_per_minute": 2, "requests_per_day": None,
+        "tokens_per_minute": None, "tokens_per_day": None,
+    }}
+    cfg_path.write_text(json.dumps(cfg))
+    server._get_or_create_tracker("freecloud/free-1").record(requests=2)
+
+    pairs = _order(server, {"messages": [{"role": "user", "content": "hi"}]})
+    free = [(pn, um) for pn, um in pairs if pn == "freecloud"]
+    assert free.index(("freecloud", "free-2")) < free.index(("freecloud", "free-1"))
+    assert ("freecloud", "free-1") in free       # still reachable for failover
+
+
+def test_quality_ordering_preserves_cost_waterfall(server):
+    # Even with best-first quality inside tiers, no paid model precedes a free or
+    # local one.
+    cfg_path = Path(os.environ["LLMPROXY_CONFIG"])
+    cfg = json.loads(cfg_path.read_text())
+    cfg["model_reasoning"] = {
+        **cfg.get("model_reasoning", {}),
+        "freecloud/free-2": "deep", "freecloud/free-1": "exploratory",
+    }
+    cfg_path.write_text(json.dumps(cfg))
+    pairs = _order(server, {"messages": [{"role": "user", "content": "hi"}]})
+    tiers = _tiers(server, pairs)
+    assert tiers == sorted(tiers), tiers

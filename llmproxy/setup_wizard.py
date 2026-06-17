@@ -863,7 +863,7 @@ def _auto_register_local_models(provider_key: str, provider_cfg: dict, config: d
     model_reasoning.  Called automatically — no user prompt.
 
     Local models are NOT added to believed_free: they have their own dedicated
-    virtual-endpoint family (llmproxy/local, llmproxy/<level>/local) keyed on
+    virtual-endpoint family (llmproxy__local, llmproxy__<level>/local) keyed on
     the provider's base_url hostname, so the "free" axis is irrelevant for
     them.  See README → "The `local` virtual model".
 
@@ -899,7 +899,7 @@ def _auto_register_local_models(provider_key: str, provider_cfg: dict, config: d
     if added_reasoning:
         print(_ok(
             f"  Auto-registered {added_reasoning} local model(s) from {provider_key} "
-            f"into model_reasoning (eligible via llmproxy/local and llmproxy/<level>/local)."
+            f"into model_reasoning (eligible via llmproxy__local and llmproxy__<level>/local)."
         ))
         return True
 

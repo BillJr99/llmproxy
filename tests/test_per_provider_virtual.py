@@ -185,19 +185,18 @@ def test_advertised_in_models_list(server, monkeypatch):
     resp = server.app.test_client().get("/v1/models")
     ids = {m["id"] for m in resp.get_json()["data"]}
 
-    # eligible provider's per-provider virtuals are advertised in the client-friendly
-    # "provider/model" form (see _display_id): the single "/" follows "llmproxy" and
-    # the dimension separator becomes "__".
-    assert "llmproxy/visible" in ids                # bare aggregator
-    assert "llmproxy/visible__deep" in ids
-    assert "llmproxy/visible__tools" in ids
-    assert "llmproxy/visible__vision" in ids
-    assert "llmproxy/visible__free" in ids
+    # eligible provider's per-provider virtuals are advertised in the canonical
+    # "llmproxy__<provider>" / "llmproxy__<provider>/<dimension>" form.
+    assert "llmproxy__visible" in ids                # bare aggregator
+    assert "llmproxy__visible/deep" in ids
+    assert "llmproxy__visible/tools" in ids
+    assert "llmproxy__visible/vision" in ids
+    assert "llmproxy__visible/free" in ids
     # exploratory has no backing model for visible -> not advertised
-    assert "llmproxy/visible__exploratory" not in ids
+    assert "llmproxy__visible/exploratory" not in ids
     # ineligible providers never get per-provider virtuals
-    assert not any(i.startswith("llmproxy/hidden") for i in ids)
-    assert not any(i.startswith("llmproxy/localp") for i in ids)
+    assert not any(i.startswith("llmproxy__hidden") for i in ids)
+    assert not any(i.startswith("llmproxy__localp") for i in ids)
 
 
 # ── capacity-aware /free dispatch ───────────────────────────────────────────

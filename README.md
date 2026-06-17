@@ -71,49 +71,50 @@ the upstream provider's base URL.
 the upstream model id:
 
 ```
-<provider_name>/<upstream_model_id>
+<provider_name>__<upstream_model_id>
 ```
 
-The single `/` sits right after the provider, and any `/` *inside* the upstream
-model id is rewritten to `__`. For example, an Ollama model with upstream id
-`qwen2.5vl:3b` is listed as `ollama/qwen2.5vl:3b`, and OpenRouter's
-`deepseek/deepseek-chat-v3` is listed as `openrouter/deepseek__deepseek-chat-v3`.
+The `__` (double underscore) is the provider separator. A single `/` may still
+appear *inside* the upstream model portion. For example, an Ollama model with
+upstream id `qwen2.5vl:3b` is listed as `ollama__qwen2.5vl:3b`, and OpenRouter's
+`deepseek/deepseek-chat-v3` is listed as `openrouter__deepseek/deepseek-chat-v3`.
 This shape avoids two real-world client bugs:
 
 - Spaces and parentheses break strict client validators (e.g. Hermes rejects
   any model name containing whitespace) — the display form has neither.
-- Many clients derive the *display name* by stripping everything up to the last
-  `/` (e.g. opencode's lmstudio plugin turns `qwen/qwen3-30b` into "Qwen3 30B").
-  Because the advertised id carries exactly **one** `/`, that strip leaves the
-  full model portion intact instead of collapsing many ids to a bare suffix like
-  "free".
+- Clients that group their model picker by the segment **before the first `/`**
+  (e.g. opencode) would collapse every model under one provider if the id began
+  `provider/…`. Keeping `__` as the provider separator means there is no leading
+  `provider/` segment, so the full list is shown. (Such clients derive the
+  *display label* from the `name` field, which llmproxy populates — including a
+  human-readable name for each virtual model, see below.)
 
-| Upstream model (under `openrouter`)   | Display id                                  |
-|---------------------------------------|---------------------------------------------|
-| `gpt-4o`                              | `openrouter/gpt-4o`                         |
-| `anthropic/claude-3.5-sonnet`         | `openrouter/anthropic__claude-3.5-sonnet`  |
-| `meta-llama/llama-3/instruct`         | `openrouter/meta-llama_llama-3__instruct`  |
+| Upstream model (under `openrouter`)   | Display id                                   |
+|---------------------------------------|----------------------------------------------|
+| `gpt-4o`                              | `openrouter__gpt-4o`                         |
+| `anthropic/claude-3.5-sonnet`         | `openrouter__anthropic/claude-3.5-sonnet`   |
+| `meta-llama/llama-3/instruct`         | `openrouter__meta-llama_llama-3/instruct`   |
 
-(Upstream ids with *multiple* slashes — like the third row — keep the last slash
-as the one rewritten to `__`; any earlier slashes collapse to a single `_`, so the
-provider separator stays unambiguous.)
+(Upstream ids with *multiple* slashes — like the third row — keep only the last
+slash; any earlier slashes collapse to a single `_`, so the display id carries at
+most one `/` and the `__` provider separator stays unambiguous.)
 
 Routing always forwards to the upstream under the **original** id; the display
-form is purely cosmetic. Internally the proxy still uses a canonical
-`provider__model` form (the route cache is keyed on both, so resolution is
-lossless even when an upstream id itself contains `__`).
+form is purely cosmetic. Internally the proxy uses this same canonical
+`provider__model` form (the route cache is also keyed on the `provider/model`
+slash form, so an inbound slash id resolves losslessly even when an upstream id
+itself contains `__`).
 
 Clients may submit any of these forms in `"model"` on chat/completions requests —
 they all resolve identically:
 
-- `provider/model` — current display / canonical slash form
-- `provider__model` — previous display form (still accepted)
+- `provider__model` — current display / canonical form
+- `provider/model` — slash form (interior `/` written as `__`); also accepted
 - `model__provider` — legacy display form from PR #27
 - `model (provider)` — pre-PR #27 legacy display form
 
 So nothing pinned in an existing client config breaks: a request for
-`openrouter__gpt-4o` resolves exactly like the newly advertised
-`openrouter/gpt-4o`.
+`openrouter/gpt-4o` resolves exactly like the advertised `openrouter__gpt-4o`.
 
 #### Classification fields in the model object
 
@@ -127,12 +128,12 @@ fields so clients can infer a model's type without a separate probe:
 
 These are additive — strict OpenAI clients ignore the extra keys, while clients that
 read the OpenRouter schema (e.g. Hermes) can classify models from the listing alone.
-The synthetic virtual models (`llmproxy/free`, `llmproxy/tools`, `llmproxy/vision`,
+The synthetic virtual models (`llmproxy__free`, `llmproxy__tools`, `llmproxy__vision`,
 …) carry the same fields.
 
 ## Virtual models
 
-Alongside the real `provider/model` ids, llmproxy advertises **synthetic** model
+Alongside the real `provider__model` ids, llmproxy advertises **synthetic** model
 names under the reserved `llmproxy` namespace. A virtual model doesn't map to one
 upstream — it stands for a *pool* of candidate models that share a property (free,
 local, a reasoning level, a capability, a single provider, …). When you send a
@@ -141,24 +142,27 @@ pool and **cycles** through them until one returns a usable answer. This gives y
 automatic load-spreading and failover without pinning a specific upstream in your
 client config.
 
-Every virtual model is advertised in the display form `llmproxy/<name>`, with any
-dimension separator rewritten to `__` — so `llmproxy/free`, `llmproxy/tools`, and
-the sliced `llmproxy/deep__free`, `llmproxy/<provider>__free`, etc. The older
-`llmproxy__<name>` canonical spelling (e.g. `llmproxy__free`, `llmproxy__deep`) and
-the legacy three-part slash form (`llmproxy/<name>/<dimension>`) are both still accepted on **input**
-for backward compatibility with pinned client configs. A virtual model only appears
+Every virtual model is advertised in the canonical form `llmproxy__<name>` — so
+`llmproxy__free`, `llmproxy__tools`, and the sliced `llmproxy__deep/free`,
+`llmproxy__<provider>/free`, etc. Each also carries a human-readable, slash-free
+`name` (e.g. `[llmproxy] Deep — Free`) so picker UIs that display the `name` field
+show a distinct label rather than a bare repeated dimension word. The
+`llmproxy/<name>` slash spelling (e.g. `llmproxy/free`, `llmproxy/deep__free`) and
+the legacy three-part slash form (`llmproxy/<name>/<dimension>`) are both still
+accepted on **input** for backward compatibility with pinned client configs. A
+virtual model only appears
 in the listing when at least one eligible backend currently exists for it.
 
 The families are:
 
 | Family                    | Examples                                              | Pool |
 |---------------------------|------------------------------------------------------|------|
-| Cost-tiered (default)     | `llmproxy/loadbalanced`                              | The whole pool, walked free → local → paid |
-| General                   | `llmproxy/free`, `llmproxy/local`                    | All free / all localhost-served models |
-| Reasoning level           | `llmproxy/exploratory`, `llmproxy/standard`, `llmproxy/deep` (+ `__free`, `__local`) | Models tagged at that reasoning tier |
-| Capability                | `llmproxy/tools`, `llmproxy/vision` (+ `__free`)     | Models tagged with that capability |
-| Per-provider              | `llmproxy/<provider>` (+ `__<dimension>`)            | One provider's models, optionally sliced |
-| Fusion (deliberation)     | `llmproxy/fusion`, `llmproxy/fusion__free`           | A panel of models, judged + synthesized |
+| Cost-tiered (default)     | `llmproxy__loadbalanced`                              | The whole pool, walked free → local → paid |
+| General                   | `llmproxy__free`, `llmproxy__local`                    | All free / all localhost-served models |
+| Reasoning level           | `llmproxy__exploratory`, `llmproxy__standard`, `llmproxy__deep` (+ `/free`, `/local`) | Models tagged at that reasoning tier |
+| Capability                | `llmproxy__tools`, `llmproxy__vision` (+ `/free`)     | Models tagged with that capability |
+| Per-provider              | `llmproxy__<provider>` (+ `/<dimension>`)            | One provider's models, optionally sliced |
+| Fusion (deliberation)     | `llmproxy__fusion`, `llmproxy__fusion/free`           | A panel of models, judged + synthesized |
 
 All of these **except fusion** share the same cycling-and-failover machinery
 described next; fusion fans out to a panel instead (see [Fusion](#fusion-virtual-models-multi-model-deliberation)).
@@ -211,12 +215,12 @@ You can inspect the live pool behind any virtual model without sending a chat
 request:
 
 ```bash
-curl http://localhost:8080/v1/models/llmproxy/free | jq '._candidates'
+curl http://localhost:8080/v1/models/llmproxy__free | jq '._candidates'
 ```
 
 ### The `free` virtual model
 
-`llmproxy/free` (also accepted: `llmproxy__free`) pools every model across all providers
+`llmproxy__free` (also accepted: the `llmproxy/free` slash form) pools every model across all providers
 whose upstream ID contains the word `free` (case-insensitive) **or** whose upstream
 ID (or full `provider/upstream` ID) appears in the top-level `believed_free` config
 list — see [Configuration](#configuration). Its pool is **capacity-aware**: among
@@ -229,15 +233,15 @@ when an individual free endpoint is rate-limited.
 # Use the free virtual model
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "llmproxy/free", "messages": [{"role": "user", "content": "Hello!"}]}'
+  -d '{"model": "llmproxy__free", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
-The `llmproxy/free` model appears at the top of `GET /v1/models` whenever at least one
+The `llmproxy__free` model appears at the top of `GET /v1/models` whenever at least one
 eligible backend is available.
 
 ### The `local` virtual model
 
-`llmproxy/local` (also accepted: `llmproxy__local`) pools every model whose provider
+`llmproxy__local` (also accepted: the `llmproxy/local` slash form) pools every model whose provider
 `base_url` hostname is a loopback address (`localhost`, `127.x.x.x`, `::1`,
 `0.0.0.0`), an mDNS name (`*.local`), or a Docker host-gateway alias
 (`host.docker.internal`, `gateway.docker.internal`). It uses random-start cycling
@@ -249,25 +253,25 @@ running without hard-coding a name.
 # Use the local virtual model
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "llmproxy/local", "messages": [{"role": "user", "content": "Hello!"}]}'
+  -d '{"model": "llmproxy__local", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
-The `llmproxy/local` model appears in `GET /v1/models` only when at least one model
+The `llmproxy__local` model appears in `GET /v1/models` only when at least one model
 from a localhost-backed provider is present in the route cache — meaning the
 provider must be reachable and its `/models` listing must have been fetched
 successfully.
 
 > **Local models are not added to `believed_free`.** Local-provider models
 > (Ollama, LM Studio, OpenWebUI, etc.) live entirely under the `__local` family
-> — `llmproxy/local`, `llmproxy/standard__local`, and so on. When the setup
+> — `llmproxy__local`, `llmproxy__standard/local`, and so on. When the setup
 > wizard auto-registers a local provider, it tags each discovered model in
 > `model_reasoning` only; `believed_free` is reserved for cloud free-tier
-> offerings. If you want a local model to also appear under `llmproxy/free`,
+> offerings. If you want a local model to also appear under `llmproxy__free`,
 > add it to `believed_free` by hand.
 
 ### Input-aware first pick (general virtuals only)
 
-For the two general virtuals — `llmproxy/free` and `llmproxy/local` — the proxy
+For the two general virtuals — `llmproxy__free` and `llmproxy__local` — the proxy
 chooses *which candidate to try first* from the request itself, before the usual
 capacity/random cycling. It estimates the prompt size and detects an explicit
 "thinking" intent (`reasoning_effort` of `medium`/`high`, or a truthy `reasoning`
@@ -277,29 +281,37 @@ prefers a fast (`exploratory`) model, a long prompt or a thinking request prefer
 layered below the capability ordering (forced tools/JSON still win) and it never
 drops a candidate, so failover behavior is unchanged. It needs no configuration —
 thresholds live in `server.py` (`_TIER_SMALL_MAX_TOKENS`, `_TIER_MEDIUM_MAX_TOKENS`).
-The categorized families (`llmproxy/deep__free`, `llmproxy/tools`, …) already encode
+The categorized families (`llmproxy__deep/free`, `llmproxy__tools`, …) already encode
 intent and are untouched.
 
 ### The `loadbalanced` virtual model
 
-`llmproxy/loadbalanced` (also accepted: `llmproxy__loadbalanced`) is the "just pick
-something sensible and cheap" default. For each request it inspects what the
-prompt needs (tools / vision / explicit thinking, plus its size) and walks a
-**cost waterfall**, keeping spend at or near zero:
+`llmproxy__loadbalanced` (also accepted: the `llmproxy/loadbalanced` slash form) is the "give me a
+strong answer for ~free" default. For each request it walks a **cost waterfall**,
+keeping spend at or near zero while preferring the most capable model available
+in the cheapest tier:
 
-1. **Free-tier cloud** models first — ordered by remaining session capacity, so a
-   model with quota left (see [`free_limits`](#free_limits)) is preferred and load
-   is spread. A provider that grants a provider-wide free quota/session is also
-   treated as free *while that allowance has headroom* (see
+1. **Free-tier cloud** models first — among free models that still have headroom
+   (quota left, see [`free_limits`](#free_limits)), the **most sophisticated is
+   tried first** (`best-first`): models tagged `deep` outrank `standard` outrank
+   `exploratory` in [`model_reasoning`](#reasoning-level-virtual-models), and
+   untagged models are ranked by an inferred size/reasoning signal (e.g. a `70b`
+   in the name, or a known reasoning model). Remaining capacity only breaks ties
+   between equally-capable models. A saturated free model drops to the back but is
+   still reachable as a failover. A provider that grants a provider-wide free
+   quota/session is also treated as free *while that allowance has headroom* (see
    [`free_allowance`](#free_allowance)).
 2. **Local** models next — also $0, but kept a step below free *cloud* so local
-   compute is reserved for when free cloud is exhausted. Local models are ranked
-   for the request exactly like the cloud tier: a short prompt prefers a small,
-   fast model; a large or `reasoning_effort: "high"` prompt prefers a bigger,
-   deeper one (using [`model_reasoning`](#reasoning-level-virtual-models) tags).
+   compute is reserved for when free cloud is exhausted. Local models are likewise
+   ordered strongest-first (the bigger/deeper local model is preferred).
 3. **Cheapest capable paid** model as a last resort — only reached when no free
    or local model can serve the request. Among paid candidates the least
    expensive (per the [`pricing`](#configuration) block) is tried first.
+
+This deliberately favors quality over load-spreading within the free tier: a
+short prompt no longer gets routed to a weak model just because it's short, so
+thinking-heavy cron jobs and agent turns get a capable model while cost stays at
+~$0. Failover (below) handles a rate-limited top pick by moving to the next-best.
 
 Cost is the dominant rule: a paid model is **never** tried before a free or local
 one, even when only a paid model is tagged for a needed capability — failover is
@@ -313,10 +325,10 @@ rate-limited free model never stalls the request.
 # Keep costs near zero; let llmproxy choose a reasonable model per request.
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "llmproxy/loadbalanced", "messages": [{"role": "user", "content": "Hello!"}]}'
+  -d '{"model": "llmproxy__loadbalanced", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
-`llmproxy/loadbalanced` appears in `GET /v1/models` whenever at least one model
+`llmproxy__loadbalanced` appears in `GET /v1/models` whenever at least one model
 is exposed to virtual routing.
 
 ### Reasoning-level virtual models
@@ -328,29 +340,29 @@ with a given level, llmproxy exposes corresponding virtual endpoints:
 
 | Virtual model name           | Selects                                                       |
 |------------------------------|---------------------------------------------------------------|
-| `llmproxy/exploratory`      | All models tagged `exploratory`                               |
-| `llmproxy/standard`         | All models tagged `standard`                                  |
-| `llmproxy/deep`             | All models tagged `deep`                                      |
-| `llmproxy/exploratory__free` | Models tagged `exploratory` **and** qualifying as free-tier   |
-| `llmproxy/exploratory__local`| Models tagged `exploratory` **and** served on localhost       |
-| `llmproxy/standard__free`    | Models tagged `standard` **and** qualifying as free-tier      |
-| `llmproxy/standard__local`   | Models tagged `standard` **and** served on localhost          |
-| `llmproxy/deep__free`        | Models tagged `deep` **and** qualifying as free-tier          |
-| `llmproxy/deep__local`       | Models tagged `deep` **and** served on localhost              |
+| `llmproxy__exploratory`      | All models tagged `exploratory`                               |
+| `llmproxy__standard`         | All models tagged `standard`                                  |
+| `llmproxy__deep`             | All models tagged `deep`                                      |
+| `llmproxy__exploratory/free` | Models tagged `exploratory` **and** qualifying as free-tier   |
+| `llmproxy__exploratory/local`| Models tagged `exploratory` **and** served on localhost       |
+| `llmproxy__standard/free`    | Models tagged `standard` **and** qualifying as free-tier      |
+| `llmproxy__standard/local`   | Models tagged `standard` **and** served on localhost          |
+| `llmproxy__deep/free`        | Models tagged `deep` **and** qualifying as free-tier          |
+| `llmproxy__deep/local`       | Models tagged `deep` **and** served on localhost              |
 
 Each endpoint cycles through its pool using the
 [shared failover rules](#how-cycling--failover-works); the `/free` variants are
-additionally capacity-aware. The older `llmproxy__...` canonical form (e.g. `llmproxy__deep`) and the three-part
-slash form (e.g. `llmproxy/deep/free`) are still accepted on input.
+additionally capacity-aware. The `llmproxy/...` slash form (e.g. `llmproxy/deep`, `llmproxy/deep__free`) and the
+three-part slash form (e.g. `llmproxy/deep/free`) are also accepted on input.
 
 ```bash
 # Use the deep reasoning virtual model
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "llmproxy/deep", "messages": [{"role": "user", "content": "Prove P≠NP"}]}'
+  -d '{"model": "llmproxy__deep", "messages": [{"role": "user", "content": "Prove P≠NP"}]}'
 
-# Inspect which backends are eligible for llmproxy/standard__free
-curl http://localhost:8080/v1/models/llmproxy/standard__free | jq '._candidates'
+# Inspect which backends are eligible for llmproxy__standard/free
+curl http://localhost:8080/v1/models/llmproxy__standard/free | jq '._candidates'
 ```
 
 Tags are configured via the `model_reasoning` field — see
@@ -389,30 +401,30 @@ When at least one model is tagged, dedicated capability virtual endpoints appear
 
 | Virtual model name        | Selects                                                  |
 |---------------------------|----------------------------------------------------------|
-| `llmproxy/tools`         | All models tagged `tools`                                 |
-| `llmproxy/tools__free`    | Models tagged `tools` **and** qualifying as free-tier     |
-| `llmproxy/vision`        | All models tagged `vision`                                |
-| `llmproxy/vision__free`   | Models tagged `vision` **and** qualifying as free-tier    |
+| `llmproxy__tools`         | All models tagged `tools`                                 |
+| `llmproxy__tools/free`    | Models tagged `tools` **and** qualifying as free-tier     |
+| `llmproxy__vision`        | All models tagged `vision`                                |
+| `llmproxy__vision/free`   | Models tagged `vision` **and** qualifying as free-tier    |
 
 ```bash
 # Route a tool-calling request only to tool-capable free models, failing
 # over automatically if one returns no tool call:
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "llmproxy/tools__free",
+  -d '{"model": "llmproxy__tools/free",
        "tool_choice": "required",
        "tools": [{"type": "function", "function": {"name": "get_weather"}}],
        "messages": [{"role": "user", "content": "Weather in Paris?"}]}'
 
-# llmproxy/free also benefits — it now orders/fails over by capability when
+# llmproxy__free also benefits — it now orders/fails over by capability when
 # the request carries tools or images.
 ```
 
 Tags are configured via the `model_capabilities` field, which **auto-populates**
 from the scraper (OpenRouter's `supported_parameters` / image modality) and the
 setup wizard's *Manage model tags → Tag model capabilities* menu — see
-[Configuration → model_capabilities](#model_capabilities) below. The older `llmproxy__...` form (e.g. `llmproxy__tools`) and three-part slash form
-(e.g. `llmproxy/tools/free`) are also accepted on input.
+[Configuration → model_capabilities](#model_capabilities) below. The `llmproxy/...` slash form (e.g. `llmproxy/tools`, `llmproxy/tools__free`) and the
+three-part slash form (e.g. `llmproxy/tools/free`) are also accepted on input.
 
 ### Per-provider virtual models
 
@@ -421,8 +433,8 @@ providers. To scope failover to a **single** provider, llmproxy also advertises
 per-provider virtual models of the form:
 
 ```
-llmproxy/<provider>            # cycles through ALL of that provider's models
-llmproxy/<provider>__<dimension>
+llmproxy__<provider>            # cycles through ALL of that provider's models
+llmproxy__<provider>/<dimension>
 ```
 
 where `<dimension>` is one of `exploratory`, `standard`, `deep` (reasoning
@@ -431,37 +443,37 @@ provider:
 
 | Virtual model name              | Selects                                                |
 |---------------------------------|--------------------------------------------------------|
-| `llmproxy/google`              | All of Google's models                                 |
-| `llmproxy/google__deep`         | Google models tagged `deep`                            |
-| `llmproxy/google__standard`     | Google models tagged `standard`                        |
-| `llmproxy/google__exploratory`  | Google models tagged `exploratory`                     |
-| `llmproxy/google__tools`        | Google models tagged `tools`                           |
-| `llmproxy/google__vision`       | Google models tagged `vision`                          |
-| `llmproxy/google__free`         | Google's free-tier models (capacity-aware, like `llmproxy/free`) |
+| `llmproxy__google`              | All of Google's models                                 |
+| `llmproxy__google/deep`         | Google models tagged `deep`                            |
+| `llmproxy__google/standard`     | Google models tagged `standard`                        |
+| `llmproxy__google/exploratory`  | Google models tagged `exploratory`                     |
+| `llmproxy__google/tools`        | Google models tagged `tools`                           |
+| `llmproxy__google/vision`       | Google models tagged `vision`                          |
+| `llmproxy__google/free`         | Google's free-tier models (capacity-aware, like `llmproxy__free`) |
 
 ```bash
 # Deep reasoning, but only ever route to Google:
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "llmproxy/google__deep", "messages": [{"role": "user", "content": "Prove P≠NP"}]}'
+  -d '{"model": "llmproxy__google/deep", "messages": [{"role": "user", "content": "Prove P≠NP"}]}'
 
 # Inspect which of Google's models back a per-provider virtual:
-curl http://localhost:8080/v1/models/llmproxy/google__free | jq '._candidates'
+curl http://localhost:8080/v1/models/llmproxy__google/free | jq '._candidates'
 ```
 
 Eligibility: per-provider virtuals are advertised only for providers that are
 **enabled**, **non-local** (not `localhost` / `host.docker.internal` / `*.local`),
 and **not** opted out via `expose_to_virtual_models: false`. Each variant appears
 in `GET /v1/models` only when the provider actually has a backing model for that
-dimension. `llmproxy/<provider>__free` uses the same capacity-aware load
-balancing and usage tracking as `llmproxy/free`. The older `llmproxy__...` form and three-part slash input forms are also accepted.
+dimension. `llmproxy__<provider>/free` uses the same capacity-aware load
+balancing and usage tracking as `llmproxy__free`. The `llmproxy/...` slash form and three-part slash input forms are also accepted.
 
 > **Precedence / naming note:** existing global virtual names always take
 > precedence. If you name a provider exactly `free`, `local`, `deep`, `standard`,
 > `exploratory`, `tools`, or `vision`, then that one colliding name (e.g.
-> `llmproxy/standard` or `llmproxy/standard__free`) resolves to the **global**
+> `llmproxy__standard` or `llmproxy__standard/free`) resolves to the **global**
 > virtual; the provider's other per-provider variants (e.g.
-> `llmproxy/standard__deep`) still work.
+> `llmproxy__standard/deep`) still work.
 
 ---
 
@@ -476,8 +488,8 @@ expert critique, and high-stakes prompts rather than quick interactive chat.
 
 | Virtual model name        | Panel drawn from                                          |
 |---------------------------|-----------------------------------------------------------|
-| `llmproxy/fusion`        | The full non-local pool (or an explicit `fusion.panel`); paid models allowed by default |
-| `llmproxy/fusion__free`   | The capacity-ordered free-tier pool (panel, judge, and synthesizer all free) |
+| `llmproxy__fusion`        | The full non-local pool (or an explicit `fusion.panel`); paid models allowed by default |
+| `llmproxy__fusion/free`   | The capacity-ordered free-tier pool (panel, judge, and synthesizer all free) |
 
 The pipeline has four steps. First, llmproxy selects a panel of `panel_size`
 models, preferring distinct providers so the deliberation benefits from genuinely
@@ -494,7 +506,7 @@ fails.
 # Free-tier fusion: panel, judge, and synthesizer all drawn from the free pool
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "llmproxy/fusion__free",
+  -d '{"model": "llmproxy__fusion/free",
        "messages": [{"role": "user", "content": "Compare REST and gRPC for a mobile backend."}]}'
 ```
 
@@ -522,8 +534,8 @@ Behavior is controlled by the `fusion` config object:
 When a request forces a capability (a `tool_choice` that demands a call, or a
 `response_format` requesting JSON), the panel and judge deliberate in plain text
 while the synthesizer call re-attaches the original tools and `response_format`,
-so the final answer honors the forced-output contract. The legacy `llmproxy/...`
-input form (`llmproxy/fusion`, `llmproxy/fusion/free`) is accepted as well.
+so the final answer honors the forced-output contract. The legacy `llmproxy__...`
+input form (`llmproxy__fusion`, `llmproxy__fusion/free`) is accepted as well.
 
 > **Scope notes (v1).** Fusion is available on chat/completions only. The
 > `llmproxy_fusion` body field and `X-LLMProxy-Fusion` header are populated on the
@@ -549,8 +561,8 @@ which dialect a client or upstream uses.
 | **Gemini** | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens` | Point the Google GenAI SDK at llmproxy. The model id rides in the URL path; streaming emits Gemini `GenerateContentResponse` SSE chunks. |
 
 All three surfaces accept any model id llmproxy knows — direct (`provider__model`) **and**
-the virtual models (`llmproxy/free`, `llmproxy/deep`, …). So an Anthropic SDK call
-with `model="llmproxy/free"` is routed and load-balanced exactly like the OpenAI path.
+the virtual models (`llmproxy__free`, `llmproxy__deep`, …). So an Anthropic SDK call
+with `model="llmproxy__free"` is routed and load-balanced exactly like the OpenAI path.
 (xAI/Grok, Mistral, Groq, DeepSeek, etc. are OpenAI- and/or Anthropic-compatible, so they
 need no separate inbound surface — use the OpenAI or Anthropic endpoints for them.)
 
@@ -564,7 +576,7 @@ need no separate inbound surface — use the OpenAI or Anthropic endpoints for t
 # Anthropic SDK pointed at llmproxy — works with streaming and tools
 import anthropic
 client = anthropic.Anthropic(base_url="http://localhost:8080", api_key="unused")
-client.messages.create(model="llmproxy/free", max_tokens=256,
+client.messages.create(model="llmproxy__free", max_tokens=256,
                        messages=[{"role": "user", "content": "hi"}])
 ```
 
@@ -591,7 +603,7 @@ combination** (e.g. an Anthropic-SDK client can stream from a Gemini upstream).
 
 ## Configuration
 
-Config is stored at `~/.config/llmproxy/config.json` (or the path in
+Config is stored at `~/.config/llmproxy__config.json` (or the path in
 `$LLMPROXY_CONFIG`, or the `--config` flag).
 
 ### Schema
@@ -753,7 +765,7 @@ models with the capabilities they support.  Valid values are `tools`, `vision`,
 (case-insensitively) against either the upstream model ID or the full
 `provider/upstream_model` proxy ID, like `model_reasoning`.  It drives
 [capability-aware routing & failover](#capability-aware-routing--failover) on
-all virtual models and powers the `llmproxy/tools` / `llmproxy/vision`
+all virtual models and powers the `llmproxy__tools` / `llmproxy__vision`
 endpoints (advertised when at least one model carries the tag).  Omit it (or set
 it to `{}`) to disable capability-aware behavior — the proxy then behaves exactly
 as before.  The field **auto-populates** from the scraper (OpenRouter's
@@ -779,8 +791,8 @@ See `config.example.json` for a complete annotated example.
 }
 ```
 
-When a `…/free` virtual model (`llmproxy/free`, `llmproxy/<level>__free`,
-`llmproxy/<provider>__free`, …) picks which backend to use, it scores each
+When a `…/free` virtual model (`llmproxy__free`, `llmproxy__<level>/free`,
+`llmproxy__<provider>/free`, …) picks which backend to use, it scores each
 candidate by how much of its quota is still unused and prefers the one with the
 most headroom (weighted random, so load is still spread). **Both** request
 limits (`requests_per_minute` / `requests_per_day`) **and** token limits
@@ -812,7 +824,7 @@ across their models, on top of any explicitly free models. `free_allowance` is a
 }
 ```
 
-The cost-tiered [`llmproxy/loadbalanced`](#the-loadbalanced-virtual-model) virtual
+The cost-tiered [`llmproxy__loadbalanced`](#the-loadbalanced-virtual-model) virtual
 uses it to decide what counts as free *right now*: while the provider's aggregated
 recent usage is within this allowance, its models are treated as **free** (tried
 before paid); once the allowance is exhausted in the current window they fall back
@@ -940,7 +952,7 @@ piece that makes merged/`pip install -U` updates actually reach a running proxy:
 You can run the same reconcile manually — handy on a read-only checkout:
 
 ```bash
-python scripts/update_free_models.py --sync-config-only --config ~/.config/llmproxy/config.json
+python scripts/update_free_models.py --sync-config-only --config ~/.config/llmproxy__config.json
 # add --dry-run to preview without writing
 ```
 
@@ -1180,7 +1192,7 @@ value); only outbound upstream requests see the resolved secret.
 Provider free tiers change without notice. The free-tier fields in
 [`llmproxy/providers.json`](llmproxy/providers.json) hold the
 project's best-effort view of *which* models are currently free and *what*
-their rate limits are — used by the `llmproxy/free` virtual endpoint and by the
+their rate limits are — used by the `llmproxy__free` virtual endpoint and by the
 setup wizard's "auto-populate" step.
 
 A scraper at `scripts/update_free_models.py` polls multiple sources, diffs the
@@ -1203,7 +1215,7 @@ The top-level **`pricing`** block is assembled from several of these sources: th
 litellm cost map provides broad baseline coverage, and high-confidence live
 provider sources (OpenRouter, Together) override individual models with their
 authoritative per-token prices. The result powers offline cost accounting and the
-[`llmproxy/loadbalanced`](#the-loadbalanced-virtual-model) paid-tier ranking, and
+[`llmproxy__loadbalanced`](#the-loadbalanced-virtual-model) paid-tier ranking, and
 is committed alongside `believed_free` in the same providers.json refresh (and the
 [automated PR](#keeping-the-free-models-list-current), when enabled).
 
@@ -1226,15 +1238,15 @@ python scripts/update_free_models.py --source openrouter,docs --dry-run
 python scripts/update_free_models.py --regen-config-only
 
 # Also sync your live config.json's free-tier sections from the sidecar
-python scripts/update_free_models.py --config ~/.config/llmproxy/config.json --dry-run
-python scripts/update_free_models.py --config ~/.config/llmproxy/config.json
+python scripts/update_free_models.py --config ~/.config/llmproxy__config.json --dry-run
+python scripts/update_free_models.py --config ~/.config/llmproxy__config.json
 
 # Sync the config from the current sidecar without scraping
-python scripts/update_free_models.py --regen-config-only --config ~/.config/llmproxy/config.json
+python scripts/update_free_models.py --regen-config-only --config ~/.config/llmproxy__config.json
 
 # Actively probe believed_free models for cost (real requests; needs API keys).
 # Equivalent to setting "probe_cost": true in config.json.
-python scripts/update_free_models.py --probe --config ~/.config/llmproxy/config.json --dry-run
+python scripts/update_free_models.py --probe --config ~/.config/llmproxy__config.json --dry-run
 python scripts/update_free_models.py --probe --probe-max 20 --probe-provider groq
 
 # Probes run with bounded per-provider concurrency (default 3) and show a
@@ -1359,7 +1371,7 @@ pip install gunicorn   # optional
 
 ### 2. Configure providers
 
-Run the interactive setup wizard.  It creates `~/.config/llmproxy/config.json`
+Run the interactive setup wizard.  It creates `~/.config/llmproxy__config.json`
 and prompts you for each provider's name, base URL, API key, and optional model
 filter.
 
@@ -1386,8 +1398,8 @@ python run.py --port 9000 --log-level DEBUG
 correctly regardless of which directory you invoke it from:
 
 ```bash
-python /path/to/llmproxy/run.py --setup
-python /path/to/llmproxy/run.py
+python /path/to/llmproxy__run.py --setup
+python /path/to/llmproxy__run.py
 ```
 
 ### 4. Reconfigure at any time
@@ -1468,8 +1480,8 @@ python llmproxy_test_client.py --use-sdk
 | `health`    | `GET /health` returns 200 and lists active providers                  | No               |
 | `errors`    | Missing model field, bad prefix, unknown provider, non-JSON body      | No               |
 | `models`    | `GET /v1/models` aggregates all providers; naming convention          | Yes              |
-| `free`      | Sends several prompts to `model="llmproxy/free"`; tests cycling + streaming   | Yes (free tier)  |
-| `local`     | Sends several prompts to `model="llmproxy/local"`; skipped if none configured | Yes (localhost)  |
+| `free`      | Sends several prompts to `model="llmproxy__free"`; tests cycling + streaming   | Yes (free tier)  |
+| `local`     | Sends several prompts to `model="llmproxy__local"`; skipped if none configured | Yes (localhost)  |
 | `chat`      | Non-streaming chat completion; checks response content                | Yes              |
 | `streaming` | Streaming SSE chat; prints tokens live as they arrive                 | Yes              |
 | `embeddings`| Embedding request; accepts graceful 400/404 if unsupported            | Yes              |
@@ -1612,7 +1624,7 @@ options; pick whichever fits your setup.
 Change the provider's `base_url` from `http://localhost:11434/v1` to
 `http://host.docker.internal:11434/v1`. llmproxy already treats
 `host.docker.internal` and `gateway.docker.internal` as local for the purposes
-of `llmproxy/local` routing, so the `__local` virtual model picks it up
+of `llmproxy__local` routing, so the `__local` virtual model picks it up
 automatically.
 
 On plain Linux (no Docker Desktop), `host.docker.internal` doesn't resolve by
@@ -1643,18 +1655,18 @@ Docker Desktop.
 If you prefer to keep the config entirely inside Docker (useful for CI or
 rootless environments where a host-path mount is inconvenient), mount the
 named volume over the default config location under the non-root user's home
-(`/home/llmproxy/.config/llmproxy`):
+(`/home/llmproxy__.config/llmproxy`):
 
 ```bash
 # Setup
 docker run -it --rm \
-  -v llmproxy_config:/home/llmproxy/.config/llmproxy \
+  -v llmproxy_config:/home/llmproxy__.config/llmproxy \
   llmproxy --setup
 
 # Server
 docker run -d \
   -p 8080:8080 \
-  -v llmproxy_config:/home/llmproxy/.config/llmproxy \
+  -v llmproxy_config:/home/llmproxy__.config/llmproxy \
   --name llmproxy \
   llmproxy
 ```

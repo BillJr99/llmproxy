@@ -1,5 +1,5 @@
 {
-  "_note": "All providers must expose an OpenAI-compatible API (/models, /chat/completions, Bearer auth). The provider name 'llmproxy' is reserved and must not be used. Optional per-provider flag: set \"expose_to_virtual_models\": false to exclude a provider from all virtual endpoints (llmproxy/free, llmproxy/deep, llmproxy/tools, etc.) while still allowing direct calls to its models.",
+  "_note": "All providers must expose an OpenAI-compatible API (/models, /chat/completions, Bearer auth). The provider name 'llmproxy' is reserved and must not be used. Optional per-provider flag: set \"expose_to_virtual_models\": false to exclude a provider from all virtual endpoints (llmproxy__free, llmproxy__deep, llmproxy__tools, etc.) while still allowing direct calls to its models.",
   "providers": {
     "openai": {
       "base_url": "https://api.openai.com/v1",
@@ -1020,7 +1020,7 @@
     ]
   },
   "free_limits": {
-    "_note": "Rate limits for capacity-aware load balancing on llmproxy/free and llmproxy/*/free endpoints. Tracked per-worker-process; resets on restart. Both request limits (rpm/rpd) and token limits (tpm/tpd) are enforced. Check provider docs \u2014 limits change frequently.",
+    "_note": "Rate limits for capacity-aware load balancing on llmproxy__free and llmproxy__*/free endpoints. Tracked per-worker-process; resets on restart. Both request limits (rpm/rpd) and token limits (tpm/tpd) are enforced. Check provider docs \u2014 limits change frequently.",
     "nvidia/meta/llama-3.1-70b-instruct": {
       "requests_per_minute": 40,
       "requests_per_day": null,

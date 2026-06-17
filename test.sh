@@ -88,25 +88,25 @@ fi
 ALL_IDS=""; FALLBACK_MODEL=""
 if [ "$HAVE_JQ" -eq 1 ]; then
   ALL_IDS=$(jq -r '.data[].id' "$BODY" 2>/dev/null)
-  FALLBACK_MODEL=$(echo "$ALL_IDS" | grep -v '^llmproxy/' | head -n1)
+  FALLBACK_MODEL=$(echo "$ALL_IDS" | grep -v '^llmproxy__' | head -n1)
 fi
 has_model() { echo "$ALL_IDS" | grep -qx "$1"; }
 
-for vm in llmproxy/loadbalanced llmproxy/free llmproxy/local llmproxy/tools llmproxy/tools__free llmproxy/vision llmproxy/vision__free llmproxy/fusion llmproxy/fusion__free; do
+for vm in llmproxy__loadbalanced llmproxy__free llmproxy__local llmproxy__tools llmproxy__tools/free llmproxy__vision llmproxy__vision/free llmproxy__fusion llmproxy__fusion/free; do
   if has_model "$vm"; then pass "advertised: $vm"; else skip "not advertised: $vm (no matching tagged models)"; fi
 done
 
 # Inspect candidate list for a capability endpoint when present.
-if has_model llmproxy/tools; then
-  code=$(req GET "/v1/models/llmproxy/tools")
+if has_model llmproxy__tools; then
+  code=$(req GET "/v1/models/llmproxy__tools")
   if ok2xx "$code"; then
-    c=$(jqr '._candidates | length'); pass "GET /v1/models/llmproxy/tools → $code ${DIM}(${c:-?} candidates)${RST}"
-  else warn "GET /v1/models/llmproxy/tools → $code"; fi
+    c=$(jqr '._candidates | length'); pass "GET /v1/models/llmproxy__tools → $code ${DIM}(${c:-?} candidates)${RST}"
+  else warn "GET /v1/models/llmproxy__tools → $code"; fi
 fi
 
-# Choose a model for the chat tests: prefer llmproxy/free, else a real model.
+# Choose a model for the chat tests: prefer llmproxy__free, else a real model.
 CHAT_MODEL=""
-if has_model llmproxy/free; then CHAT_MODEL="llmproxy/free"
+if has_model llmproxy__free; then CHAT_MODEL="llmproxy__free"
 elif [ -n "$FALLBACK_MODEL" ]; then CHAT_MODEL="$FALLBACK_MODEL"; fi
 
 # ── basic chat completion ───────────────────────────────────────────────────
@@ -140,7 +140,7 @@ fi
 # ── tool calling (capability-aware routing + failover) ──────────────────────
 hdr "Tool calling"
 TOOL_MODEL=""
-if has_model llmproxy/tools; then TOOL_MODEL="llmproxy/tools"
+if has_model llmproxy__tools; then TOOL_MODEL="llmproxy__tools"
 elif [ -n "$CHAT_MODEL" ]; then TOOL_MODEL="$CHAT_MODEL"; fi
 if [ -z "$TOOL_MODEL" ]; then
   skip "no model available for tool test"
@@ -169,11 +169,11 @@ fi
 
 # ── vision (image input routing) ────────────────────────────────────────────
 hdr "Vision"
-if has_model llmproxy/vision; then
+if has_model llmproxy__vision; then
   # 1x1 transparent PNG, inlined as a data URL.
   PNG="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
   read -r -d '' VIS_REQ <<JSON
-{"model":"llmproxy/vision","max_tokens":16,
+{"model":"llmproxy__vision","max_tokens":16,
  "messages":[{"role":"user","content":[
    {"type":"text","text":"Reply with the single word: ok"},
    {"type":"image_url","image_url":{"url":"${PNG}"}}]}]}
@@ -182,7 +182,7 @@ JSON
   if ok2xx "$code"; then pass "vision request → $code"
   else warn "vision request → $code $(head -c 160 "$BODY")"; fi
 else
-  skip "llmproxy/vision not advertised (no vision-tagged models configured)"
+  skip "llmproxy__vision not advertised (no vision-tagged models configured)"
 fi
 
 # ── OpenAI legacy completions ───────────────────────────────────────────────
@@ -243,7 +243,7 @@ fi
 # ── Gemini generateContent family ───────────────────────────────────────────
 # llmproxy also speaks the Gemini dialect inbound: the model rides in the URL
 # path and streaming uses :streamGenerateContent. CHAT_MODEL is a /v1/models id
-# such as provider/model or llmproxy/free; its single "/" is absorbed by the
+# such as provider/model or llmproxy__free; its single "/" is absorbed by the
 # route's <path:> converter (the handler rpartitions on ":"), so it slots into
 # the path unescaped.
 hdr "Gemini /v1beta/models/{model}:generateContent"
@@ -288,7 +288,7 @@ hdr "Fusion"
 # Try the free pool first (the most constrained panel, so it best exercises the
 # availability/backfill path). If the free panel is merely unavailable — a 503
 # model-availability failure, not an internal 5xx — fall back to the general
-# llmproxy/fusion pool so the test can still complete. An internal error from
+# llmproxy__fusion pool so the test can still complete. An internal error from
 # the free pool is NOT masked: it surfaces as a fail rather than a fallback.
 HDRS="$(mktemp)"
 # fusion_chat MODEL -> echoes http status; body in $BODY, headers in $HDRS
@@ -298,8 +298,8 @@ fusion_chat() {
     -d "{\"model\":\"$1\",\"messages\":[{\"role\":\"user\",\"content\":\"In one sentence, name a tradeoff between REST and gRPC.\"}],\"max_tokens\":128}"
 }
 FUSION_MODEL=""
-if has_model "llmproxy/fusion__free"; then FUSION_MODEL="llmproxy/fusion__free"
-elif has_model llmproxy/fusion; then FUSION_MODEL="llmproxy/fusion"; fi
+if has_model "llmproxy__fusion/free"; then FUSION_MODEL="llmproxy__fusion/free"
+elif has_model llmproxy__fusion; then FUSION_MODEL="llmproxy__fusion"; fi
 if [ -z "$FUSION_MODEL" ]; then
   skip "no fusion model advertised (need >=2 eligible models)"
 else
@@ -307,9 +307,9 @@ else
   code=$(fusion_chat "$FUSION_MODEL")
   # A 503 is the proxy's model-availability signal (no eligible panel / all panel
   # members failed). When the free pool hits that, retry on the general pool.
-  if [ "$FUSION_MODEL" = "llmproxy/fusion__free" ] && [ "$code" = "503" ] && has_model llmproxy/fusion; then
-    warn "fusion/free unavailable → $code; falling back to llmproxy/fusion"
-    FUSION_MODEL="llmproxy/fusion"
+  if [ "$FUSION_MODEL" = "llmproxy__fusion/free" ] && [ "$code" = "503" ] && has_model llmproxy__fusion; then
+    warn "fusion/free unavailable → $code; falling back to llmproxy__fusion"
+    FUSION_MODEL="llmproxy__fusion"
     echo "  ${DIM}model: ${FUSION_MODEL}${RST}"
     code=$(fusion_chat "$FUSION_MODEL")
   fi
@@ -332,40 +332,40 @@ else
 fi
 
 # ── input-aware first-pick on the general virtuals ──────────────────────────
-hdr "Input-aware routing (llmproxy/free)"
-if ! has_model llmproxy/free; then
-  skip "llmproxy/free not advertised"
+hdr "Input-aware routing (llmproxy__free)"
+if ! has_model llmproxy__free; then
+  skip "llmproxy__free not advertised"
 else
   # A tiny prompt and a 'thinking' request should both succeed; the proxy biases
   # the first model tried by input size/type, but failover still guarantees a
   # reply, so this asserts functionality rather than which tier was chosen.
-  code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy/free\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}")
+  code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy__free\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}")
   ok2xx "$code" && pass "small prompt routed → $code" || warn "small prompt → $code"
-  code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy/free\",\"reasoning_effort\":\"high\",\"messages\":[{\"role\":\"user\",\"content\":\"Think carefully, then answer: 2+2?\"}],\"max_tokens\":16}")
+  code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy__free\",\"reasoning_effort\":\"high\",\"messages\":[{\"role\":\"user\",\"content\":\"Think carefully, then answer: 2+2?\"}],\"max_tokens\":16}")
   ok2xx "$code" && pass "thinking request routed → $code" || warn "thinking request → $code"
 fi
 
 # ── cost-tiered loadbalanced virtual ────────────────────────────────────────
 hdr "Loadbalanced (cost waterfall)"
-if ! has_model llmproxy/loadbalanced; then
-  skip "llmproxy/loadbalanced not advertised (no providers exposed to virtual routing)"
+if ! has_model llmproxy__loadbalanced; then
+  skip "llmproxy__loadbalanced not advertised (no providers exposed to virtual routing)"
 else
   # Inspect the candidate pool (whole pool: free + local + paid).
-  code=$(req GET "/v1/models/llmproxy/loadbalanced")
+  code=$(req GET "/v1/models/llmproxy__loadbalanced")
   if ok2xx "$code"; then
-    c=$(jqr '._candidates | length'); pass "GET /v1/models/llmproxy/loadbalanced → $code ${DIM}(${c:-?} candidates)${RST}"
-  else warn "GET /v1/models/llmproxy/loadbalanced → $code"; fi
+    c=$(jqr '._candidates | length'); pass "GET /v1/models/llmproxy__loadbalanced → $code ${DIM}(${c:-?} candidates)${RST}"
+  else warn "GET /v1/models/llmproxy__loadbalanced → $code"; fi
 
   # A plain prompt and a 'think hard' prompt should both get a usable reply. The
   # waterfall prefers free → local → paid and fails over silently, so this checks
   # that a reasonable model answers, not which tier served it.
-  code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy/loadbalanced\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}")
+  code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy__loadbalanced\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}")
   if ok2xx "$code"; then
     content=$(jqr '.choices[0].message.content')
     [ -n "$content" ] && pass "plain prompt → $code ${DIM}(replied)${RST}" || fail "plain prompt → $code but empty body"
   else fail "plain prompt → $code"; fi
 
-  code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy/loadbalanced\",\"reasoning_effort\":\"high\",\"messages\":[{\"role\":\"user\",\"content\":\"Think carefully, then answer: what is 17*23?\"}],\"max_tokens\":64}")
+  code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy__loadbalanced\",\"reasoning_effort\":\"high\",\"messages\":[{\"role\":\"user\",\"content\":\"Think carefully, then answer: what is 17*23?\"}],\"max_tokens\":64}")
   ok2xx "$code" && pass "think-hard prompt → $code" || warn "think-hard prompt → $code"
 fi
 
