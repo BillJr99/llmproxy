@@ -100,6 +100,7 @@ def create_or_update_pr(
     files: dict[str, str],
     title: str,
     body: str,
+    decisive_paths: list[str] | None = None,
 ) -> str | None:
     """Commit *files* onto *branch* and open a PR into *base*.
 
@@ -107,6 +108,12 @@ def create_or_update_pr(
     URL (or the branch's existing-PR note) on success, or raises on a hard API
     error. The branch ref is force-updated if it already exists, and an existing
     open PR for the branch is reused (so repeated runs just refresh it).
+
+    *decisive_paths*, when given, restricts the "did anything change?" check to
+    those paths. Other files (e.g. the derived ``config.example.json``) are still
+    committed for consistency but never, on their own, cause a PR to be opened or
+    refreshed — so a regenerated-but-equivalent derived file can't churn a PR on
+    every run. Defaults to all files.
     """
     # 1. Resolve the base branch head + its tree.
     ref = _gh("GET", f"{_API}/repos/{owner}/{repo}/git/ref/heads/{base}", token)
@@ -116,18 +123,21 @@ def create_or_update_pr(
     commit.raise_for_status()
     base_tree = commit.json()["tree"]["sha"]
 
-    # 1b. Skip entirely if every file already matches the base branch. The caller
-    # only knows the local sidecar changed within the running container — not
-    # whether it differs from `base` (a previous PR may already have merged the
-    # same content). Comparing git blob shas against the base tree avoids opening
-    # (or force-refreshing) a PR whose diff is empty.
+    # 1b. Skip entirely if the decisive files already match the base branch. The
+    # caller only knows the local sidecar changed within the running container —
+    # not whether it differs from `base` (a previous PR may already have merged
+    # the same content). Comparing git blob shas against the base tree avoids
+    # opening (or force-refreshing) a PR whose meaningful diff is empty. Only the
+    # decisive paths count here, so a derived file that merely regenerated to an
+    # equivalent (or version-skewed) form never triggers a PR by itself.
+    decisive = [p for p in (decisive_paths or list(files)) if p in files]
     base_blobs = _base_tree_blobs(owner, repo, base_tree, token)
     if base_blobs is not None and all(
-        base_blobs.get(path) == _git_blob_sha(content)
-        for path, content in files.items()
+        base_blobs.get(path) == _git_blob_sha(files[path])
+        for path in decisive
     ):
         logger.info(
-            "[providers-pr] no changes vs %s — skipping PR (files already current).", base
+            "[providers-pr] no changes vs %s — skipping PR (decisive files already current).", base
         )
         return None
 

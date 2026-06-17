@@ -75,6 +75,50 @@ def test_no_pr_when_files_match_base():
 
 
 @responses.activate
+def test_derived_file_change_alone_does_not_open_pr():
+    """When only a non-decisive (derived) file differs, no PR is opened.
+
+    providers.json matches base but config.example.json differs — with
+    decisive_paths restricted to providers.json, that must be treated as "no
+    change" so a regenerated/version-skewed example can't churn a PR each run.
+    """
+    providers = '{"providers": {}}\n'
+    base = f"{API}/repos/{OWNER}/{REPO}"
+    responses.add(responses.GET, f"{base}/git/ref/heads/main",
+                  json={"object": {"sha": "basesha"}}, status=200)
+    responses.add(responses.GET, f"{base}/git/commits/basesha",
+                  json={"tree": {"sha": "basetree"}}, status=200)
+    responses.add(responses.GET, f"{base}/git/trees/basetree",
+                  json={"tree": [{"path": "llmproxy/providers.json", "type": "blob",
+                                  "sha": _git_blob_sha(providers)}],
+                        "truncated": False}, status=200)
+
+    url = create_or_update_pr(
+        token="t", owner=OWNER, repo=REPO, base="main", branch="auto/providers",
+        files={"llmproxy/providers.json": providers,
+               "config.example.json": '{"example": "changed"}\n'},
+        title="x", body="y",
+        decisive_paths=["llmproxy/providers.json"],
+    )
+    assert url is None
+    assert all(c.request.method == "GET" for c in responses.calls)
+
+
+@responses.activate
+def test_decisive_file_change_still_opens_pr():
+    """A real providers.json change opens the PR even with decisive_paths set."""
+    _register_happy_path()
+    url = create_or_update_pr(
+        token="t", owner=OWNER, repo=REPO, base="main", branch="auto/providers",
+        files={"llmproxy/providers.json": '{"providers": {"x": 1}}\n',
+               "config.example.json": '{"example": true}\n'},
+        title="x", body="y",
+        decisive_paths=["llmproxy/providers.json"],
+    )
+    assert url == f"https://github.com/{OWNER}/{REPO}/pull/99"
+
+
+@responses.activate
 def test_existing_branch_is_force_updated_and_pr_reused():
     base = f"{API}/repos/{OWNER}/{REPO}"
     responses.add(responses.GET, f"{base}/git/ref/heads/main",
