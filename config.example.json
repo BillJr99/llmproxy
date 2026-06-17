@@ -432,6 +432,7 @@
     "opencode-zen/minimax-m2.5-free",
     "opencode-zen/nemotron-3-super-free"
   ],
+  "cost_observed_free_tier": [],
   "model_reasoning": {
     "nvidia/meta/llama-3.1-70b-instruct": "standard",
     "google/gemini-2.5-pro": "deep",
