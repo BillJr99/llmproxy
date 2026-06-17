@@ -1054,7 +1054,8 @@
         "openrouter/poolside/laguna-m.1:free",
         "openrouter/poolside/laguna-xs.2:free",
         "openrouter/qwen/qwen3-coder:free",
-        "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"
+        "openrouter/qwen/qwen3-next-80b-a3b-instruct:free",
+        "openrouter/xiaomi/mimo-v2.5-pro"
       ],
       "model_reasoning": {
         "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "standard",
@@ -1089,6 +1090,7 @@
         "openrouter/qwen/qwen-2.5-7b-instruct:free": "exploratory",
         "openrouter/qwen/qwen3-coder:free": "deep",
         "openrouter/qwen/qwen3-next-80b-a3b-instruct:free": "standard",
+        "openrouter/xiaomi/mimo-v2.5-pro": "exploratory",
         "openrouter/z-ai/glm-4.5-air:free": "standard"
       },
       "free_limits": {
@@ -1218,6 +1220,11 @@
         ],
         "openrouter/qwen/qwen3-next-80b-a3b-instruct:free": [
           "tools",
+          "json"
+        ],
+        "openrouter/xiaomi/mimo-v2.5-pro": [
+          "tools",
+          "reasoning",
           "json"
         ]
       }
@@ -3538,6 +3545,18 @@
     "openrouter/xiaomi/mimo-v2.5-pro": {
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 3e-06
+    },
+    "openrouter/z-ai/glm-4.5": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 2.2e-06
+    },
+    "openrouter/z-ai/glm-4.5-air": {
+      "input_cost_per_token": 1.3e-07,
+      "output_cost_per_token": 8.5e-07
+    },
+    "openrouter/z-ai/glm-4.5v": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 1.8e-06
     },
     "openrouter/z-ai/glm-4.6": {
       "input_cost_per_token": 4e-07,

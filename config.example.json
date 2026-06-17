@@ -421,6 +421,7 @@
     "openrouter/poolside/laguna-xs.2:free",
     "openrouter/qwen/qwen3-coder:free",
     "openrouter/qwen/qwen3-next-80b-a3b-instruct:free",
+    "openrouter/xiaomi/mimo-v2.5-pro",
     "moonshot/kimi-latest",
     "minimax/MiniMax-M1",
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct",
@@ -649,6 +650,7 @@
     "openrouter/qwen/qwen-2.5-7b-instruct:free": "exploratory",
     "openrouter/qwen/qwen3-coder:free": "deep",
     "openrouter/qwen/qwen3-next-80b-a3b-instruct:free": "standard",
+    "openrouter/xiaomi/mimo-v2.5-pro": "exploratory",
     "openrouter/z-ai/glm-4.5-air:free": "standard",
     "moonshot/kimi-latest": "standard",
     "minimax/MiniMax-M1": "standard",
@@ -994,6 +996,11 @@
     ],
     "openrouter/qwen/qwen3-next-80b-a3b-instruct:free": [
       "tools",
+      "json"
+    ],
+    "openrouter/xiaomi/mimo-v2.5-pro": [
+      "tools",
+      "reasoning",
       "json"
     ],
     "moonshot/kimi-latest": [
