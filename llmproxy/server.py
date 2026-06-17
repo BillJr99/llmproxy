@@ -13,28 +13,30 @@ Implements the following OpenAI API endpoints:
 
 Model naming convention
 -----------------------
-GET /v1/models advertises every model in the display form:
-    <provider_name>/<model_id>
+GET /v1/models advertises every model in the canonical display form:
+    <provider_name>__<upstream_model_id>
 
-where any "/" that appears *inside* the upstream model id is rewritten to
-"__".  For example, an "ollama" provider serving "qwen2.5vl:3b" is shown as
-"ollama/qwen2.5vl:3b", and an "openrouter" provider serving
-"deepseek/deepseek-chat-v3" is shown as "openrouter/deepseek__deepseek-chat-v3".
-Spaces in either side are replaced with "_".
+For example, an "ollama" provider serving "qwen2.5vl:3b" is shown as
+"ollama__qwen2.5vl:3b".  Spaces in either side are replaced with "_".  The
+"__" (double underscore) is the unambiguous provider separator; a single "/"
+may still appear *inside* the upstream model portion (e.g.
+"openrouter__deepseek/deepseek-chat-v3").  This keeps the advertised id free of
+a leading "provider/…" segment, which matters for clients that group their
+model picker by the text before the first "/" (e.g. opencode) — a leading slash
+would collapse every model under one provider group.
 
 Upstream ids that contain multiple slashes are flattened so the display id
-carries at most one "/": all but the last slash become "_", and the last
-becomes "__".  For example an "openrouter" provider serving
-"meta-llama/llama-3/instruct" is shown as
-"openrouter/meta-llama_llama-3__instruct".  Routing always uses the original
+carries at most one "/": all but the last slash become "_".  For example an
+"openrouter" provider serving "meta-llama/llama-3/instruct" is shown as
+"openrouter__meta-llama_llama-3/instruct".  Routing always uses the original
 (un-flattened) upstream id when forwarding upstream.
 
-Internally all routing state uses the canonical form
-`<provider_name>__<upstream_model_id>` (single "__", no leading "/").  The
-display form is applied only at the HTTP boundary (GET /v1/models responses).
+Virtual models additionally carry a human-readable, slash-free ``name`` (e.g.
+"[llmproxy] Deep — Free") so picker UIs that display the ``name`` field show a
+distinct label rather than a bare repeated dimension word.
 
 The following input forms are also accepted on every proxied endpoint:
-    <provider_name>__<upstream_model_id>    (canonical / older client form)
+    <provider_name>/<upstream_model_id>     (slash form; interior "/" as "__")
     <upstream_model_id>__<provider_name>    (PR #27 legacy display form)
     <upstream_model_id> (<provider_name>)   (pre-PR #27 legacy display form)
 
@@ -1476,10 +1478,13 @@ def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: st
         logger.warning("[providers-pr] failed to open PR: %s", exc)
 
 
-def _infer_local_reasoning_level(model_id: str) -> str:
+def _infer_reasoning_level(model_id: str) -> str:
     """
-    Infer exploratory / standard / deep for a locally-served model.
-    Applied during startup sync for Ollama / OpenWebUI models.
+    Infer exploratory / standard / deep from a model id/name alone.
+
+    Used both during startup sync for locally-served models and as a fallback
+    "sophistication" signal for untagged models when ordering loadbalanced
+    candidates (see _quality_key).
     """
     import re as _re
     s = model_id.lower()
@@ -1497,6 +1502,11 @@ def _infer_local_reasoning_level(model_id: str) -> str:
     if any(p in s for p in ["large", "medium", "mixtral", "70", "72", "32"]):
         return "standard"
     return "exploratory"
+
+
+def _infer_local_reasoning_level(model_id: str) -> str:
+    """Back-compat alias used by the startup sync for Ollama / OpenWebUI models."""
+    return _infer_reasoning_level(model_id)
 
 
 @app.route("/v1/models", methods=["GET"])
@@ -1751,29 +1761,16 @@ def list_models() -> Response:
 
     full_list = synthetic + all_models
 
-    # Advertise the client-friendly "provider/model" form. All internal state (route
-    # cache keys, virtual frozensets, annotation above) stays in canonical
-    # "provider__model"; only the emitted id/name are rewritten here, at the boundary.
+    # Give virtual models a human-readable, slash-free `name` so client pickers
+    # that derive a display label from it (e.g. opencode) show a distinct,
+    # readable label instead of a bare repeated dimension word like "free". The
+    # advertised `id` stays the canonical "provider__model" form: clients that
+    # group the listing by the segment before the first "/" (again, opencode)
+    # must not see a leading "provider/…" or every model collapses under one
+    # group. All internal state is already canonical; this only touches `name`.
     for model in full_list:
-        cid = model["id"]
-        disp = _display_id(cid)
-        if disp == cid:
-            continue
-        model["id"] = disp
-        if _is_virtual_model(cid):
-            # Give virtual models a human-readable name with no "/" so client pickers
-            # that strip to the last "/" (e.g. opencode) show the full label verbatim.
-            model["name"] = _virtual_display_name(cid)
-        else:
-            name = model.get("name", cid)
-            if name == cid:
-                # No upstream-provided name — use the display id.
-                model["name"] = disp
-            elif name.startswith(cid):
-                # Name carries a " (believed_free[, local])" suffix — rebase onto display id.
-                model["name"] = disp + name[len(cid):]
-            # else: upstream provided a different friendly name (e.g. "Aion Labs Aion 1.0");
-            # leave it unchanged.
+        if _is_virtual_model(model["id"]):
+            model["name"] = _virtual_display_name(model["id"])
 
     if models_ttl > 0:
         with _models_list_cache_lock:
@@ -1804,13 +1801,12 @@ def get_model(model_id: str) -> Response:
     model_id = _canonicalize_model_id(model_id, load_config())
     if _is_virtual_model(model_id):
         candidates = _get_virtual_candidates(model_id)
-        disp = _display_id(model_id)
         return jsonify({
-            "id": disp,
+            "id": model_id,
             "object": "model",
             "owned_by": "llmproxy",
             "name": _virtual_display_name(model_id),
-            "_note": f"Virtual model: '{disp}' cycles through matching candidates until one succeeds.",
+            "_note": f"Virtual model: '{model_id}' cycles through matching candidates until one succeeds.",
             "_candidates": [f"{pn}/{um}" for pn, _, um in candidates],
         })
 
@@ -1856,16 +1852,13 @@ def get_model(model_id: str) -> Response:
             params = _supported_parameters(provider_name, upstream_model, config)
             if params:
                 m["supported_parameters"] = params
-            disp = _display_id(m["id"])
-            m["id"] = disp
-            m["name"] = disp
             return jsonify(m)
 
     # The model passed the filter check but was not returned by the upstream
     # /models listing (e.g. a free-tier model that only appears after a
     # request).  Return a minimal valid object rather than a 404.
     fallback = {
-        "id": _display_id(model_id),
+        "id": model_id,
         "object": "model",
         "owned_by": provider_name,
         "_upstream_id": upstream_model,
@@ -2810,6 +2803,74 @@ def _provider_exposes_to_virtual_models(provider_cfg: dict) -> bool:
     return provider_cfg.get("expose_to_virtual_models", True) is not False
 
 
+def _param_count(model_id: str) -> float:
+    """Best-effort parameter count (in billions) parsed from a model id.
+
+    Returns 0.0 when the id carries no "<n>b" hint, so untagged small models
+    sort below any model with a known size. Used as the secondary key in
+    _quality_key.
+    """
+    import re as _re
+    m = _re.search(r'(\d+(?:\.\d+)?)\s*b\b', model_id.lower())
+    return float(m.group(1)) if m else 0.0
+
+
+def _quality_key(provider_name: str, upstream_id: str,
+                 reasoning_map: dict[str, str]) -> tuple[int, float]:
+    """Sophistication sort key for a candidate — higher is more capable.
+
+    ``(reasoning_rank, param_count)`` where ``reasoning_rank`` is the configured
+    ``model_reasoning`` tier (deep=2 > standard=1 > exploratory=0), falling back
+    to a tier inferred from the model name when untagged, and ``param_count`` is
+    the inferred size in billions. Sorting candidates by this key descending puts
+    the most sophisticated model first.
+    """
+    lvl = (reasoning_map.get(upstream_id.lower())
+           or reasoning_map.get(f"{provider_name}/{upstream_id}".lower())
+           or _infer_reasoning_level(upstream_id))
+    rank = _REASONING_LEVELS.index(lvl) if lvl in _REASONING_LEVELS else 0
+    return (rank, _param_count(upstream_id))
+
+
+def _quality_ordered_candidates(
+    candidates: list[tuple[str, dict, str]],
+    free_limits: dict[str, dict],
+    reasoning_map: dict[str, str],
+) -> list[tuple[str, dict, str]]:
+    """Order free candidates best-first: most sophisticated model with headroom.
+
+    Among candidates that still have free-tier capacity (``_capacity_score`` > 0)
+    the most capable model (see _quality_key) is tried first, with remaining
+    capacity as a tiebreak among equally-capable models. Saturated candidates
+    (score == 0) are appended last — still reachable as a failover so a maxed-out
+    model never causes an avoidable 503 — also ordered best-first.
+
+    Deterministic (no random sampling): loadbalanced wants the strongest free
+    model each time, and failover handles a rate-limited top pick by moving to
+    the next-best on its own.
+    """
+    if not candidates:
+        return candidates
+
+    scored: list[tuple[tuple[str, dict, str], float]] = []
+    for pn, pc, um in candidates:
+        key = f"{pn}/{um}".lower()
+        limits = free_limits.get(key, {})
+        used_min, used_day = _get_usage_snapshot(key)
+        used_tok_min, used_tok_day = _get_token_snapshot(key)
+        score = _capacity_score(used_min, used_day, limits, used_tok_min, used_tok_day)
+        scored.append(((pn, pc, um), score))
+
+    def _key(item: tuple[tuple[str, dict, str], float]):
+        (pn, _pc, um), score = item
+        rank, params = _quality_key(pn, um, reasoning_map)
+        return (rank, params, score)
+
+    viable = sorted((it for it in scored if it[1] > 0.0), key=_key, reverse=True)
+    exhausted = sorted((it for it in scored if it[1] == 0.0), key=_key, reverse=True)
+    return [c for c, _ in viable] + [c for c, _ in exhausted]
+
+
 # — "free" candidate selector —
 
 def _normalized_believed_free(config: dict) -> set[str]:
@@ -3201,10 +3262,13 @@ def _loadbalanced_ordered_candidates(
     Cost tier is the dominant (outer) key — a paid model is NEVER ordered before
     a free or local one, so cost-avoidance always wins and paid stays a true last
     resort (failover, which is silent and robust, handles feasibility). Within
-    each tier candidates are optimized for *this* prompt exactly like the cloud
-    tier: reasoning/size fit then capability match (applied as stable sorts so
-    capability dominates, fit breaks its ties), over a tier base order — free →
-    most session quota first, local → rotated for spread, paid → cheapest first.
+    the $0 tiers candidates are ordered **best-first**: among free models that
+    still have headroom the most sophisticated (see _quality_key) is tried first,
+    with capacity as a tiebreak; local is likewise strongest-first. This keeps
+    spend at ~$0 while elevating answer quality, rather than picking a weak free
+    model just because the prompt is short. Paid stays cheapest-first. A final
+    capability sort still pulls models that satisfy a *forced* tool/vision/JSON
+    requirement to the front of each tier.
     """
     tiers: dict[int, list[tuple[str, dict, str]]] = {
         _TIER_FREE: [], _TIER_LOCAL: [], _TIER_PAID: [],
@@ -3217,7 +3281,6 @@ def _loadbalanced_ordered_candidates(
     needed = _needed_capabilities(payload)
     cap_map = _model_capabilities(config)
     reasoning_map = _get_model_reasoning(config)
-    target_tier = _target_reasoning_tier(payload)
 
     def _price(c: tuple[str, dict, str]) -> float:
         pn, _pc, um = c
@@ -3232,12 +3295,21 @@ def _loadbalanced_ordered_candidates(
         if not bucket:
             continue
         if tier == _TIER_FREE:
-            bucket = _capacity_ordered_candidates(bucket, free_limits)
+            bucket = _quality_ordered_candidates(bucket, free_limits, reasoning_map)
         elif tier == _TIER_LOCAL:
-            bucket = _cycling_candidates(bucket)
+            # $0 like free — prefer the strongest local model (e.g. the larger
+            # Ollama model) rather than rotating randomly.
+            bucket = sorted(
+                bucket,
+                key=lambda c: _quality_key(c[0], c[2], reasoning_map),
+                reverse=True,
+            )
         else:
-            bucket = sorted(bucket, key=_price)
-        bucket = _order_by_reasoning_fit(bucket, target_tier, reasoning_map)
+            # Paid: cost first, then sophistication as a tiebreak among equals.
+            bucket = sorted(
+                bucket,
+                key=lambda c: (_price(c), tuple(-x for x in _quality_key(c[0], c[2], reasoning_map))),
+            )
         if needed:
             bucket = _order_by_capability(bucket, needed, cap_map)
         ordered.extend(bucket)

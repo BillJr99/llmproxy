@@ -4,15 +4,15 @@ test_tui.py — Interactive chat TUI for llmproxy.
 
 Connects to an llmproxy server and provides a conversational interface with
 streaming responses.  Supports model switching including all virtual endpoints
-(llmproxy/free, llmproxy/local, llmproxy/exploratory, llmproxy/standard,
-llmproxy/deep, and their free/local combinations).  The earlier "llmproxy__..."
+(llmproxy__free, llmproxy__local, llmproxy__exploratory, llmproxy__standard,
+llmproxy__deep, and their free/local combinations).  The "llmproxy/..." slash
 forms are also accepted as input.
 
 Usage
 -----
   python test_tui.py
   python test_tui.py --base-url http://localhost:8080/v1
-  python test_tui.py --model llmproxy/standard --system "You are a concise assistant."
+  python test_tui.py --model llmproxy__standard --system "You are a concise assistant."
 
 Commands (type inside the chat)
 --------------------------------
@@ -60,18 +60,18 @@ RED     = "\033[31m"
 _W = 72   # display width
 
 _VIRTUAL_IDS = frozenset({
-    # Advertised form (current /v1/models output): "llmproxy/<name>" with "__" between dims
-    "llmproxy/free", "llmproxy/local",
-    "llmproxy/exploratory", "llmproxy/standard", "llmproxy/deep",
-    "llmproxy/exploratory__free", "llmproxy/exploratory__local",
-    "llmproxy/standard__free", "llmproxy/standard__local",
-    "llmproxy/deep__free", "llmproxy/deep__local",
-    # Canonical form ("llmproxy__<name>"): still accepted as input
+    # Canonical advertised form (current /v1/models output): "llmproxy__<name>"
     "llmproxy__free", "llmproxy__local",
     "llmproxy__exploratory", "llmproxy__standard", "llmproxy__deep",
     "llmproxy__exploratory/free", "llmproxy__exploratory/local",
     "llmproxy__standard/free", "llmproxy__standard/local",
     "llmproxy__deep/free", "llmproxy__deep/local",
+    # Slash form ("llmproxy/<name>", interior "/" as "__"): accepted as input
+    "llmproxy/free", "llmproxy/local",
+    "llmproxy/exploratory", "llmproxy/standard", "llmproxy/deep",
+    "llmproxy/exploratory__free", "llmproxy/exploratory__local",
+    "llmproxy/standard__free", "llmproxy/standard__local",
+    "llmproxy/deep__free", "llmproxy/deep__local",
     # Legacy three-part slash form: still accepted as input
     "llmproxy/exploratory/free", "llmproxy/exploratory/local",
     "llmproxy/standard/free", "llmproxy/standard/local",
@@ -115,12 +115,12 @@ def _auto_pick(models: list[dict]) -> Optional[str]:
     """Pick a sensible default model from the list."""
     ids = {m["id"] for m in models}
     for pref in (
-        # Advertised form (current /v1/models output).
-        "llmproxy/standard", "llmproxy/free", "llmproxy/local",
-        "llmproxy/exploratory", "llmproxy/deep",
-        # Earlier "__" form, in case the server hasn't been upgraded yet.
+        # Canonical advertised form (current /v1/models output).
         "llmproxy__standard", "llmproxy__free", "llmproxy__local",
         "llmproxy__exploratory", "llmproxy__deep",
+        # Slash form, in case a client/server emits it.
+        "llmproxy/standard", "llmproxy/free", "llmproxy/local",
+        "llmproxy/exploratory", "llmproxy/deep",
     ):
         if pref in ids:
             return pref
