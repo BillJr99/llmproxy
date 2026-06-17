@@ -1234,6 +1234,11 @@ python scripts/update_free_models.py --regen-config-only --config ~/.config/llmp
 # Equivalent to setting "probe_cost": true in config.json.
 python scripts/update_free_models.py --probe --config ~/.config/llmproxy/config.json --dry-run
 python scripts/update_free_models.py --probe --probe-max 20 --probe-provider groq
+
+# Probes run with bounded per-provider concurrency (default 3) and show a
+# progress bar if `tqdm` is installed. Tune the per-provider cap to stay under a
+# provider's rate limit:
+python scripts/update_free_models.py --probe --probe-concurrency 2
 ```
 
 ### Verifying free tiers and auto-removal (`free_tier.probe.enabled` / `free_tier.probe.autoremove`)

@@ -9,6 +9,7 @@ Usage
   python scripts/update_free_models.py --source openrouter,docs
   python scripts/update_free_models.py --regen-config-only
   python scripts/update_free_models.py --config ~/.config/llmproxy/config.json
+  python scripts/update_free_models.py --probe --probe-concurrency 2
 
 Behavior
 --------
@@ -760,11 +761,13 @@ def _run_source(
     config_path: str | None = None,
     probe_max: int | None = None,
     probe_provider: str | None = None,
+    probe_concurrency: int | None = None,
 ) -> tuple[str, bool, list[Evidence], str | None]:
     try:
         if source_name == "probe":
             src = ProbeSource(config_path=config_path, max_models=probe_max,
-                              provider_filter=probe_provider)
+                              provider_filter=probe_provider,
+                              concurrency=probe_concurrency)
         else:
             cls = ALL_SOURCES[source_name]
             src = cls()
@@ -821,6 +824,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="Probe at most N models (bounds spend).")
     ap.add_argument("--probe-provider", metavar="NAME",
                     help="Only probe models from this provider.")
+    ap.add_argument("--probe-concurrency", type=int, metavar="N",
+                    help="Max concurrent probe requests per provider (default 3). "
+                         "Different providers always run in parallel; this bounds "
+                         "in-flight requests to any single provider to avoid "
+                         "tripping its rate limit.")
     ap.add_argument("--ignore-throttle", action="store_true",
                     help="Probe even if probe_frequency_days says it is too soon "
                          "since the last probe (bypasses the throttle).")
@@ -896,7 +904,8 @@ def main(argv: list[str] | None = None) -> int:
     with ThreadPoolExecutor(max_workers=min(5, len(requested))) as ex:
         futures = {
             ex.submit(_run_source, s, config_path=args.config,
-                      probe_max=args.probe_max, probe_provider=args.probe_provider): s
+                      probe_max=args.probe_max, probe_provider=args.probe_provider,
+                      probe_concurrency=args.probe_concurrency): s
             for s in requested
         }
         for fut in as_completed(futures):
