@@ -12,9 +12,11 @@ from llmproxy import github_pr, server
 def captured_pr(monkeypatch):
     captured: dict = {}
 
-    def fake_create(*, token, owner, repo, base, branch, files, title, body):
+    def fake_create(*, token, owner, repo, base, branch, files, title, body,
+                    decisive_paths=None):
         captured.update(token=token, owner=owner, repo=repo, base=base,
-                        branch=branch, files=files, title=title, body=body)
+                        branch=branch, files=files, title=title, body=body,
+                        decisive_paths=decisive_paths)
         return "https://github.com/o/r/pull/1"
 
     monkeypatch.setattr(github_pr, "create_or_update_pr", fake_create)
@@ -37,6 +39,13 @@ def test_omits_example_when_not_provided(captured_pr):
     server._maybe_open_providers_pr(cfg, '{"providers":{}}\n', None)
     assert "config.example.json" not in captured_pr["files"]
     assert "llmproxy/providers.json" in captured_pr["files"]
+
+
+def test_only_providers_json_is_decisive(captured_pr):
+    """The derived config.example.json must not, on its own, trigger a PR."""
+    cfg = {"providers_pr": {"enabled": True, "repo": "o/r"}}
+    server._maybe_open_providers_pr(cfg, '{"providers":{}}\n', '{"example":true}\n')
+    assert captured_pr["decisive_paths"] == ["llmproxy/providers.json"]
 
 
 def test_skipped_when_flag_off(captured_pr):

@@ -1403,6 +1403,11 @@ def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: st
                 "deployment (`providers_pr.enabled`). Free-tier status is best-effort — "
                 "review the diff before merging."
             ),
+            # config.example.json is derived from providers.json; only a real
+            # providers.json change should open/refresh a PR. This stops a
+            # regenerated-but-equivalent (or version-skewed) example from churning
+            # a fresh PR on every startup.
+            decisive_paths=["llmproxy/providers.json"],
         )
         if url:
             logger.info("[providers-pr] %s", url)
