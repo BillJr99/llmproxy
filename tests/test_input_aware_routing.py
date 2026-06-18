@@ -1,7 +1,8 @@
-"""Tests for input-aware first-pick on the general virtuals (llmproxy__free /
-llmproxy__local): the request's estimated size and type bias which reasoning
-tier is tried first, layered on top of capacity/random ordering and below the
-hard capability ordering.
+"""Tests for request-fit triage on all */free and */local virtuals: the
+request's estimated size and type bias which reasoning tier AND model size is
+tried first, layered on top of capacity/random ordering and below the hard
+capability ordering. Includes tier-containment: a */free virtual only ever
+serves free-list models and a */local virtual only ever serves local models.
 """
 
 from __future__ import annotations
@@ -79,21 +80,41 @@ def test_target_reasoning_tier_by_size_and_type(server):
                                           "reasoning_effort": "high"}) == "deep"
 
 
-def test_order_by_reasoning_fit_exact_first_and_stable(server):
+def test_order_by_request_fit_exact_tier_first_and_stable(server):
     cands = [("pf", {}, "big"), ("pf", {}, "fast"), ("pf", {}, "mid"), ("pf", {}, "untagged")]
     rmap = {"pf/fast": "exploratory", "pf/mid": "standard", "pf/big": "deep"}
-    out = [c[2] for c in server._order_by_reasoning_fit(cands, "exploratory", rmap)]
+    small = {"messages": [{"role": "user", "content": "hi"}]}  # exploratory target
+    out = [c[2] for c in server._order_by_request_fit(cands, small, rmap)]
     assert out[0] == "fast"          # exact tier first
     assert out[-1] == "big"          # far tier (deep) last
     assert "untagged" in out[1:3]    # untagged sorts neutral (middle)
 
 
-def test_is_general_virtual(server):
-    assert server._is_general_virtual("llmproxy__free")
-    assert server._is_general_virtual("llmproxy__local")
-    assert server._is_general_virtual("llmproxy/free")
-    assert not server._is_general_virtual("llmproxy__deep/free")
-    assert not server._is_general_virtual("llmproxy__tools")
+def test_order_by_request_fit_sizes_within_a_single_tier(server):
+    # All candidates share the same (deep) tier, so the size axis decides which
+    # right-sized deep model is tried first — this is the deep/free sub-virtual case.
+    cands = [("pf", {}, "deep-8b"), ("pf", {}, "deep-70b"), ("pf", {}, "deep-1b")]
+    rmap = {"pf/deep-8b": "deep", "pf/deep-70b": "deep", "pf/deep-1b": "deep"}
+    light = {"messages": [{"role": "user", "content": "hi"}]}  # prefer smallest
+    out_light = [c[2] for c in server._order_by_request_fit(cands, light, rmap)]
+    assert out_light[0] == "deep-1b"
+    assert out_light[-1] == "deep-70b"
+    thinking = {"messages": [{"role": "user", "content": "hi"}], "reasoning_effort": "high"}
+    out_deep = [c[2] for c in server._order_by_request_fit(cands, thinking, rmap)]
+    assert out_deep[0] == "deep-70b"  # heavy work -> biggest available
+    assert out_deep[-1] == "deep-1b"
+
+
+def test_free_and_local_virtual_predicates(server):
+    assert server._is_free_virtual_model("llmproxy__free")
+    assert server._is_free_virtual_model("llmproxy__deep/free")
+    assert server._is_free_virtual_model("llmproxy/tools/free")
+    assert not server._is_free_virtual_model("llmproxy__local")
+    assert server._is_local_virtual_model("llmproxy__local")
+    assert server._is_local_virtual_model("llmproxy/local")
+    assert server._is_local_virtual_model("llmproxy__deep/local")
+    assert not server._is_local_virtual_model("llmproxy__free")
+    assert not server._is_local_virtual_model("llmproxy__deep/free")
 
 
 # ── integration: the first model actually tried matches the tier ────────────
@@ -132,3 +153,117 @@ def test_free_first_pick_follows_tier(server, monkeypatch, payload_extra, expect
     resp = client.post("/v1/chat/completions", json=body)
     assert resp.status_code == 200
     assert tried[0] == expected_first  # first upstream tried matches the input tier
+
+
+# ── sub-virtual: right-sized model from a single-tier pool ──────────────────
+
+@pytest.fixture
+def deep_free_config(tmp_path: Path) -> Path:
+    cfg = {
+        "providers": {
+            "pf": {"base_url": "http://pf.example/v1", "api_key": "k", "model_filter": None},
+        },
+        "believed_free": ["pf/deep-1b", "pf/deep-8b", "pf/deep-70b"],
+        "model_reasoning": {
+            "pf/deep-1b": "deep", "pf/deep-8b": "deep", "pf/deep-70b": "deep",
+        },
+        "free_limits": {},
+        "fusion": {"enabled": False},
+        "sync_believed_free_on_startup": False,
+        "server": {"host": "127.0.0.1", "port": 8080, "log_level": "ERROR",
+                   "request_timeout": 5, "stream_timeout": 5},
+    }
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps(cfg))
+    return p
+
+
+@pytest.mark.parametrize("payload_extra,expected_first", [
+    ({}, "deep-1b"),                           # light prompt -> smallest deep model
+    ({"reasoning_effort": "high"}, "deep-70b"),  # heavy work -> biggest deep model
+])
+def test_deep_free_subvirtual_picks_right_size(monkeypatch, deep_free_config, payload_extra, expected_first):
+    server = _load_server(monkeypatch, deep_free_config)
+    _seed(server, {"pf__deep-1b": ("pf", "deep-1b"),
+                   "pf__deep-8b": ("pf", "deep-8b"),
+                   "pf__deep-70b": ("pf", "deep-70b")})
+    tried: list[str] = []
+
+    def fake_request(endpoint, pn, cfg, payload, timeout):
+        tried.append(payload["model"])
+        return _chat_ok(payload["model"])
+
+    monkeypatch.setattr(server, "_proxy_request", fake_request)
+    client = server.app.test_client()
+    body = {"model": "llmproxy__deep/free", "messages": [{"role": "user", "content": "hi"}]}
+    body.update(payload_extra)
+    resp = client.post("/v1/chat/completions", json=body)
+    assert resp.status_code == 200
+    assert tried[0] == expected_first
+
+
+# ── tier containment: */free stays free, */local stays local ────────────────
+
+@pytest.fixture
+def mixed_tier_config(tmp_path: Path) -> Path:
+    cfg = {
+        "providers": {
+            "cloud": {"base_url": "http://cloud.example/v1", "api_key": "k", "model_filter": None},
+            "ollama": {"base_url": "http://localhost:11434/v1", "api_key": "k", "model_filter": None},
+        },
+        # cloud/free-model is free; cloud/paid-model is paid; ollama/* is local.
+        "believed_free": ["cloud/free-model"],
+        "model_reasoning": {},
+        "free_limits": {},
+        "fusion": {"enabled": False},
+        "sync_believed_free_on_startup": False,
+        "server": {"host": "127.0.0.1", "port": 8080, "log_level": "ERROR",
+                   "request_timeout": 5, "stream_timeout": 5},
+    }
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps(cfg))
+    return p
+
+
+def test_free_virtual_never_leaves_free_tier(monkeypatch, mixed_tier_config):
+    server = _load_server(monkeypatch, mixed_tier_config)
+    _seed(server, {
+        "cloud__free-model": ("cloud", "free-model"),
+        "cloud__paid-model": ("cloud", "paid-model"),
+        "ollama__local-model": ("ollama", "local-model"),
+    })
+    tried: list[str] = []
+
+    def fake_request(endpoint, pn, cfg, payload, timeout):
+        tried.append((pn, payload["model"]))
+        return _chat_ok(payload["model"])
+
+    monkeypatch.setattr(server, "_proxy_request", fake_request)
+    client = server.app.test_client()
+    resp = client.post("/v1/chat/completions", json={
+        "model": "llmproxy__free", "messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 200
+    # Only the free-list model is ever contacted — no local, no paid leakage.
+    assert tried == [("cloud", "free-model")]
+
+
+def test_local_virtual_never_leaves_local_tier(monkeypatch, mixed_tier_config):
+    server = _load_server(monkeypatch, mixed_tier_config)
+    _seed(server, {
+        "cloud__free-model": ("cloud", "free-model"),
+        "cloud__paid-model": ("cloud", "paid-model"),
+        "ollama__local-model": ("ollama", "local-model"),
+    })
+    tried: list[str] = []
+
+    def fake_request(endpoint, pn, cfg, payload, timeout):
+        tried.append((pn, payload["model"]))
+        return _chat_ok(payload["model"])
+
+    monkeypatch.setattr(server, "_proxy_request", fake_request)
+    client = server.app.test_client()
+    resp = client.post("/v1/chat/completions", json={
+        "model": "llmproxy__local", "messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 200
+    # Only the localhost-backed model is ever contacted.
+    assert tried == [("ollama", "local-model")]

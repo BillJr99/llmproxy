@@ -182,8 +182,8 @@ When a request targets a (non-fusion) virtual model, llmproxy:
    (capacity-aware weighted sampling — see [`free_limits`](#free_limits)); every
    other pool starts from a **random position** to spread load. Two stable
    reorderings may then run on top without ever dropping a candidate: the
-   [input-aware first pick](#input-aware-first-pick-general-virtuals-only) for the
-   general virtuals, and [capability ordering](#capability-aware-routing--failover)
+   [request-fit triage](#request-fit-triage-every-free-and-local-virtual) for the
+   `*/free` and `*/local` virtuals, and [capability ordering](#capability-aware-routing--failover)
    when the request forces a capability.
 3. **Tries each candidate in order**, returning the first **usable** response.
 
@@ -275,20 +275,41 @@ successfully.
 > offerings. If you want a local model to also appear under `llmproxy/free`,
 > add it to `believed_free` by hand.
 
-### Input-aware first pick (general virtuals only)
+### Request-fit triage (every `*/free` and `*/local` virtual)
 
-For the two general virtuals — `llmproxy/free` and `llmproxy/local` — the proxy
-chooses *which candidate to try first* from the request itself, before the usual
-capacity/random cycling. It estimates the prompt size and detects an explicit
-"thinking" intent (`reasoning_effort` of `medium`/`high`, or a truthy `reasoning`
-field), then prefers a model whose `model_reasoning` tier fits: a short prompt
-prefers a fast (`exploratory`) model, a long prompt or a thinking request prefers a
-`deep` model, and mid-size prompts prefer `standard`. This is a *stable reordering*
-layered below the capability ordering (forced tools/JSON still win) and it never
-drops a candidate, so failover behavior is unchanged. It needs no configuration —
-thresholds live in `server.py` (`_TIER_SMALL_MAX_TOKENS`, `_TIER_MEDIUM_MAX_TOKENS`).
-The categorized families (`llmproxy/deep__free`, `llmproxy/tools`, …) already encode
-intent and are untouched.
+Every free and local virtual — the general `llmproxy/free` / `llmproxy/local`, the
+reasoning families (`llmproxy/deep__free`, `llmproxy/exploratory__local`, …), the
+capability ones (`llmproxy/tools__free`, `llmproxy/vision__free`), and the
+per-provider `<provider>/free` — triages each request to the most appropriately
+**sized** model in its pool, before the usual capacity/random cycling. This is the
+same "best model for the job" idea as [`loadbalanced`](#the-loadbalanced-virtual-model),
+but applied **strictly within a single tier** (see the containment note below).
+
+The proxy estimates the prompt size and detects an explicit "thinking" intent
+(`reasoning_effort` of `medium`/`high`, or a truthy `reasoning` field), then orders
+candidates by two axes:
+
+- **Reasoning-tier fit** — a short prompt prefers a fast (`exploratory`) model, a
+  long prompt or a thinking request prefers a `deep` model, and mid-size prompts
+  prefer `standard` (per each model's `model_reasoning` tier).
+- **Size fit within a tier** — among models of the same tier, a light request
+  prefers the **smaller** model and a deep/thinking request prefers the **larger**
+  one (inferred from the model's parameter-count hint, e.g. `70b`). This is what
+  lets even a constrained sub-virtual like `llmproxy/deep__free` pick the
+  right-sized deep model from whatever is available — a small deep model for a
+  quick prompt, the biggest one for heavy reasoning.
+
+This is a *stable reordering* layered below the capability ordering (forced
+tools/JSON still win) that never drops a candidate, so failover behavior is
+unchanged. It needs no configuration — thresholds live in `server.py`
+(`_TIER_SMALL_MAX_TOKENS`, `_TIER_MEDIUM_MAX_TOKENS`).
+
+> **Tier containment.** A `*/free` virtual *only ever* serves models from the
+> free list, and a `*/local` virtual *only ever* serves localhost-backed models.
+> The triage just **reorders** the already tier-scoped candidate pool — it never
+> adds, substitutes, or fails over to a model in another tier. `loadbalanced` is
+> the **only** virtual that crosses tiers (its free → local → paid waterfall);
+> the `*/free` and `*/local` families never do.
 
 ### The `loadbalanced` virtual model
 
@@ -358,7 +379,11 @@ with a given level, llmproxy exposes corresponding virtual endpoints:
 
 Each endpoint cycles through its pool using the
 [shared failover rules](#how-cycling--failover-works); the `/free` variants are
-additionally capacity-aware. The `llmproxy/...` slash form (e.g. `llmproxy/deep`, `llmproxy/deep__free`) and the
+additionally capacity-aware. The `__free` and `__local` variants are also
+[request-fit triaged](#request-fit-triage-every-free-and-local-virtual): within
+a single-tier pool (all `deep`, all `exploratory`, …) the proxy still prefers the
+right-*sized* model for the request — a smaller one for a light prompt, the
+largest for heavy reasoning. The `llmproxy/...` slash form (e.g. `llmproxy/deep`, `llmproxy/deep__free`) and the
 three-part slash form (e.g. `llmproxy/deep/free`) are also accepted on input.
 
 ```bash
