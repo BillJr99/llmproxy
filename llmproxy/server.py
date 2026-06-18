@@ -202,16 +202,19 @@ _FREE_VIRTUAL_MODELS: frozenset[str] = frozenset({
     *(f"llmproxy__{cap}/free" for cap in _CAPABILITY_VIRTUALS),
     *(f"llmproxy/{cap}/free" for cap in _CAPABILITY_VIRTUALS),
 })
-# The two GENERAL (uncategorized) virtuals. Unlike the categorized families,
-# these don't pin a tier/capability, so their first-pick is chosen input-aware:
-# the request's estimated size and type bias which reasoning tier is tried first.
-_GENERAL_VIRTUAL_MODELS: frozenset[str] = frozenset({
-    "llmproxy__free", "llmproxy/free", "llmproxy__local", "llmproxy/local",
+# Virtual models served strictly from the localhost-backed pool. Mirror of
+# _FREE_VIRTUAL_MODELS: the global local aggregator plus the reasoning-level
+# /local sub-virtuals. (There are no capability /local virtuals.) Per-provider
+# <provider>/local forms are recognized separately via _split_per_provider_virtual.
+_LOCAL_VIRTUAL_MODELS: frozenset[str] = frozenset({
+    "llmproxy__local", "llmproxy/local",
+    *(f"llmproxy__{lvl}/local" for lvl in _REASONING_LEVELS),
+    *(f"llmproxy/{lvl}/local" for lvl in _REASONING_LEVELS),
 })
 # The cost-tiered "just pick something sensible and cheap" virtual. It owns its
 # own ordering (free → local → paid waterfall, optimized per-prompt within each
-# tier), so it is deliberately NOT in _FREE_VIRTUAL_MODELS (whole-pool capacity
-# ordering) nor _GENERAL_VIRTUAL_MODELS (free/local input-aware first-pick).
+# tier) and is the ONLY virtual that crosses tiers, so it is deliberately NOT in
+# _FREE_VIRTUAL_MODELS / _LOCAL_VIRTUAL_MODELS (single-tier, request-fit-triaged).
 _LOADBALANCED_MODELS: frozenset[str] = frozenset({
     "llmproxy__loadbalanced", "llmproxy/loadbalanced",
 })
@@ -2359,38 +2362,59 @@ def _target_reasoning_tier(payload: dict) -> str:
     return "deep"
 
 
-def _order_by_reasoning_fit(
+def _order_by_request_fit(
     candidates: list[tuple[str, dict, str]],
-    target_tier: str,
+    payload: dict,
     reasoning_map: dict[str, str],
 ) -> list[tuple[str, dict, str]]:
-    """Stable-sort *candidates* so models nearest *target_tier* come first.
+    """Stable-sort *candidates* so the best fit for *payload* comes first.
 
-    Distance is measured along exploratory(0) < standard(1) < deep(2): an exact
-    tier match sorts first, an adjacent tier next, and a far tier last. Untagged
-    models sort in the middle (neutral) so incomplete metadata never buries a
-    usable model. Stable, so the base ordering (capacity headroom for /free,
-    random rotation for /local) is preserved within each distance band, and it
-    never drops a candidate.
+    Triages within a single tier (free or local): the candidate pool is already
+    constrained to its tier by the selector, and this only **reorders** it — it
+    never adds, drops, or substitutes a candidate, so failover behavior and tier
+    containment are preserved. Sorts by a two-part key:
+
+    1. **tier distance** — distance from the candidate's ``model_reasoning`` tier
+       to the request's target tier along exploratory(0) < standard(1) < deep(2):
+       an exact match sorts first, adjacent next, far last; untagged models sort
+       neutral (1.5) so incomplete metadata never buries a usable model.
+    2. **size fit** — within an equal-tier band, prefer the right-*sized* model
+       for the job: a deep/thinking request prefers the **largest** model, a small
+       (exploratory) request prefers the **smallest**, and a standard request is
+       neutral (base order preserved). This is what lets even a constrained
+       sub-virtual like ``deep/free`` pick the right-sized model from what's
+       available.
+
+    Stable, so the base ordering (capacity headroom for /free, random rotation
+    for /local) is preserved within each fit band. A no-op on an empty pool.
     """
     if not candidates:
         return candidates
+    target_tier = _target_reasoning_tier(payload)
     order = {lvl: i for i, lvl in enumerate(_REASONING_LEVELS)}
     target_idx = order.get(target_tier, 1)
+    # Within an equal-tier band, bias toward the size the request warrants:
+    # +1 prefer larger params, -1 prefer smaller, 0 neutral (keep base order).
+    if target_idx >= order.get("deep", 2) or _wants_thinking(payload):
+        size_pref = 1
+    elif target_idx <= order.get("exploratory", 0):
+        size_pref = -1
+    else:
+        size_pref = 0
 
-    def rank(c: tuple[str, dict, str]) -> float:
+    def rank(c: tuple[str, dict, str]) -> tuple[float, float]:
         pn, _cfg, uid = c
         lvl = reasoning_map.get(uid.lower()) or reasoning_map.get(f"{pn}/{uid}".lower())
         if lvl is None or lvl not in order:
-            return 1.5  # untagged: neutral — after exact/adjacent, before far
-        return float(abs(order[lvl] - target_idx))
+            tier_d = 1.5  # untagged: neutral — after exact/adjacent, before far
+        else:
+            tier_d = float(abs(order[lvl] - target_idx))
+        # -size_pref so prefer-large (+1) sorts bigger params first and
+        # prefer-small (-1) sorts smaller params first; neutral (0) is a no-op.
+        size_d = -size_pref * _param_count(uid)
+        return (tier_d, size_d)
 
     return sorted(candidates, key=rank)
-
-
-def _is_general_virtual(model_full: str) -> bool:
-    """True for the uncategorized llmproxy__free / llmproxy__local virtuals."""
-    return model_full in _GENERAL_VIRTUAL_MODELS
 
 
 def _capability_failed(payload: dict, body_bytes: bytes) -> bool:
@@ -3407,6 +3431,17 @@ def _is_free_virtual_model(model_full: str) -> bool:
     return split is not None and split[1] == "free"
 
 
+def _is_local_virtual_model(model_full: str) -> bool:
+    """True for localhost-pool virtuals: the global local aggregator and the
+    reasoning-level /local sub-virtuals.
+
+    There is no per-provider <provider>/local form — "local" is not a per-provider
+    dimension, and per-provider virtuals exclude localhost-backed providers — so
+    membership in _LOCAL_VIRTUAL_MODELS is the complete test.
+    """
+    return model_full in _LOCAL_VIRTUAL_MODELS
+
+
 def _get_provider_virtual_candidates(provider_name: str, dimension: str) -> list[tuple[str, dict, str]]:
     """Candidates for llmproxy__<provider>[/<dimension>], scoped to one provider.
 
@@ -4075,12 +4110,19 @@ def _proxy_endpoint(
                 + _virtual_model_hint(model_full),
                 status=503,
             )
+        # Whether this is a single-tier free/local virtual whose pool we triage
+        # by request fit. Distinct from loadbalanced (which crosses tiers); these
+        # only ever serve their own tier — the fit pass reorders, never adds or
+        # crosses tiers, so a */free virtual stays in the free list and a */local
+        # virtual stays in the local list.
+        is_free_virtual = _is_free_virtual_model(model_full)
+        is_local_virtual = _is_local_virtual_model(model_full)
         if _is_loadbalanced_model(model_full):
             # Cost waterfall (free → local → paid), optimized per-prompt within
             # each tier. Owns its full ordering, so the capability/reasoning
             # passes below are stable no-ops over it.
             ordered = _loadbalanced_ordered_candidates(candidates, payload, config)
-        elif _is_free_virtual_model(model_full):
+        elif is_free_virtual:
             free_limits = _get_normalized_free_limits(config)
             ordered = _capacity_ordered_candidates(candidates, free_limits)
         else:
@@ -4097,15 +4139,16 @@ def _proxy_endpoint(
         # request needs (tools/vision/reasoning/json).  Stable, never drops
         # candidates, and a no-op when nothing is needed or no metadata exists.
         needed = _needed_capabilities(payload)
-        # Input-aware first-pick for the GENERAL virtuals (llmproxy__free /
-        # llmproxy__local only): bias the order by how well each model's reasoning
-        # tier fits the request's size and type, before the capability ordering
-        # below (which still wins for hard capability needs). The categorized
-        # families already encode tier/capability intent, so they are untouched.
-        if _is_general_virtual(model_full):
-            tier = _target_reasoning_tier(payload)
-            ordered = _order_by_reasoning_fit(ordered, tier, _get_model_reasoning(config))
-            logger.info("  [%s] input-aware first-pick tier=%s", model_full, tier)
+        # Request-fit triage for ALL */free and */local virtuals — strictly
+        # within the tier. Bias the order by how well each candidate's reasoning
+        # tier AND size fit the request (light/regular/deep), layered on top of
+        # the capacity/random base order and below the hard capability ordering
+        # (which still wins for forced tools/vision/JSON). Within a constrained
+        # sub-virtual like deep/free the tier term is constant, so the size term
+        # picks the right-sized model from what's available. Never crosses tiers.
+        if is_free_virtual or is_local_virtual:
+            ordered = _order_by_request_fit(ordered, payload, _get_model_reasoning(config))
+            logger.info("  [%s] request-fit first-pick tier=%s", model_full, _target_reasoning_tier(payload))
         if needed:
             ordered = _order_by_capability(ordered, needed, _model_capabilities(config))
         logger.info("  [%s] cycling through %d candidate(s)", model_full, len(ordered))
