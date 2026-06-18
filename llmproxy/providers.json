@@ -1142,8 +1142,13 @@
           "vision",
           "json"
         ],
+        "openrouter/liquid/lfm-2.5-1.2b-instruct:free": [
+          "json"
+        ],
         "openrouter/liquid/lfm-2.5-1.2b-thinking:free": [
-          "reasoning"
+          "tools",
+          "reasoning",
+          "json"
         ],
         "openrouter/meta-llama/llama-3.3-70b-instruct:free": [
           "tools"
@@ -1207,11 +1212,13 @@
         ],
         "openrouter/poolside/laguna-m.1:free": [
           "tools",
-          "reasoning"
+          "reasoning",
+          "json"
         ],
         "openrouter/poolside/laguna-xs.2:free": [
           "tools",
-          "reasoning"
+          "reasoning",
+          "json"
         ],
         "openrouter/qwen/qwen3-coder:free": [
           "tools"
@@ -3455,6 +3462,10 @@
       "input_cost_per_token": 5e-07,
       "output_cost_per_token": 3e-06
     },
+    "openrouter/google/gemini-3-pro-image": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1.2e-05
+    },
     "openrouter/google/gemini-3-pro-image-preview": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1.2e-05
@@ -3462,6 +3473,10 @@
     "openrouter/google/gemini-3-pro-preview": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1.2e-05
+    },
+    "openrouter/google/gemini-3.1-flash-image": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 3e-06
     },
     "openrouter/google/gemini-3.1-flash-image-preview": {
       "input_cost_per_token": 5e-07,
