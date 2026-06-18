@@ -1023,6 +1023,7 @@
       "key_hint": "Get your API key at openrouter.ai/keys",
       "believed_free": [
         "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+        "openrouter/cohere/north-mini-code:free",
         "openrouter/google/gemma-4-26b-a4b-it:free",
         "openrouter/google/gemma-4-31b-it:free",
         "openrouter/google/lyria-3-clip-preview",
@@ -1051,6 +1052,7 @@
       ],
       "model_reasoning": {
         "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "standard",
+        "openrouter/cohere/north-mini-code:free": "exploratory",
         "openrouter/deepseek/deepseek-v3.1:free": "deep",
         "openrouter/google/gemma-2-9b-it:free": "exploratory",
         "openrouter/google/gemma-4-26b-a4b-it:free": "standard",
@@ -1115,6 +1117,10 @@
       "model_capabilities": {
         "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": [
           "json"
+        ],
+        "openrouter/cohere/north-mini-code:free": [
+          "tools",
+          "reasoning"
         ],
         "openrouter/google/gemma-4-26b-a4b-it:free": [
           "tools",
