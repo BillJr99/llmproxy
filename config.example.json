@@ -924,8 +924,13 @@
       "vision",
       "json"
     ],
+    "openrouter/liquid/lfm-2.5-1.2b-instruct:free": [
+      "json"
+    ],
     "openrouter/liquid/lfm-2.5-1.2b-thinking:free": [
-      "reasoning"
+      "tools",
+      "reasoning",
+      "json"
     ],
     "openrouter/meta-llama/llama-3.3-70b-instruct:free": [
       "tools"
@@ -989,11 +994,13 @@
     ],
     "openrouter/poolside/laguna-m.1:free": [
       "tools",
-      "reasoning"
+      "reasoning",
+      "json"
     ],
     "openrouter/poolside/laguna-xs.2:free": [
       "tools",
-      "reasoning"
+      "reasoning",
+      "json"
     ],
     "openrouter/qwen/qwen3-coder:free": [
       "tools"
