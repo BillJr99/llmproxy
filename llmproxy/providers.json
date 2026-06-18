@@ -1212,13 +1212,11 @@
         ],
         "openrouter/poolside/laguna-m.1:free": [
           "tools",
-          "reasoning",
-          "json"
+          "reasoning"
         ],
         "openrouter/poolside/laguna-xs.2:free": [
           "tools",
-          "reasoning",
-          "json"
+          "reasoning"
         ],
         "openrouter/qwen/qwen3-coder:free": [
           "tools"
@@ -4074,6 +4072,14 @@
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 8e-06
     },
+    "openrouter/poolside/laguna-m.1": {
+      "input_cost_per_token": 2e-07,
+      "output_cost_per_token": 4e-07
+    },
+    "openrouter/poolside/laguna-xs.2": {
+      "input_cost_per_token": 1e-07,
+      "output_cost_per_token": 2e-07
+    },
     "openrouter/prime-intellect/intellect-3": {
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 1.1e-06
@@ -4247,7 +4253,7 @@
       "output_cost_per_token": 3.17e-06
     },
     "openrouter/qwen/qwen3.6-35b-a3b": {
-      "input_cost_per_token": 1.5e-07,
+      "input_cost_per_token": 1.4e-07,
       "output_cost_per_token": 1e-06
     },
     "openrouter/qwen/qwen3.6-flash": {
