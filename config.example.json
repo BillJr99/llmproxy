@@ -994,13 +994,11 @@
     ],
     "openrouter/poolside/laguna-m.1:free": [
       "tools",
-      "reasoning",
-      "json"
+      "reasoning"
     ],
     "openrouter/poolside/laguna-xs.2:free": [
       "tools",
-      "reasoning",
-      "json"
+      "reasoning"
     ],
     "openrouter/qwen/qwen3-coder:free": [
       "tools"
