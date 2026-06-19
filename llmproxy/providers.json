@@ -3761,8 +3761,8 @@
       "output_cost_per_token": 2.025e-06
     },
     "openrouter/moonshotai/kimi-k2.6": {
-      "input_cost_per_token": 6.8e-07,
-      "output_cost_per_token": 3.41e-06
+      "input_cost_per_token": 6.7e-07,
+      "output_cost_per_token": 3.5e-06
     },
     "openrouter/moonshotai/kimi-k2.7-code": {
       "input_cost_per_token": 7.4e-07,
@@ -4433,8 +4433,8 @@
       "output_cost_per_token": 3.08e-06
     },
     "openrouter/z-ai/glm-5.2": {
-      "input_cost_per_token": 1.4e-06,
-      "output_cost_per_token": 4.4e-06
+      "input_cost_per_token": 1.2e-06,
+      "output_cost_per_token": 3.2e-06
     },
     "openrouter/~anthropic/claude-fable-latest": {
       "input_cost_per_token": 1e-05,
@@ -4461,8 +4461,8 @@
       "output_cost_per_token": 1.2e-05
     },
     "openrouter/~moonshotai/kimi-latest": {
-      "input_cost_per_token": 6.8e-07,
-      "output_cost_per_token": 3.41e-06
+      "input_cost_per_token": 6.7e-07,
+      "output_cost_per_token": 3.5e-06
     },
     "openrouter/~openai/gpt-latest": {
       "input_cost_per_token": 5e-06,
