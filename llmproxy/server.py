@@ -2963,7 +2963,7 @@ def _apply_favorite_free_ordering(
     front: list[tuple[str, dict, str]] = []
     for fav in favorites:
         fav_lower = fav.lower()
-        for i, (pname, pcfg, umodel) in enumerate(remaining):
+        for i, (pname, _pcfg, umodel) in enumerate(remaining):
             umodel_lower = umodel.lower()
             umodel_base = umodel_lower.split(":")[0]  # strip :variant suffix
             qualified = f"{pname}/{umodel}".lower()
