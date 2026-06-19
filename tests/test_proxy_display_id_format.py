@@ -24,6 +24,12 @@ def server(monkeypatch, minimal_config):
     importlib.reload(config_mod)
     from llmproxy import server as server_mod
     importlib.reload(server_mod)
+    # Suppress background daemon threads that can race with cache-sensitive tests:
+    # the startup warmup (step 5 of _run_startup_tasks_once) and the per-request
+    # interval probe check both write to _models_list_cache, and a stale thread
+    # from a prior test can overwrite the cache after the test sets it to None.
+    monkeypatch.setattr(server_mod, "_run_startup_tasks_once", lambda *a, **k: None)
+    monkeypatch.setattr(server_mod, "_maybe_fire_interval_probes", lambda *a, **k: None)
     return server_mod
 
 

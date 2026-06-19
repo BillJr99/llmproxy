@@ -2110,7 +2110,11 @@ def _build_models_list(providers: dict, config: dict, timeout: int, models_ttl: 
 
     if models_ttl > 0:
         with _models_list_cache_lock:
-            _models_list_cache = (full_list, time.monotonic())
+            # When called as a startup warmup (only_if_empty=True), skip the write
+            # if something already populated the cache — a concurrent request or a
+            # cross-test daemon thread from a previous test beat us here.
+            if not only_if_empty or _models_list_cache is None:
+                _models_list_cache = (full_list, time.monotonic())
 
     return full_list
 
