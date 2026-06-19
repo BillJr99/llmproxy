@@ -219,6 +219,7 @@
     }
   },
   "believed_free": [
+    "nous/stepfun/step-3.7-flash:free",
     "nvidia/meta/llama-3.1-70b-instruct",
     "google/gemini-2.0-flash",
     "google/gemini-2.0-flash-lite",
@@ -434,6 +435,7 @@
   ],
   "cost_observed_free_tier": [],
   "model_reasoning": {
+    "nous/stepfun/step-3.7-flash:free": "exploratory",
     "nvidia/meta/llama-3.1-70b-instruct": "standard",
     "google/gemini-2.0-flash": "exploratory",
     "google/gemini-2.0-flash-lite": "exploratory",
