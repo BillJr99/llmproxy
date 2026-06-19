@@ -471,6 +471,22 @@ _startup_update_done: bool = False
 _startup_update_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
+# Periodic interval probe checks (endpoint probe, cost probe, PR creation)
+# ---------------------------------------------------------------------------
+# State files are re-read at most once per _PROBE_INTERVAL_GATE_SEC so
+# concurrent requests don't all hit disk simultaneously. The actual probe
+# frequency is controlled by the per-probe frequency_minutes / frequency_days
+# settings in config.json.
+_PROBE_INTERVAL_GATE_SEC = 60   # check state files at most once per minute
+_last_probe_interval_check: float = 0.0
+_probe_interval_check_lock = threading.Lock()
+
+_endpoint_probe_inflight: bool = False
+_endpoint_probe_lock = threading.Lock()
+_cost_probe_inflight: bool = False
+_cost_probe_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
 # Short-lived response cache (non-streaming only)
 # ---------------------------------------------------------------------------
 # Keyed on SHA-256(endpoint + sorted JSON payload).  Only 2xx responses are
@@ -520,6 +536,9 @@ def _log_request() -> None:
     # deployments where the eager per-worker trigger in __main__ did not fire; it
     # is a no-op after the first invocation.
     _run_startup_tasks_once()
+    # Check probe / PR frequency intervals on every request (debounced by
+    # _PROBE_INTERVAL_GATE_SEC so state files are read at most once per minute).
+    _maybe_fire_interval_probes()
     logger.info("→ %s %s", request.method, request.path)
 
 
@@ -1281,8 +1300,8 @@ def _run_free_models_update(config: dict, config_path: str | None) -> bool:
     regenerates config.example.json, and syncs the user config; its changes are
     picked up by the normal mtime-based config reload.
 
-    When config['probe_cost'] is true the updater also actively probes
-    believed_free models for cost (see scripts/sources/probe.py).
+    When free_tier.cost_probe.enabled is true the updater also actively probes
+    believed_free models for cost (see scripts/sources/cost_probe.py).
     """
     # The scraper lives in the repo-root `scripts/` package, which sits next to
     # the installed `llmproxy/` package but may not be on sys.path (e.g. under
@@ -1367,6 +1386,160 @@ def _run_free_models_update(config: dict, config_path: str | None) -> bool:
     return True
 
 
+def _maybe_fire_interval_probes(config_path: str | None = None) -> None:
+    """Check frequency intervals for endpoint probe, cost probe, and PR creation.
+
+    Fires each as a background daemon thread if its interval has elapsed.
+    Gated by _PROBE_INTERVAL_GATE_SEC so state files are not read on every
+    single request — the actual probe frequency is set in config.json.
+
+    Endpoint probe: gated by sync_on_startup OR update_on_startup.
+    Cost probe: gated by update_on_startup AND cost_probe.enabled.
+    PR creation: checked independently of startup flags.
+    """
+    global _last_probe_interval_check
+    now = time.monotonic()
+    with _probe_interval_check_lock:
+        if now - _last_probe_interval_check < _PROBE_INTERVAL_GATE_SEC:
+            return
+        _last_probe_interval_check = now
+
+    try:
+        config = load_config()
+    except Exception:  # noqa: BLE001
+        return
+    free_tier = config.get("free_tier", {}) if isinstance(config.get("free_tier"), dict) else {}
+
+    # Endpoint probe — gated by sync_on_startup OR update_on_startup.
+    if free_tier.get("sync_on_startup") or free_tier.get("update_on_startup"):
+        _maybe_fire_endpoint_probe(config, free_tier, config_path)
+
+    # Cost probe — gated by update_on_startup + cost_probe.enabled.
+    if free_tier.get("update_on_startup") and free_tier.get("cost_probe", {}).get("enabled"):
+        _maybe_fire_cost_probe(config, free_tier, config_path)
+
+    # PR creation interval — independent of startup flags.
+    _maybe_fire_pr_if_due(config, config_path)
+
+
+def _maybe_fire_endpoint_probe(
+    config: dict, free_tier: dict, config_path: str | None
+) -> None:
+    ep_cfg = free_tier.get("endpoint_probe", {})
+    freq_min = ep_cfg.get("frequency_minutes", 30)
+    freq_days = freq_min / 1440.0
+    try:
+        import sys, os as _os
+        repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from scripts.update_free_models import _probe_due
+        from llmproxy.config import load_endpoint_probe_state
+    except Exception:  # noqa: BLE001 — scripts/ may not be available
+        return
+    state = load_endpoint_probe_state(config_path)
+    due, _ = _probe_due(state.get("last_probe_at"), freq_days)
+    if not due:
+        return
+
+    global _endpoint_probe_inflight
+    with _endpoint_probe_lock:
+        if _endpoint_probe_inflight:
+            return
+        _endpoint_probe_inflight = True
+
+    def _run() -> None:
+        global _endpoint_probe_inflight
+        try:
+            logger.info("[endpoint-probe] interval due — running endpoint probe")
+            _run_free_models_update(load_config(), config_path)
+            with _models_list_cache_lock:
+                global _models_list_cache
+                _models_list_cache = None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[endpoint-probe] failed: %s", exc)
+        finally:
+            with _endpoint_probe_lock:
+                _endpoint_probe_inflight = False
+
+    threading.Thread(target=_run, daemon=True, name="endpoint-probe-interval").start()
+
+
+def _maybe_fire_cost_probe(
+    config: dict, free_tier: dict, config_path: str | None
+) -> None:
+    cost_probe_cfg = free_tier.get("cost_probe", {})
+    freq_days = cost_probe_cfg.get("frequency_days", 0)
+    try:
+        import sys, os as _os
+        repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from scripts.update_free_models import _probe_due
+        from llmproxy.config import load_cost_probe_state
+    except Exception:  # noqa: BLE001
+        return
+    state = load_cost_probe_state(config_path)
+    due, _ = _probe_due(state.get("last_probe_at"), freq_days)
+    if not due:
+        return
+
+    global _cost_probe_inflight
+    with _cost_probe_lock:
+        if _cost_probe_inflight:
+            return
+        _cost_probe_inflight = True
+
+    def _run() -> None:
+        global _cost_probe_inflight
+        try:
+            logger.info("[cost-probe] interval due — running cost probe")
+            _run_free_models_update(load_config(), config_path)
+            with _models_list_cache_lock:
+                global _models_list_cache
+                _models_list_cache = None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[cost-probe] failed: %s", exc)
+        finally:
+            with _cost_probe_lock:
+                _cost_probe_inflight = False
+
+    threading.Thread(target=_run, daemon=True, name="cost-probe-interval").start()
+
+
+def _maybe_fire_pr_if_due(config: dict, config_path: str | None) -> None:
+    """Open a providers PR if providers_pr.frequency_days has elapsed since last PR."""
+    pr_cfg = config.get("providers_pr", {})
+    if pr_cfg.get("enabled") is not True:
+        return
+    freq_days = pr_cfg.get("frequency_days", 0)
+    if not freq_days or freq_days <= 0:
+        return  # no throttle configured — PR is opened immediately after updates
+    try:
+        import sys, os as _os
+        repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from scripts.update_free_models import _probe_due
+        from llmproxy.config import load_pr_state
+        from llmproxy.providers import DATA_PATH as _DATA_PATH
+    except Exception:  # noqa: BLE001
+        return
+    pr_state = load_pr_state(config_path)
+    due, days_since = _probe_due(pr_state.get("last_pr_at"), freq_days)
+    if not due:
+        return
+    # Read current sidecar to pass to _maybe_open_providers_pr.
+    try:
+        providers_text = _DATA_PATH.read_text(encoding="utf-8") if _DATA_PATH.exists() else None
+    except Exception:  # noqa: BLE001
+        providers_text = None
+    if providers_text is None:
+        return
+    logger.info("[providers-pr] frequency_days interval elapsed — checking for PR")
+    _maybe_open_providers_pr(config, providers_text)
+
+
 def _run_startup_tasks_once(config_path: str | None = None) -> None:
     """Run the one-time per-worker startup tasks in a background daemon thread.
 
@@ -1444,6 +1617,10 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
         except Exception as exc:  # noqa: BLE001 — warming must never crash the worker
             logger.warning("[startup] /v1/models cache warm failed: %s", exc)
 
+        # 6. Check frequency intervals for endpoint probe, cost probe, and PR
+        #    creation. Fires background threads for any that are due.
+        _maybe_fire_interval_probes(config_path)
+
     threading.Thread(target=_run, daemon=True, name="startup-tasks").start()
 
 
@@ -1465,6 +1642,31 @@ def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: st
     """
     if config.get("providers_pr", {}).get("enabled") is not True:
         return
+
+    # Throttle PR creation to at most once every providers_pr.frequency_days.
+    pr_cfg = config.get("providers_pr", {})
+    freq_days = pr_cfg.get("frequency_days", 0)
+    if freq_days and freq_days > 0:
+        try:
+            import sys as _sys, os as _os2
+            repo_root = _os2.path.dirname(_os2.path.dirname(_os2.path.abspath(__file__)))
+            if repo_root not in _sys.path:
+                _sys.path.insert(0, repo_root)
+            from scripts.update_free_models import _probe_due
+            from .config import load_pr_state, save_pr_state as _save_pr_state
+        except Exception:  # noqa: BLE001
+            _probe_due = None  # type: ignore[assignment]
+        if _probe_due is not None:
+            pr_state = load_pr_state()
+            due, days_since = _probe_due(pr_state.get("last_pr_at"), freq_days)
+            if not due:
+                logger.info(
+                    "[providers-pr] throttled — %.1f day(s) since last PR "
+                    "(frequency_days=%s); skipping.",
+                    days_since, freq_days,
+                )
+                return
+
     import os
 
     from .github_pr import create_or_update_pr
@@ -1514,6 +1716,12 @@ def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: st
         )
         if url:
             logger.info("[providers-pr] %s", url)
+            try:
+                from datetime import UTC as _UTC, datetime as _datetime
+                from .config import save_pr_state as _save_pr_state2
+                _save_pr_state2({"last_pr_at": _datetime.now(_UTC).isoformat()})
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("[providers-pr] could not save pr_state: %s", _exc)
     except Exception as exc:  # noqa: BLE001 — PR creation is best-effort
         logger.warning("[providers-pr] failed to open PR: %s", exc)
 

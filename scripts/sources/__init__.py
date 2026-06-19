@@ -10,7 +10,8 @@ from .community import CommunitySource
 from .fireworks import FireworksSource
 from .litellm_cost_map import LiteLLMCostMapSource
 from .openrouter import OpenRouterSource
-from .probe import ProbeSource
+from .cost_probe import CostProbeSource
+from .endpoint_probe import EndpointProbeSource
 from .together import TogetherSource
 
 ALL_SOURCES: dict[str, type[Source]] = {
@@ -21,12 +22,17 @@ ALL_SOURCES: dict[str, type[Source]] = {
     "together": TogetherSource,
     "fireworks": FireworksSource,
     # Active cost probe. Excluded from the default source set because it sends
-    # real requests; opt in via config probe_cost: true or --probe.
-    "probe": ProbeSource,
+    # real requests; opt in via free_tier.cost_probe.enabled or --cost-probe.
+    "cost_probe": CostProbeSource,
+    # Endpoint discovery probe. Excluded from the default source set because it
+    # makes authenticated GET /models requests; opt in via sync_on_startup or
+    # update_on_startup, or pass --source endpoint_probe.
+    "endpoint_probe": EndpointProbeSource,
 }
 
-# Sources that must NOT run unless explicitly opted into (they spend real quota).
-OPT_IN_SOURCES: frozenset[str] = frozenset({"probe"})
+# Sources that must NOT run unless explicitly opted into (they spend real quota
+# or make authenticated requests beyond the normal scrape set).
+OPT_IN_SOURCES: frozenset[str] = frozenset({"cost_probe", "endpoint_probe"})
 
 # Docs scrapers are registered separately so we can list them under --source docs.
 from .docs import DOCS_SOURCES  # noqa: E402

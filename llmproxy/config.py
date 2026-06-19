@@ -135,7 +135,11 @@ DEFAULT_ADMIN_CONFIG = {
 DEFAULT_FREE_TIER_CONFIG = {
     "sync_on_startup": True,
     "update_on_startup": False,
-    "probe": {
+    "endpoint_probe": {
+        "frequency_minutes": 30,
+        "timeout_sec": 10,
+    },
+    "cost_probe": {
         "enabled": False,
         "autoremove": False,
         "frequency_days": 0,
@@ -193,9 +197,9 @@ DEFAULT_CONFIG: dict = {
 _LEGACY_KEY_MIGRATIONS: dict[str, tuple[str, ...]] = {
     "sync_believed_free_on_startup": ("free_tier", "sync_on_startup"),
     "update_believed_free_on_startup": ("free_tier", "update_on_startup"),
-    "probe_cost": ("free_tier", "probe", "enabled"),
-    "autoremove_believed_free": ("free_tier", "probe", "autoremove"),
-    "probe_frequency_days": ("free_tier", "probe", "frequency_days"),
+    "probe_cost": ("free_tier", "cost_probe", "enabled"),
+    "autoremove_believed_free": ("free_tier", "cost_probe", "autoremove"),
+    "probe_frequency_days": ("free_tier", "cost_probe", "frequency_days"),
     "pr_providers_list": ("providers_pr", "enabled"),
     "pr_providers_repo": ("providers_pr", "repo"),
     "pr_providers_base": ("providers_pr", "base"),
@@ -317,22 +321,14 @@ def save_config(config: dict, config_path: str | None = None) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Probe state (machine-managed cache, kept out of the user-edited config)
+# Probe state (machine-managed caches, kept out of the user-edited config)
 # ---------------------------------------------------------------------------
 #
-# The cost probe (scripts/sources/probe.py) can be throttled to at most once
-# every ``probe_frequency_days``. The last-run timestamp is stored in a small
-# sibling cache file rather than in config.json so we don't churn the
-# hand-edited config (or sweep the timestamp into the providers-PR / sync flow).
+# Each probe (cost_probe, endpoint_probe) and PR creation is throttled via its
+# own frequency setting. The last-run timestamps live in small sibling cache
+# files rather than in config.json so we don't churn the hand-edited config.
 
-def get_probe_state_path(config_path: str | None = None) -> Path:
-    """Return the path to the probe-state cache file, a sibling of config.json."""
-    return get_config_path(config_path).parent / "probe_state.json"
-
-
-def load_probe_state(config_path: str | None = None) -> dict:
-    """Load the probe-state cache, returning {} when absent or unreadable."""
-    path = get_probe_state_path(config_path)
+def _load_state_file(path: Path, label: str) -> dict:
     if not path.exists():
         return {}
     try:
@@ -340,13 +336,11 @@ def load_probe_state(config_path: str | None = None) -> dict:
             data = json.load(fh)
         return data if isinstance(data, dict) else {}
     except Exception as e:  # noqa: BLE001 — a corrupt cache must never break a run
-        print(f"[config:load_probe_state] Failed to load {path}: {e}")
+        print(f"[config:{label}] Failed to load {path}: {e}")
         return {}
 
 
-def save_probe_state(state: dict, config_path: str | None = None) -> bool:
-    """Persist the probe-state cache atomically (tempfile + rename)."""
-    path = get_probe_state_path(config_path)
+def _save_state_file(state: dict, path: Path, label: str) -> bool:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(
@@ -366,8 +360,78 @@ def save_probe_state(state: dict, config_path: str | None = None) -> bool:
             raise
         return True
     except Exception as e:  # noqa: BLE001
-        print(f"[config:save_probe_state] Failed to write {path}: {e}")
+        print(f"[config:{label}] Failed to write {path}: {e}")
         return False
+
+
+# --- Cost probe state (cost_probe_state.json) ---
+
+def get_cost_probe_state_path(config_path: str | None = None) -> Path:
+    return get_config_path(config_path).parent / "cost_probe_state.json"
+
+
+def load_cost_probe_state(config_path: str | None = None) -> dict:
+    """Load cost probe state, migrating from the old probe_state.json if needed."""
+    path = get_cost_probe_state_path(config_path)
+    if not path.exists():
+        old = path.parent / "probe_state.json"
+        if old.exists():
+            data = _load_state_file(old, "load_cost_probe_state")
+            if data:
+                _save_state_file(data, path, "load_cost_probe_state")
+                return data
+    return _load_state_file(path, "load_cost_probe_state")
+
+
+def save_cost_probe_state(state: dict, config_path: str | None = None) -> bool:
+    return _save_state_file(
+        state, get_cost_probe_state_path(config_path), "save_cost_probe_state"
+    )
+
+
+# Back-compat aliases so any external callers of the old names still work.
+def get_probe_state_path(config_path: str | None = None) -> Path:
+    return get_cost_probe_state_path(config_path)
+
+
+def load_probe_state(config_path: str | None = None) -> dict:
+    return load_cost_probe_state(config_path)
+
+
+def save_probe_state(state: dict, config_path: str | None = None) -> bool:
+    return save_cost_probe_state(state, config_path)
+
+
+# --- Endpoint probe state (endpoint_probe_state.json) ---
+
+def get_endpoint_probe_state_path(config_path: str | None = None) -> Path:
+    return get_config_path(config_path).parent / "endpoint_probe_state.json"
+
+
+def load_endpoint_probe_state(config_path: str | None = None) -> dict:
+    return _load_state_file(get_endpoint_probe_state_path(config_path), "load_endpoint_probe_state")
+
+
+def save_endpoint_probe_state(state: dict, config_path: str | None = None) -> bool:
+    return _save_state_file(
+        state, get_endpoint_probe_state_path(config_path), "save_endpoint_probe_state"
+    )
+
+
+# --- PR state (pr_state.json) ---
+
+def get_pr_state_path(config_path: str | None = None) -> Path:
+    return get_config_path(config_path).parent / "pr_state.json"
+
+
+def load_pr_state(config_path: str | None = None) -> dict:
+    return _load_state_file(get_pr_state_path(config_path), "load_pr_state")
+
+
+def save_pr_state(state: dict, config_path: str | None = None) -> bool:
+    return _save_state_file(
+        state, get_pr_state_path(config_path), "save_pr_state"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -658,10 +722,16 @@ def _normalize_config(raw: dict) -> dict:
     """
     if not isinstance(raw, dict):
         return raw
-    if not any(k in raw for k in _LEGACY_KEY_MIGRATIONS):
-        return raw
 
     normalized = copy.deepcopy(raw)
+
+    # Migrate free_tier.probe → free_tier.cost_probe (renamed in this release).
+    ft = normalized.get("free_tier")
+    if isinstance(ft, dict) and "probe" in ft and "cost_probe" not in ft:
+        ft["cost_probe"] = ft.pop("probe")
+
+    if not any(k in normalized for k in _LEGACY_KEY_MIGRATIONS):
+        return normalized
     for legacy_key, path in _LEGACY_KEY_MIGRATIONS.items():
         if legacy_key not in normalized:
             continue
