@@ -1,12 +1,16 @@
 """Tests for the probe-frequency throttle (scripts/update_free_models._probe_due)
-and the probe-state cache helpers (llmproxy.config)."""
+and the cost-probe-state cache helpers (llmproxy.config)."""
 
 from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
 
-from llmproxy.config import get_probe_state_path, load_probe_state, save_probe_state
+from llmproxy.config import (
+    get_cost_probe_state_path,
+    load_cost_probe_state,
+    save_cost_probe_state,
+)
 from scripts.update_free_models import _probe_due
 
 
@@ -66,21 +70,21 @@ def test_non_numeric_frequency_defaults_to_always_due():
     assert due is True
 
 
-# --- probe-state cache helpers ---------------------------------------------
+# --- cost-probe-state cache helpers -----------------------------------------
 
 def test_probe_state_roundtrip(tmp_path):
     cfg = str(tmp_path / "config.json")
-    assert load_probe_state(cfg) == {}
+    assert load_cost_probe_state(cfg) == {}
     ts = datetime.now(UTC).isoformat()
-    assert save_probe_state({"last_probe_at": ts}, cfg) is True
-    assert get_probe_state_path(cfg) == tmp_path / "probe_state.json"
-    assert load_probe_state(cfg) == {"last_probe_at": ts}
+    assert save_cost_probe_state({"last_probe_at": ts}, cfg) is True
+    assert get_cost_probe_state_path(cfg) == tmp_path / "cost_probe_state.json"
+    assert load_cost_probe_state(cfg) == {"last_probe_at": ts}
 
 
 def test_probe_state_corrupt_returns_empty(tmp_path):
     cfg = str(tmp_path / "config.json")
-    get_probe_state_path(cfg).write_text("{not json", encoding="utf-8")
-    assert load_probe_state(cfg) == {}
+    get_cost_probe_state_path(cfg).write_text("{not json", encoding="utf-8")
+    assert load_cost_probe_state(cfg) == {}
 
 
 class _ReadOnlyPath:
@@ -97,7 +101,7 @@ class _ReadOnlyPath:
 
 def test_probe_timestamp_recorded_when_sidecar_write_fails(tmp_path, monkeypatch):
     """A read-only providers.json must not prevent the probe-throttle timestamp
-    (which lives next to the user config, e.g. /config/probe_state.json) from
+    (which lives next to the user config, e.g. /config/cost_probe_state.json) from
     advancing — regression for the container bind-mount case."""
     import scripts.update_free_models as ufm
 
@@ -108,10 +112,10 @@ def test_probe_timestamp_recorded_when_sidecar_write_fails(tmp_path, monkeypatch
     monkeypatch.setattr(ufm, "apply_updates", lambda *a, **k: True)
     monkeypatch.setattr(ufm, "DATA_PATH", _ReadOnlyPath())
 
-    rc = ufm.main(["--source", "probe", "--config", str(cfg)])
+    rc = ufm.main(["--source", "cost_probe", "--config", str(cfg)])
 
     assert rc == 0  # the run completed despite the read-only sidecar
-    state = load_probe_state(str(cfg))
+    state = load_cost_probe_state(str(cfg))
     assert "last_probe_at" in state  # throttle timestamp persisted to the bind mount
 
 
@@ -126,7 +130,7 @@ def test_sidecar_mirrored_to_config_dir_when_readonly(tmp_path, monkeypatch):
     monkeypatch.setattr(ufm, "apply_updates", lambda *a, **k: True)
     monkeypatch.setattr(ufm, "DATA_PATH", _ReadOnlyPath())
 
-    ufm.main(["--source", "probe", "--config", str(cfg)])
+    ufm.main(["--source", "cost_probe", "--config", str(cfg)])
 
     mirrored_providers = tmp_path / "providers.json"
     mirrored_example = tmp_path / "config.example.json"

@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import time
+
 import requests
 
 from ..base import Evidence, Source
 
 TIMEOUT = (5, 10)
+_HEADERS = {
+    "User-Agent": "llmproxy-update-free-models/1.0 (+https://github.com/billjr99/llmproxy)",
+}
+_429_RETRY_DELAYS = (5.0, 15.0, 30.0)  # seconds between successive 429 retries
 
 
 class DocsScraperBase(Source):
@@ -21,11 +27,19 @@ class DocsScraperBase(Source):
     provider_key: str = ""  # e.g. "google", "groq"
 
     def fetch(self) -> list[Evidence]:
-        resp = requests.get(self.url, timeout=TIMEOUT, headers={
-            "User-Agent": "llmproxy-update-free-models/1.0 (+https://github.com/billjr99/llmproxy)",
-        })
-        resp.raise_for_status()
-        return list(self.parse(resp.text))
+        delays = iter(_429_RETRY_DELAYS)
+        while True:
+            resp = requests.get(self.url, timeout=TIMEOUT, headers=_HEADERS)
+            if resp.status_code == 429:
+                wait = next(delays, None)
+                if wait is None:
+                    return []  # retries exhausted — skip silently rather than raise
+                ra = resp.headers.get("Retry-After", "")
+                actual_wait = float(ra) if ra.isdigit() else wait
+                time.sleep(min(actual_wait, 60.0))
+                continue
+            resp.raise_for_status()
+            return list(self.parse(resp.text))
 
     def parse(self, html: str) -> list[Evidence]:  # noqa: D401 — overridden by subclasses
         raise NotImplementedError
