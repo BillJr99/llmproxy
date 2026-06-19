@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import datetime
 import importlib
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -172,3 +174,119 @@ def test_usage_reset_rejected_without_token_when_forwarded(usage_server):
     # Forwarding header present + no token configured → admin guard rejects.
     resp = client.post("/v1/usage/reset", headers={"X-Forwarded-For": "1.2.3.4"})
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# _react_to_cost_observed_async — background propagation to sidecar / PR
+# ---------------------------------------------------------------------------
+
+def test_react_to_cost_observed_skips_when_flags_off(usage_server, monkeypatch):
+    """Background propagation is a no-op when neither update_on_startup nor pr.enabled is set."""
+    calls = []
+    monkeypatch.setattr(usage_server, "_run_free_models_update", lambda *a, **kw: calls.append(1))
+    usage_server._cost_observed_reaction_inflight = False
+    usage_server._react_to_cost_observed_async()
+    # The default fixture config has neither flag set, so no thread should have been spawned.
+    # Give threads a brief window just in case, then assert nothing ran.
+    import time
+    time.sleep(0.05)
+    assert calls == []
+
+
+def test_react_to_cost_observed_calls_updater_when_update_on_startup(usage_server, monkeypatch):
+    """Background thread calls _run_free_models_update when free_tier.update_on_startup is True."""
+    base_cfg = dict(usage_server.load_config())
+    patched_cfg = {**base_cfg, "free_tier": {"update_on_startup": True}}
+    monkeypatch.setattr(usage_server, "load_config", lambda: patched_cfg)
+
+    done = threading.Event()
+    calls = []
+
+    def _fake_update(*a, **kw):
+        calls.append(1)
+        done.set()
+
+    monkeypatch.setattr(usage_server, "_run_free_models_update", _fake_update)
+    usage_server._cost_observed_reaction_inflight = False
+    usage_server._react_to_cost_observed_async()
+    done.wait(timeout=2.0)
+    assert calls == [1]
+
+
+def test_react_to_cost_observed_inflight_guard_deduplicates(usage_server, monkeypatch):
+    """Concurrent observations fire the updater exactly once; the inflight guard drops the second."""
+    import time
+
+    base_cfg = dict(usage_server.load_config())
+    patched_cfg = {**base_cfg, "free_tier": {"update_on_startup": True}}
+    monkeypatch.setattr(usage_server, "load_config", lambda: patched_cfg)
+
+    done = threading.Event()
+    calls = []
+
+    def _slow_update(*a, **kw):
+        calls.append(1)
+        time.sleep(0.05)
+        done.set()
+
+    monkeypatch.setattr(usage_server, "_run_free_models_update", _slow_update)
+    usage_server._cost_observed_reaction_inflight = False
+    usage_server._react_to_cost_observed_async()
+    usage_server._react_to_cost_observed_async()  # second call — inflight guard must drop this
+    done.wait(timeout=2.0)
+    assert calls == [1]
+
+
+def test_react_to_cost_observed_calls_updater_when_pr_enabled(usage_server, monkeypatch):
+    """Background thread fires when providers_pr.enabled is True even without update_on_startup."""
+    base_cfg = dict(usage_server.load_config())
+    patched_cfg = {**base_cfg, "providers_pr": {"enabled": True}}
+    monkeypatch.setattr(usage_server, "load_config", lambda: patched_cfg)
+
+    done = threading.Event()
+    calls = []
+
+    def _fake_update(*a, **kw):
+        calls.append(1)
+        done.set()
+
+    monkeypatch.setattr(usage_server, "_run_free_models_update", _fake_update)
+    usage_server._cost_observed_reaction_inflight = False
+    usage_server._react_to_cost_observed_async()
+    done.wait(timeout=2.0)
+    assert calls == [1]
+
+
+def test_maybe_open_providers_pr_respects_frequency_days(usage_server, monkeypatch):
+    """PR creation is skipped when frequency_days has not elapsed since the last PR.
+
+    The updater still runs to keep the sidecar fresh; only the GitHub API call
+    is suppressed by the throttle.
+    """
+    from llmproxy import config as config_mod
+
+    # Simulate a PR opened moments ago so frequency_days=7 has not elapsed.
+    recent = datetime.datetime.now(datetime.UTC).isoformat()
+    monkeypatch.setattr(config_mod, "load_pr_state", lambda *a, **kw: {"last_pr_at": recent})
+
+    pr_create_calls = []
+
+    def _fake_create_or_update_pr(**kw):
+        pr_create_calls.append(kw)
+        return None
+
+    # Patch create_or_update_pr at the module level so the lazy import inside
+    # _maybe_open_providers_pr picks it up.
+    from llmproxy import github_pr as github_pr_mod
+    monkeypatch.setattr(github_pr_mod, "create_or_update_pr", _fake_create_or_update_pr)
+
+    cfg = {
+        "providers_pr": {
+            "enabled": True,
+            "frequency_days": 7,
+            "repo": "owner/repo",
+            "token": "fake-token",
+        }
+    }
+    usage_server._maybe_open_providers_pr(cfg, '{"providers":{}}')
+    assert pr_create_calls == []
