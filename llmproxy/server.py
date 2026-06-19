@@ -2952,6 +2952,9 @@ def _apply_favorite_free_ordering(
     Only candidates already present in the pool are promoted — favorites not in
     the pool (e.g. cost-observed, not believed_free) are silently skipped.
     Non-matching candidates retain their existing order after the favorites.
+
+    Matching is case-insensitive and ignores :variant suffixes (e.g. :free,
+    :nitro) so that "x/y" matches both "x/y" and "x/y:free".
     """
     favorites = config.get("favorite_free_models", [])
     if not favorites:
@@ -2961,7 +2964,11 @@ def _apply_favorite_free_ordering(
     for fav in favorites:
         fav_lower = fav.lower()
         for i, (pname, pcfg, umodel) in enumerate(remaining):
-            if fav_lower in (umodel.lower(), f"{pname}/{umodel}".lower()):
+            umodel_lower = umodel.lower()
+            umodel_base = umodel_lower.split(":")[0]  # strip :variant suffix
+            qualified = f"{pname}/{umodel}".lower()
+            qualified_base = f"{pname}/{umodel_base}"
+            if fav_lower in (umodel_lower, umodel_base, qualified, qualified_base):
                 front.append(remaining.pop(i))
                 break
     return front + remaining

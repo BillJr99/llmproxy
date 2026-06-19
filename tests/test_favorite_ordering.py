@@ -110,3 +110,30 @@ def test_non_favorite_order_preserved():
 def test_empty_candidates_returns_empty():
     result = _fn()([], {"favorite_free_models": ["openai/gpt-4o"]})
     assert result == []
+
+
+def test_variant_suffix_stripped_bare():
+    # "gemini-flash" matches upstream_model "gemini-flash:free"
+    a = _c("google", "gemini-flash:free")
+    b = _c("openai", "gpt-4o")
+    candidates = [b, a]
+    result = _fn()(candidates, {"favorite_free_models": ["gemini-flash"]})
+    assert result[0] == a
+
+
+def test_variant_suffix_stripped_qualified():
+    # "google/gemini-flash" matches (provider="google", model="gemini-flash:free")
+    a = _c("google", "gemini-flash:free")
+    b = _c("openai", "gpt-4o")
+    candidates = [b, a]
+    result = _fn()(candidates, {"favorite_free_models": ["google/gemini-flash"]})
+    assert result[0] == a
+
+
+def test_exact_with_suffix_still_matches():
+    # Specifying "google/gemini-flash:free" also works (exact match)
+    a = _c("google", "gemini-flash:free")
+    b = _c("openai", "gpt-4o")
+    candidates = [b, a]
+    result = _fn()(candidates, {"favorite_free_models": ["google/gemini-flash:free"]})
+    assert result[0] == a
