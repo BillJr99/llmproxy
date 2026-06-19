@@ -21,6 +21,8 @@ def _client(monkeypatch, tmp_path, admin_block=None):
     importlib.reload(config_mod)
     from llmproxy import server as server_mod
     importlib.reload(server_mod)
+    server_mod._run_startup_tasks_once = lambda *a, **k: None
+    server_mod._maybe_fire_interval_probes = lambda *a, **k: None
     server_mod.app.config["TESTING"] = True
     return server_mod.app.test_client()
 
