@@ -9,7 +9,8 @@ Usage
   python scripts/update_free_models.py --source openrouter,docs
   python scripts/update_free_models.py --regen-config-only
   python scripts/update_free_models.py --config ~/.config/llmproxy/config.json
-  python scripts/update_free_models.py --probe --probe-concurrency 2
+  python scripts/update_free_models.py --cost-probe --cost-probe-concurrency 2
+  python scripts/update_free_models.py --endpoint-probe
 
 Behavior
 --------
@@ -48,9 +49,11 @@ from llmproxy.config import (  # noqa: E402
     load_config as load_user_config,
 )
 from llmproxy.config import (  # noqa: E402
-    load_probe_state,
+    load_cost_probe_state,
+    load_endpoint_probe_state,
     save_config,
-    save_probe_state,
+    save_cost_probe_state,
+    save_endpoint_probe_state,
 )
 from llmproxy.providers import (  # noqa: E402
     DATA_PATH,
@@ -59,8 +62,9 @@ from llmproxy.providers import (  # noqa: E402
     load_data,
 )
 from scripts.sources import ALL_SOURCES, OPT_IN_SOURCES, Evidence  # noqa: E402
+from scripts.sources.cost_probe import CostProbeSource  # noqa: E402
+from scripts.sources.endpoint_probe import EndpointProbeSource  # noqa: E402
 from scripts.sources.litellm_cost_map import fetch_pricing_map  # noqa: E402
-from scripts.sources.probe import ProbeSource  # noqa: E402
 
 CONFIG_EXAMPLE_PATH = REPO_ROOT / "config.example.json"
 
@@ -566,7 +570,11 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         "free_tier": {
             "sync_on_startup": True,
             "update_on_startup": False,
-            "probe": {
+            "endpoint_probe": {
+                "frequency_minutes": 30,
+                "timeout_sec": 10,
+            },
+            "cost_probe": {
                 "enabled": False,
                 "autoremove": False,
                 "frequency_days": 0,
@@ -574,6 +582,7 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         },
         "providers_pr": {
             "enabled": False,
+            "frequency_days": 0,
             "repo": None,
             "base": "main",
             "branch": "llmproxy-auto/providers",
@@ -835,12 +844,16 @@ def _run_source(
     probe_max: int | None = None,
     probe_provider: str | None = None,
     probe_concurrency: int | None = None,
+    endpoint_probe_timeout: int = 10,
 ) -> tuple[str, bool, list[Evidence], str | None]:
     try:
-        if source_name == "probe":
-            src = ProbeSource(config_path=config_path, max_models=probe_max,
-                              provider_filter=probe_provider,
-                              concurrency=probe_concurrency)
+        if source_name == "cost_probe":
+            src = CostProbeSource(config_path=config_path, max_models=probe_max,
+                                  provider_filter=probe_provider,
+                                  concurrency=probe_concurrency)
+        elif source_name == "endpoint_probe":
+            src = EndpointProbeSource(config_path=config_path,
+                                      timeout=endpoint_probe_timeout)
         else:
             cls = ALL_SOURCES[source_name]
             src = cls()
@@ -852,7 +865,7 @@ def _run_source(
 
 def _probe_due(last_probe_at: str | None, frequency_days, now: datetime | None = None
                ) -> tuple[bool, float | None]:
-    """Decide whether the cost probe is due to run.
+    """Decide whether a probe/PR is due to run.
 
     Returns ``(due, days_since_last)``. The probe is due when:
       * ``frequency_days`` is missing or <= 0 (no throttle — run every time), or
@@ -889,22 +902,26 @@ def main(argv: list[str] | None = None) -> int:
                     help="Limit updates to a single provider (e.g. 'google').")
     ap.add_argument("--source", default=",".join(default_sources),
                     help="Comma-separated source names (default: all except opt-in probes).")
-    ap.add_argument("--probe", action="store_true",
+    ap.add_argument("--cost-probe", action="store_true",
                     help="Actively probe believed_free models for cost (sends real "
                          "requests; requires configured API keys). Also enabled by "
-                         "setting probe_cost: true in config.json.")
-    ap.add_argument("--probe-max", type=int, metavar="N",
-                    help="Probe at most N models (bounds spend).")
-    ap.add_argument("--probe-provider", metavar="NAME",
-                    help="Only probe models from this provider.")
-    ap.add_argument("--probe-concurrency", type=int, metavar="N",
-                    help="Max concurrent probe requests per provider (default 3). "
+                         "setting free_tier.cost_probe.enabled: true in config.json.")
+    ap.add_argument("--cost-probe-max", type=int, metavar="N",
+                    help="Cost-probe at most N models (bounds spend).")
+    ap.add_argument("--cost-probe-provider", metavar="NAME",
+                    help="Only cost-probe models from this provider.")
+    ap.add_argument("--cost-probe-concurrency", type=int, metavar="N",
+                    help="Max concurrent cost-probe requests per provider (default 3). "
                          "Different providers always run in parallel; this bounds "
                          "in-flight requests to any single provider to avoid "
                          "tripping its rate limit.")
+    ap.add_argument("--endpoint-probe", action="store_true",
+                    help="Probe each provider's /v1/models endpoint to discover new "
+                         ":free-suffixed models. Also enabled by sync_on_startup or "
+                         "update_on_startup in config.json.")
     ap.add_argument("--ignore-throttle", action="store_true",
-                    help="Probe even if probe_frequency_days says it is too soon "
-                         "since the last probe (bypasses the throttle).")
+                    help="Run probes even if their frequency setting says it is too "
+                         "soon since the last run (bypasses all throttles).")
     ap.add_argument("--regen-config-only", action="store_true",
                     help="Skip scraping; regenerate config.example.json from the current sidecar.")
     ap.add_argument("--sync-config-only", action="store_true",
@@ -927,31 +944,50 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return _sync_user_config(load_data(), args.config, dry_run=args.dry_run)
 
-    # Read opt-in flags from the user config (probe_cost / autoremove_believed_free).
+    # Read opt-in flags from the user config (cost_probe / endpoint_probe / autoremove).
     try:
         user_cfg = load_user_config(args.config, force_reload=True)
     except Exception:  # noqa: BLE001 — a missing/broken config must not break scraping
         user_cfg = {}
-    probe_cfg = user_cfg.get("free_tier", {}).get("probe", {})
-    probe_cost = bool(probe_cfg.get("enabled", False)) or args.probe
-    autoremove = bool(probe_cfg.get("autoremove", False))
+    free_tier_cfg = user_cfg.get("free_tier", {})
+    cost_probe_cfg = free_tier_cfg.get("cost_probe", {})
+    cost_probe_enabled = bool(cost_probe_cfg.get("enabled", False)) or args.cost_probe
+    autoremove = bool(cost_probe_cfg.get("autoremove", False))
+    ep_cfg = free_tier_cfg.get("endpoint_probe", {})
+    ep_enabled = bool(
+        free_tier_cfg.get("sync_on_startup") or free_tier_cfg.get("update_on_startup")
+    ) or args.endpoint_probe
 
-    # Throttle the probe to at most once every probe_frequency_days. The last-run
-    # timestamp lives in a sibling cache file (probe_state.json), not config.json.
+    # Throttle the cost probe to at most once every frequency_days. The last-run
+    # timestamp lives in cost_probe_state.json (sibling of config.json).
     # --ignore-throttle bypasses this; frequency 0 means "probe every time".
-    if probe_cost and not args.ignore_throttle:
-        state = load_probe_state(args.config)
+    if cost_probe_enabled and not args.ignore_throttle:
+        cp_state = load_cost_probe_state(args.config)
         due, days_since = _probe_due(
-            state.get("last_probe_at"), probe_cfg.get("frequency_days", 0)
+            cp_state.get("last_probe_at"), cost_probe_cfg.get("frequency_days", 0)
         )
         if not due:
-            freq = probe_cfg.get("frequency_days", 0)
+            freq = cost_probe_cfg.get("frequency_days", 0)
             since = f"{days_since:.1f}" if days_since is not None else "?"
             print(_warn(
-                f"  ⚠  probe throttled — last run was {since} day(s) ago, "
-                f"probe_frequency_days={freq}. Use --ignore-throttle to override."
+                f"  ⚠  cost_probe throttled — last run was {since} day(s) ago, "
+                f"frequency_days={freq}. Use --ignore-throttle to override."
             ))
-            probe_cost = False
+            cost_probe_enabled = False
+
+    # Throttle the endpoint probe to at most once every frequency_minutes.
+    if ep_enabled and not args.ignore_throttle:
+        ep_state = load_endpoint_probe_state(args.config)
+        freq_days = ep_cfg.get("frequency_minutes", 30) / 1440.0
+        ep_due, ep_days_since = _probe_due(ep_state.get("last_probe_at"), freq_days)
+        if not ep_due:
+            freq_min = ep_cfg.get("frequency_minutes", 30)
+            ep_since_min = f"{ep_days_since * 1440:.1f}" if ep_days_since is not None else "?"
+            print(_warn(
+                f"  ⚠  endpoint_probe throttled — last run was {ep_since_min} min ago, "
+                f"frequency_minutes={freq_min}. Use --ignore-throttle to override."
+            ))
+            ep_enabled = False
 
     if args.regen_config_only:
         write_config_example()
@@ -961,24 +997,27 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     requested = [s.strip() for s in args.source.split(",") if s.strip()]
-    if probe_cost and "probe" not in requested:
-        requested.append("probe")
+    if cost_probe_enabled and "cost_probe" not in requested:
+        requested.append("cost_probe")
+    if ep_enabled and "endpoint_probe" not in requested:
+        requested.append("endpoint_probe")
     unknown = [s for s in requested if s not in ALL_SOURCES]
     if unknown:
         print(_err(f"Unknown source(s): {unknown}. Known: {sorted(ALL_SOURCES.keys())}"))
         return 2
 
     print(_h(f"\nFetching evidence from sources: {requested}"))
-    if "probe" in requested:
-        print(_warn("  ⚠  probe enabled — sending real requests to believed_free models "
+    if "cost_probe" in requested:
+        print(_warn("  ⚠  cost_probe enabled — sending real requests to believed_free models "
                     "(uses configured API keys / quota)."))
     all_evidence: list[Evidence] = []
     source_status: dict[str, bool] = {}
     with ThreadPoolExecutor(max_workers=min(5, len(requested))) as ex:
         futures = {
             ex.submit(_run_source, s, config_path=args.config,
-                      probe_max=args.probe_max, probe_provider=args.probe_provider,
-                      probe_concurrency=args.probe_concurrency): s
+                      probe_max=args.cost_probe_max, probe_provider=args.cost_probe_provider,
+                      probe_concurrency=args.cost_probe_concurrency,
+                      endpoint_probe_timeout=ep_cfg.get("timeout_sec", 10)): s
             for s in requested
         }
         for fut in as_completed(futures):
@@ -990,16 +1029,16 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(_err(f"  {name}: FAILED — {err}"))
 
-    # Probe-confirmed paid models. When autoremove_believed_free is off (the
-    # default), we report these but do NOT remove them from believed_free.
-    probe_paid = {
+    # Cost-probe-confirmed paid models. When autoremove is off (the default),
+    # we report these but do NOT remove them from believed_free.
+    cost_probe_paid = {
         (ev.provider, ev.model_id)
         for ev in all_evidence
-        if ev.source == "probe" and ev.is_free is False
+        if ev.source == "cost_probe" and ev.is_free is False
     }
-    if probe_paid:
-        print(_h("\n=== Probe flagged believed_free models reporting a cost ==="))
-        for _provider_name, model_id in sorted(probe_paid):
+    if cost_probe_paid:
+        print(_h("\n=== cost_probe flagged believed_free models reporting a cost ==="))
+        for _provider_name, model_id in sorted(cost_probe_paid):
             print(f"  {_warn('⚠')} {model_id}")
         if autoremove:
             print(_warn("  autoremove_believed_free=true → these will be removed."))
@@ -1009,7 +1048,7 @@ def main(argv: list[str] | None = None) -> int:
         if not autoremove:
             all_evidence = [
                 ev for ev in all_evidence
-                if not (ev.source == "probe" and ev.is_free is False)
+                if not (ev.source == "cost_probe" and ev.is_free is False)
             ]
 
     # If only "api" succeeded for a provider, we trust /models presence as
@@ -1070,14 +1109,14 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(_dim("\nNo changes to apply."))
 
-    # Record when the probe last ran so probe_frequency_days can throttle the
-    # next invocation. Only on a real run where the probe was actually included.
-    # Done after (and independent of) the sidecar write above so a read-only
-    # providers.json can't prevent the throttle from advancing.
-    if "probe" in requested:
-        save_probe_state(
-            {"last_probe_at": datetime.now(UTC).isoformat()}, args.config
-        )
+    # Record when each probe last ran so frequency settings can throttle the
+    # next invocation. Done after (and independent of) the sidecar write so a
+    # read-only providers.json can't prevent the throttle from advancing.
+    now_iso = datetime.now(UTC).isoformat()
+    if "cost_probe" in requested:
+        save_cost_probe_state({"last_probe_at": now_iso}, args.config)
+    if "endpoint_probe" in requested:
+        save_endpoint_probe_state({"last_probe_at": now_iso}, args.config)
 
     # Sync the user config even when the sidecar was unchanged — a stale config
     # should still be reconciled against the current sidecar.

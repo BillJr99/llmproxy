@@ -389,12 +389,12 @@ _MAINTENANCE_STR_FIELDS = ("pr_providers_repo", "pr_providers_base", "pr_provide
 # the single-page admin UI unchanged while the on-disk config uses the grouped
 # objects (and the config loader's migration shim accepts either form on input).
 _MAINTENANCE_PATHS: dict[str, tuple[str, ...]] = {
-    "probe_cost": ("free_tier", "probe", "enabled"),
-    "autoremove_believed_free": ("free_tier", "probe", "autoremove"),
+    "probe_cost": ("free_tier", "cost_probe", "enabled"),
+    "autoremove_believed_free": ("free_tier", "cost_probe", "autoremove"),
     "update_believed_free_on_startup": ("free_tier", "update_on_startup"),
     "pr_providers_list": ("providers_pr", "enabled"),
     "sync_believed_free_on_startup": ("free_tier", "sync_on_startup"),
-    "probe_frequency_days": ("free_tier", "probe", "frequency_days"),
+    "probe_frequency_days": ("free_tier", "cost_probe", "frequency_days"),
     "pr_providers_repo": ("providers_pr", "repo"),
     "pr_providers_base": ("providers_pr", "base"),
     "pr_providers_branch": ("providers_pr", "branch"),

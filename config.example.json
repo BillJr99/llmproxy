@@ -1282,7 +1282,11 @@
   "free_tier": {
     "sync_on_startup": true,
     "update_on_startup": false,
-    "probe": {
+    "endpoint_probe": {
+      "frequency_minutes": 30,
+      "timeout_sec": 10
+    },
+    "cost_probe": {
       "enabled": false,
       "autoremove": false,
       "frequency_days": 0
@@ -1290,6 +1294,7 @@
   },
   "providers_pr": {
     "enabled": false,
+    "frequency_days": 0,
     "repo": null,
     "base": "main",
     "branch": "llmproxy-auto/providers",

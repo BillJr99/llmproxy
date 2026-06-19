@@ -41,3 +41,24 @@ def test_unrelated_page_yields_empty():
     html = "<html><body><p>Some other HF docs page</p></body></html>"
     responses.add(responses.GET, URL, body=html, status=200)
     assert HuggingFaceDocs().fetch() == []
+
+
+@responses.activate
+def test_429_retried_and_succeeds(fixtures_dir: Path, monkeypatch):
+    """A single 429 is retried; the scraper returns results on the next attempt."""
+    monkeypatch.setattr("scripts.sources.docs.base.time.sleep", lambda _: None)
+    html = (fixtures_dir / "huggingface_providers.html").read_text()
+    responses.add(responses.GET, URL, status=429)
+    responses.add(responses.GET, URL, body=html, status=200, content_type="text/html")
+    evs = HuggingFaceDocs().fetch()
+    assert evs  # recovered after retry
+    assert len(responses.calls) == 2
+
+
+@responses.activate
+def test_429_exhausted_returns_empty(monkeypatch):
+    """When all retries are consumed the scraper returns [] instead of raising."""
+    monkeypatch.setattr("scripts.sources.docs.base.time.sleep", lambda _: None)
+    for _ in range(4):  # initial attempt + 3 retries
+        responses.add(responses.GET, URL, status=429)
+    assert HuggingFaceDocs().fetch() == []

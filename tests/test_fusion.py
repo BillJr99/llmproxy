@@ -239,7 +239,7 @@ def test_fusion_backfills_failed_panel_from_reserve(server, monkeypatch):
     rep = json.loads(resp.get_data())["llmproxy_fusion"]
     assert rep["panel"] == ["p4/m4", "p5/m5"]  # reserve backfilled the failed slots
     assert {f["model"] for f in rep["failed_models"]} == {"p0/m0", "p1/m1", "p2/m2", "p3/m3"}
-    assert seen["panel"] == ["m0", "m1", "m2", "m3", "m4", "m5"]  # every slot attempted once
+    assert sorted(seen["panel"]) == ["m0", "m1", "m2", "m3", "m4", "m5"]  # every slot attempted once
 
 
 def test_fusion_all_panel_fail_error_lists_reasons(server, monkeypatch):

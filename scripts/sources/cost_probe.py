@@ -1,4 +1,4 @@
-"""probe.py — active cost probe for believed-free models.
+"""cost_probe.py — active cost probe for believed-free models.
 
 Unlike every other source (which reads docs / pricing pages / /models
 catalogs), this source sends a *real*, minimal chat completion to each model in
@@ -8,9 +8,9 @@ Vercel) or a computed cost from the bundled pricing map — is emitted as
 high-confidence ``is_free=False`` so the aggregator can flag/remove it.
 
 This source spends real quota (and possibly real money), so it is OFF by
-default: it only runs when the user sets ``probe_cost: true`` in config.json or
-passes ``--probe`` on the command line, and it skips any provider that has no
-configured API key.
+default: it only runs when the user sets ``cost_probe.enabled: true`` in
+config.json or passes ``--cost-probe`` on the command line, and it skips any
+provider that has no configured API key.
 
 Probes run with bounded *per-provider* concurrency: requests to different
 providers overlap, but each provider is capped (``concurrency``, default 3) so
@@ -62,8 +62,8 @@ _PROBE_BODY = {
 }
 
 
-class ProbeSource(Source):
-    name = "probe"
+class CostProbeSource(Source):
+    name = "cost_probe"
 
     def __init__(
         self,

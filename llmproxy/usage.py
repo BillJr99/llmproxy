@@ -2,7 +2,7 @@
 
 This module holds the *pure* (web-framework-free) pieces of usage tracking so
 they can be unit-tested in isolation and reused by the offline scraper probe
-(scripts/sources/probe.py):
+(scripts/sources/cost_probe.py):
 
   * ``ModelUsage`` — a thread-safe per-model counter that tracks both requests
     (sliding 60s window + per-day) and tokens (same windows) plus lifetime

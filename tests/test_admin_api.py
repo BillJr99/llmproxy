@@ -362,8 +362,8 @@ def test_put_maintenance_sets_flags(client, cfg_path):
     })
     assert resp.status_code == 200
     saved = _read_config(cfg_path)
-    assert saved["free_tier"]["probe"]["enabled"] is True
-    assert saved["free_tier"]["probe"]["frequency_days"] == 7
+    assert saved["free_tier"]["cost_probe"]["enabled"] is True
+    assert saved["free_tier"]["cost_probe"]["frequency_days"] == 7
     assert saved["providers_pr"]["repo"] == "BillJr99/llmproxy"
     assert saved["providers_pr"]["token"] == "ghp_secret"
     # Token is never echoed back verbatim
