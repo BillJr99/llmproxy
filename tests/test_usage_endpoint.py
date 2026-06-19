@@ -266,7 +266,7 @@ def test_maybe_open_providers_pr_respects_frequency_days(usage_server, monkeypat
     from llmproxy import config as config_mod
 
     # Simulate a PR opened moments ago so frequency_days=7 has not elapsed.
-    recent = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    recent = datetime.datetime.now(datetime.UTC).isoformat()
     monkeypatch.setattr(config_mod, "load_pr_state", lambda *a, **kw: {"last_pr_at": recent})
 
     pr_create_calls = []
