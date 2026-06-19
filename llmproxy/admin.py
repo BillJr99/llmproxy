@@ -463,6 +463,7 @@ def api_get_config():
     return jsonify({
         "providers": providers,
         "believed_free": config.get("believed_free", []),
+        "favorite_free_models": config.get("favorite_free_models", []),
         "model_reasoning": config.get("model_reasoning", {}),
         "model_capabilities": config.get("model_capabilities", {}),
         "free_limits": config.get("free_limits", {}),
@@ -792,6 +793,18 @@ def _put_section(key: str, validate):
         if not _save(config):
             return _err("Failed to persist configuration.", 500)
     return jsonify({key: payload})
+
+
+@bp.route("/admin/api/favorite-free-models", methods=["GET", "PUT"])
+def api_favorite_free_models():
+    if request.method == "GET":
+        return jsonify({"favorite_free_models": _load().get("favorite_free_models", [])})
+
+    def validate(p):
+        if not (isinstance(p, list) and all(isinstance(x, str) for x in p)):
+            return "favorite_free_models must be a list of strings."
+        return None
+    return _put_section("favorite_free_models", validate)
 
 
 @bp.route("/admin/api/believed-free", methods=["GET", "PUT"])

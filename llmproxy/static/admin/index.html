@@ -87,6 +87,8 @@
   .vm code.id { font-size: 14px; font-weight: 700; }
   a { color: var(--accent); }
   .hidden { display: none !important; }
+  .fav-row { display: grid; grid-template-columns: auto 1fr auto auto auto; gap: 8px; align-items: center; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; }
+  .fav-rank { font-size: 11px; font-weight: 700; color: var(--muted); min-width: 18px; text-align: right; }
 </style>
 </head>
 <body>
@@ -163,6 +165,15 @@
       <input type="text" id="model-filter" placeholder="Filter models…" style="margin-top:12px" />
       <div id="model-grid" class="grid-models" style="margin-top:12px"></div>
       <div class="actions"><button class="btn primary" id="save-cats">Save categorizations</button></div>
+    </div>
+    <div class="card">
+      <h3>Favorite free models</h3>
+      <p class="muted">These models are tried first (in ranked order) when routing through any <code>*/free</code> virtual endpoint or the free tier of <code>llmproxy/loadbalanced</code>. A model is only selected if it is currently believed-free; it is skipped silently otherwise and the normal selection algorithm continues.</p>
+      <div id="fav-list" style="margin-bottom:12px"></div>
+      <div class="inline" style="gap:8px;flex-wrap:wrap">
+        <select id="fav-pick" style="flex:1;min-width:180px"><option value="">— pick a model to add —</option></select>
+        <button class="btn" id="fav-add">Add</button>
+      </div>
     </div>
   </section>
 
@@ -424,7 +435,7 @@ function renderProviderCard(name, p, isNew) {
 // ---- Models & categorizations ----
 $("#discover").addEventListener("click", async () => {
   toast("Discovering…");
-  try { const r = await api("/models"); DISCOVERED = r.models || []; renderModels(); toast(`Discovered ${DISCOVERED.length} models`); }
+  try { const r = await api("/models"); DISCOVERED = r.models || []; renderModels(); renderFavPicker(); toast(`Discovered ${DISCOVERED.length} models`); }
   catch (e) { toast(e.message, true); }
 });
 $("#model-filter").addEventListener("input", renderModels);
@@ -492,6 +503,73 @@ async function loadVirtual() {
 }
 $("#refresh-vm").addEventListener("click", loadVirtual);
 
+// ---- Favorite free models ----
+let FAVS = [];
+
+function renderFavPicker() {
+  const sel = $("#fav-pick");
+  // Group discovered/known models by provider
+  const all = modelUniverse();
+  const groups = {};
+  for (const m of all) {
+    const slash = m.indexOf("/");
+    const grp = slash >= 0 ? m.slice(0, slash) : "(bare)";
+    (groups[grp] = groups[grp] || []).push(m);
+  }
+  sel.innerHTML = `<option value="">— pick a model to add —</option>` +
+    Object.keys(groups).sort().map(g =>
+      `<optgroup label="${esc(g)}">${groups[g].map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("")}</optgroup>`
+    ).join("");
+}
+
+function renderFavsList() {
+  const box = $("#fav-list");
+  if (!FAVS.length) { box.innerHTML = `<p class="muted">No favorites yet.</p>`; return; }
+  box.innerHTML = FAVS.map((m, i) => `
+    <div class="fav-row">
+      <span class="fav-rank">${i + 1}</span>
+      <code style="font-size:13px;word-break:break-all">${esc(m)}</code>
+      <button class="btn" data-up="${i}" ${i === 0 ? "disabled" : ""} title="Move up">↑</button>
+      <button class="btn" data-dn="${i}" ${i === FAVS.length - 1 ? "disabled" : ""} title="Move down">↓</button>
+      <button class="btn danger" data-rm="${i}" title="Remove">✕</button>
+    </div>`).join("");
+  box.querySelectorAll("[data-up]").forEach(b => b.addEventListener("click", () => moveFav(+b.dataset.up, -1)));
+  box.querySelectorAll("[data-dn]").forEach(b => b.addEventListener("click", () => moveFav(+b.dataset.dn, 1)));
+  box.querySelectorAll("[data-rm]").forEach(b => b.addEventListener("click", () => removeFav(+b.dataset.rm)));
+}
+
+async function saveFavs() {
+  try {
+    await api("/favorite-free-models", { method: "PUT", body: JSON.stringify(FAVS) });
+    toast("Favorite free models saved");
+  } catch (e) { toast(e.message, true); }
+}
+
+function moveFav(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= FAVS.length) return;
+  [FAVS[i], FAVS[j]] = [FAVS[j], FAVS[i]];
+  renderFavsList(); saveFavs();
+}
+
+function removeFav(i) {
+  FAVS.splice(i, 1); renderFavsList(); saveFavs();
+}
+
+$("#fav-add").addEventListener("click", () => {
+  const v = $("#fav-pick").value; if (!v) return;
+  if (FAVS.includes(v)) { toast("Already in favorites", true); return; }
+  FAVS.push(v); renderFavsList(); renderFavPicker(); saveFavs();
+});
+
+async function loadFavs() {
+  try {
+    const r = await api("/favorite-free-models");
+    FAVS = r.favorite_free_models || [];
+    renderFavsList(); renderFavPicker();
+  } catch (e) { toast(e.message, true); }
+}
+
 // ---- Bootstrap ----
 async function bootstrap() {
   try {
@@ -515,6 +593,7 @@ async function bootstrap() {
     renderTemplateSelect();
     await loadProviders();
     renderModels();
+    await loadFavs();
   } catch (e) {
     setAuthState(false, "auth required");
     toast(e.message, true);

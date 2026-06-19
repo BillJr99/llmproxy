@@ -184,7 +184,9 @@ When a request targets a (non-fusion) virtual model, llmproxy:
    reorderings may then run on top without ever dropping a candidate: the
    [request-fit triage](#request-fit-triage-every-free-and-local-virtual) for the
    `*/free` and `*/local` virtuals, and [capability ordering](#capability-aware-routing--failover)
-   when the request forces a capability.
+   when the request forces a capability. Finally, any models listed in
+   [`favorite_free_models`](#favorite_free_models) that are present in the pool
+   are promoted to the front in ranked order before cycling begins.
 3. **Tries each candidate in order**, returning the first **usable** response.
 
 A candidate is considered to have **failed** — so llmproxy moves on to the next
@@ -678,6 +680,10 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
       "tokens_per_day": 500000
     }
   },
+  "favorite_free_models": [
+    "google/gemini-2.5-flash",
+    "groq/llama-3.1-8b-instant"
+  ],
 
   "free_tier": {
     "sync_on_startup": true,
@@ -863,6 +869,45 @@ to the **paid** tier. This is best-effort — counters are in-memory and per wor
 process — so it is "as far as we can tell in the moment". Any field set to `null`
 is ignored; a provider with no `free_allowance` simply never gains free-in-the-
 moment status.
+
+<a name="favorite_free_models"></a>
+### `favorite_free_models` — ranked priority list for free-tier routing
+
+`favorite_free_models` is an **optional** top-level array of model IDs listed in
+preference order.  When a `*/free` virtual endpoint (e.g. `llmproxy/free`,
+`llmproxy/deep__free`) or the free tier of `llmproxy/loadbalanced` selects a
+backend, models in this list are promoted to the front of the candidate pool
+**in the order listed**, before the normal capacity/request-fit/capability
+algorithm handles the rest.
+
+```json
+"favorite_free_models": [
+  "google/gemini-2.5-flash",
+  "anthropic/claude-3-5-haiku-20251001",
+  "gpt-4o-mini"
+]
+```
+
+Each entry is matched case-insensitively against the upstream model ID (bare,
+e.g. `gpt-4o-mini`) or the fully-qualified proxy ID (e.g.
+`openai/gpt-4o-mini`).  A favorite is only promoted if it is **currently
+believed-free** (present in `believed_free` and not flagged as cost-observed);
+if it is absent from the virtual model's candidate pool it is silently skipped
+and the remaining favorites and the normal algorithm continue unchanged.
+
+**Cost-observation persistence:** if a favorite is later removed from
+`believed_free` because a cost was observed at runtime, it remains in
+`favorite_free_models`.  When a future sync restores it to the free pool (e.g.
+the provider makes it free again), it is automatically re-promoted without any
+manual config change.
+
+`favorite_free_models` has no effect on non-free virtual endpoints
+(`llmproxy/deep`, `llmproxy/tools`, etc.) or on fusion virtuals.
+
+The admin UI's **Models & Categorizations** tab includes a **Favorite free
+models** panel where you can add models from a grouped-by-provider picker,
+reorder them with up/down buttons, and remove entries — changes are saved
+immediately.
 
 <a name="usage-accounting"></a>
 ### Token + cost accounting — `GET /v1/usage`
