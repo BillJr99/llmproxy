@@ -208,9 +208,14 @@ _LEGACY_KEY_MIGRATIONS: dict[str, tuple[str, ...]] = {
 # Load / Save
 # ---------------------------------------------------------------------------
 
-# Simple mtime-based hot-reload cache.
+# Hot-reload cache keyed on a (st_mtime_ns, st_size) fingerprint rather than a
+# bare float mtime. Integer-nanosecond mtimes avoid float-equality fuzz, and the
+# size tiebreaker catches a rewrite that lands within the same mtime tick — which
+# is realistic on Docker volume filesystems with coarse (1s) mtime granularity
+# (e.g. 9p on Docker Desktop, some bind-mount/network volume drivers). A bare
+# mtime cache could otherwise pin a stale snapshot for the life of the process.
 _cache: dict = {}
-_cache_mtime: float = 0.0
+_cache_stat: tuple[int, int] = (0, 0)
 
 
 def load_config(config_path: str | None = None, force_reload: bool = False) -> dict:
@@ -233,7 +238,7 @@ def load_config(config_path: str | None = None, force_reload: bool = False) -> d
     dict
         Merged configuration (file values overlaid on defaults).
     """
-    global _cache, _cache_mtime
+    global _cache, _cache_stat
 
     path = get_config_path(config_path)
 
@@ -241,8 +246,9 @@ def load_config(config_path: str | None = None, force_reload: bool = False) -> d
         return _deep_merge(DEFAULT_CONFIG, {})
 
     try:
-        mtime = path.stat().st_mtime
-        if not force_reload and _cache and mtime == _cache_mtime:
+        st = path.stat()
+        fingerprint = (st.st_mtime_ns, st.st_size)
+        if not force_reload and _cache and fingerprint == _cache_stat:
             return _cache
 
         with open(path, encoding="utf-8") as fh:
@@ -250,7 +256,7 @@ def load_config(config_path: str | None = None, force_reload: bool = False) -> d
 
         merged = _deep_merge(DEFAULT_CONFIG, _normalize_config(raw))
         _cache = merged
-        _cache_mtime = mtime
+        _cache_stat = fingerprint
         return merged
 
     except Exception as e:
@@ -275,7 +281,7 @@ def save_config(config: dict, config_path: str | None = None) -> bool:
     bool
         True on success, False on failure.
     """
-    global _cache, _cache_mtime
+    global _cache, _cache_stat
 
     path = get_config_path(config_path)
     try:
@@ -301,7 +307,7 @@ def save_config(config: dict, config_path: str | None = None) -> bool:
             raise
         # Invalidate cache
         _cache = {}
-        _cache_mtime = 0.0
+        _cache_stat = (0, 0)
         print(f"Configuration saved to {path}")
         return True
     except Exception as e:

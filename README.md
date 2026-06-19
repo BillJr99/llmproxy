@@ -1439,9 +1439,10 @@ python /path/to/llmproxy/run.py
 python run.py --setup
 ```
 
-The server hot-reloads config on each request (modification-time cache), so
-provider changes take effect immediately without a restart.  Only `host` or
-`port` changes require a restart.
+The server hot-reloads config on each request (a cache keyed on the file's
+`(st_mtime_ns, st_size)` fingerprint, so an edit is picked up reliably even on
+filesystems with coarse mtime granularity), so provider changes take effect
+immediately without a restart.  Only `host` or `port` changes require a restart.
 
 ---
 
@@ -1914,9 +1915,12 @@ usage: run.py [--setup] [--config PATH] [--host HOST] [--port PORT]
   when gunicorn is installed, falling back to the Flask development server.
 - `/v1/models` queries all providers concurrently via `ThreadPoolExecutor`.  A
   single unreachable provider is logged as a warning and omitted from the
-  aggregate response rather than causing an overall failure.
-- Config is hot-reloaded on each request via an mtime cache; provider changes
-  take effect without a server restart.  Only `host` and `port` changes require
-  one.
+  aggregate response rather than causing an overall failure.  Each gunicorn
+  worker pre-builds the `/v1/models` response at startup, so the first request is
+  served from cache instead of triggering a full provider re-fetch; once the
+  cached list expires it is served stale while a background thread refreshes it.
+- Config is hot-reloaded on each request via a `(st_mtime_ns, st_size)` cache;
+  provider changes take effect without a server restart.  Only `host` and `port`
+  changes require one.
 - Streaming responses are relayed as raw SSE byte streams via
   `stream_with_context`, preserving upstream chunk boundaries.

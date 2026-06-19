@@ -65,6 +65,35 @@ def test_models_endpoint_registered(client):
     assert "data" in body, f"expected 'data' key in response, got keys={list(body.keys())}"
 
 
+def test_models_rechecks_disk_before_no_providers_warning(server, monkeypatch):
+    """/v1/models must re-read config from disk before declaring it empty.
+
+    A stale in-process cache (or a config still being written at startup) can
+    momentarily yield zero providers; the endpoint does a force_reload re-check so
+    the "No providers configured" warning only fires when the on-disk config
+    genuinely has none. Here every non-forced load reports an empty config while a
+    force_reload returns the real one — the warning must NOT appear.
+    """
+    real_load = server.load_config
+
+    def fake_load(*args, **kwargs):
+        if kwargs.get("force_reload"):
+            return real_load(*args, **kwargs)
+        return {"providers": {}, "server": {"request_timeout": 5}}
+
+    monkeypatch.setattr(server, "load_config", fake_load)
+
+    server.app.config["TESTING"] = True
+    resp = server.app.test_client().get("/v1/models")
+    assert resp.status_code < 500, f"Got 5xx: {resp.status_code} {resp.data!r}"
+    body = resp.get_json()
+    assert body is not None
+    assert "_warning" not in body, (
+        "force_reload re-check should have found providers on disk and suppressed "
+        "the 'No providers configured' warning"
+    )
+
+
 def test_unknown_model_returns_4xx(client):
     """Posting to chat completions with an unknown model should not 500."""
     resp = client.post("/v1/chat/completions", json={

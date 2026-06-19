@@ -230,6 +230,11 @@ _models_list_cache: tuple[list[dict], float] | None = None
 _models_list_cache_lock = threading.Lock()
 _DEFAULT_MODELS_CACHE_TTL = 60
 
+# Guards the stale-while-revalidate background refresh of _models_list_cache so a
+# burst of requests arriving after expiry spawns at most one refresh thread.
+_models_refresh_lock = threading.Lock()
+_models_refresh_active = False
+
 # ---------------------------------------------------------------------------
 # Per-model usage tracking (free-tier capacity-aware load balancing + accounting)
 # ---------------------------------------------------------------------------
@@ -1417,6 +1422,28 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
                 _models_list_cache = None
             logger.info("[startup] virtual-model list cache invalidated after update")
 
+        # 5. Pre-build the full /v1/models response so the first external request is
+        #    a cache HIT rather than a MISS that re-fetches every provider. Reloads
+        #    config so it reflects any believed_free changes from steps 2–3. Runs
+        #    per-worker; best-effort, never blocks or crashes the worker.
+        try:
+            warm_cfg = load_config()
+            warm_providers = _enabled_providers(warm_cfg)
+            if warm_providers:
+                server_cfg = warm_cfg.get("server", {})
+                models_ttl = server_cfg.get("models_cache_ttl", _DEFAULT_MODELS_CACHE_TTL)
+                if models_ttl > 0:
+                    logger.info("[startup] pre-building /v1/models response cache…")
+                    _build_models_list(
+                        warm_providers,
+                        warm_cfg,
+                        server_cfg.get("request_timeout", 120),
+                        models_ttl,
+                        only_if_empty=True,
+                    )
+        except Exception as exc:  # noqa: BLE001 — warming must never crash the worker
+            logger.warning("[startup] /v1/models cache warm failed: %s", exc)
+
     threading.Thread(target=_run, daemon=True, name="startup-tasks").start()
 
 
@@ -1542,15 +1569,18 @@ def list_models() -> Response:
     """
     _sync_local_provider_models_once()
     config = load_config()
-    providers: dict = config.get("providers", {})
-    # Strip reserved names before presence check so a config that contains only
-    # reserved providers triggers the "no providers configured" warning rather
-    # than returning a silently empty model list.
-    providers = {k: v for k, v in providers.items() if k not in RESERVED_PROVIDER_NAMES}
+    providers = _enabled_providers(config)
     server_cfg: dict = config.get("server", {})
     timeout: int = server_cfg.get("request_timeout", 120)
     models_ttl: int = server_cfg.get("models_cache_ttl", _DEFAULT_MODELS_CACHE_TTL)
 
+    if not providers:
+        # Re-read from disk before declaring the config empty. A stale in-process
+        # cache (or a config still being written at startup) can momentarily yield
+        # zero providers; force_reload confirms the on-disk truth so this warning
+        # only ever fires when the config genuinely has no providers.
+        config = load_config(force_reload=True)
+        providers = _enabled_providers(config)
     if not providers:
         return jsonify({
             "object": "list",
@@ -1558,17 +1588,92 @@ def list_models() -> Response:
             "_warning": "No providers configured. Run 'llmproxy --setup'.",
         })
 
-    # Return cached model list if still fresh.
-    global _models_list_cache
+    # Return cached model list if still fresh. When the cache is present but stale,
+    # serve it immediately and refresh in the background (stale-while-revalidate)
+    # so only the very first request after a TTL window ever waits.
     if models_ttl > 0:
         with _models_list_cache_lock:
-            if _models_list_cache is not None:
-                cached_data, cached_ts = _models_list_cache
-                if time.monotonic() - cached_ts < models_ttl:
-                    logger.info("  [models cache] HIT (%.0fs old)", time.monotonic() - cached_ts)
-                    return jsonify({"object": "list", "data": cached_data})
+            cached = _models_list_cache
+        if cached is not None:
+            cached_data, cached_ts = cached
+            age = time.monotonic() - cached_ts
+            if age < models_ttl:
+                logger.info("  [models cache] HIT (%.0fs old)", age)
+                return jsonify({"object": "list", "data": cached_data})
+            logger.info("  [models cache] STALE (%.0fs old) — serving stale, refreshing", age)
+            _spawn_models_list_refresh()
+            return jsonify({"object": "list", "data": cached_data})
 
-    all_models = _rebuild_route_cache(providers, timeout)
+    full_list = _build_models_list(providers, config, timeout, models_ttl)
+    return jsonify({"object": "list", "data": full_list})
+
+
+def _enabled_providers(config: dict) -> dict:
+    """Return config['providers'] with reserved names stripped.
+
+    Reserved names are removed before any presence check so a config that
+    contains only reserved providers triggers the "no providers configured"
+    warning rather than returning a silently empty model list.
+    """
+    return {
+        k: v for k, v in config.get("providers", {}).items()
+        if k not in RESERVED_PROVIDER_NAMES
+    }
+
+
+def _spawn_models_list_refresh() -> None:
+    """Rebuild the cached /v1/models list in a daemon thread (at most one at a time).
+
+    Used by the stale-while-revalidate path so an expired cache is refreshed off
+    the request's critical path. Reloads config fresh so the rebuild reflects the
+    latest on-disk providers/believed_free rather than a captured snapshot.
+    """
+    global _models_refresh_active
+    with _models_refresh_lock:
+        if _models_refresh_active:
+            return
+        _models_refresh_active = True
+
+    def _run() -> None:
+        global _models_refresh_active
+        try:
+            cfg = load_config()
+            providers = _enabled_providers(cfg)
+            if providers:
+                server_cfg = cfg.get("server", {})
+                _build_models_list(
+                    providers,
+                    cfg,
+                    server_cfg.get("request_timeout", 120),
+                    server_cfg.get("models_cache_ttl", _DEFAULT_MODELS_CACHE_TTL),
+                )
+        except Exception as exc:  # noqa: BLE001 — background refresh must never crash
+            logger.warning("[models cache] background refresh failed: %s", exc)
+        finally:
+            with _models_refresh_lock:
+                _models_refresh_active = False
+
+    threading.Thread(target=_run, daemon=True, name="models-list-refresh").start()
+
+
+def _build_models_list(providers: dict, config: dict, timeout: int, models_ttl: int,
+                       only_if_empty: bool = False) -> list[dict]:
+    """Build the full GET /v1/models data list and populate _models_list_cache.
+
+    Aggregates each provider's models (rebuilding the route cache), prepends the
+    synthetic virtual models whose backing candidates exist, annotates real models
+    with classification fields, and rewrites virtual ids to display form. The
+    result is cached (when models_ttl > 0) and returned. Called both on a cache
+    miss in list_models() and from the startup warmup so the first external
+    request is served from cache.
+
+    ``only_if_empty`` is forwarded to _rebuild_route_cache: the startup warmup
+    sets it so a route cache already populated by a concurrent request (or a test
+    seed) is preserved rather than clobbered by the warm fetch.
+    """
+    global _models_list_cache
+
+    all_models = _rebuild_route_cache(providers, timeout, only_if_empty=only_if_empty)
 
     # Prepend synthetic virtual models when their backing candidates exist.
     with _model_route_cache_lock:
@@ -1792,10 +1897,7 @@ def list_models() -> Response:
         with _models_list_cache_lock:
             _models_list_cache = (full_list, time.monotonic())
 
-    return jsonify({
-        "object": "list",
-        "data": full_list,
-    })
+    return full_list
 
 
 @app.route("/v1/models/<path:model_id>", methods=["GET"])

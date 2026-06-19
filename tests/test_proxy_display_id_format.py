@@ -106,7 +106,7 @@ def test_resolver_rebuilds_cache_for_cold_flattened_id(server, monkeypatch):
 
     calls = {"n": 0}
 
-    def _fake_rebuild(providers_cfg, timeout):
+    def _fake_rebuild(providers_cfg, timeout, only_if_empty=False):
         calls["n"] += 1
         with server._model_route_cache_lock:
             server._model_route_cache["fakeprov__meta-llama_llama-3/instruct"] = (
@@ -464,7 +464,7 @@ def test_models_list_advertises_canonical_form_no_leading_provider_slash(server,
         "openrouter__qwen/qwen-2.5:free": ("openrouter", "qwen/qwen-2.5:free"),
     }
 
-    def _fake_rebuild(providers_cfg, timeout):
+    def _fake_rebuild(providers_cfg, timeout, only_if_empty=False):
         with server._model_route_cache_lock:
             server._model_route_cache.clear()
             server._model_route_cache.update(routes)

@@ -42,6 +42,54 @@ def test_hot_reload_picks_up_changes(tmp_path: Path):
     assert second["believed_free"] == ["b"]
 
 
+def test_reloads_on_same_mtime_when_size_changes(tmp_path: Path, monkeypatch):
+    """A rewrite landing within the same mtime tick must still be picked up.
+
+    Regression: the hot-reload cache used to key only on a float ``st_mtime``, so
+    a second write whose mtime compared equal to the cached one (realistic on
+    Docker volume filesystems with coarse mtime granularity, or two writes in the
+    same tick) would pin a stale snapshot until the process restarted — the root
+    cause of intermittent "No providers configured". The cache now fingerprints on
+    ``(st_mtime_ns, st_size)`` so a content change is detected even at a fixed
+    mtime.
+    """
+    import json
+    from types import SimpleNamespace
+
+    path = tmp_path / "cfg.json"
+
+    # Reset the module cache so a prior test cannot mask the behavior.
+    config_mod._cache = {}
+    config_mod._cache_stat = (0, 0)
+
+    # Pin every stat() to a single, constant mtime so st_size is the only signal
+    # that can distinguish the two file versions.
+    real_stat = Path.stat
+    fixed_mtime_ns = 1_700_000_000_000_000_000
+
+    def fake_stat(self, *args, **kwargs):
+        st = real_stat(self, *args, **kwargs)
+        return SimpleNamespace(st_mtime_ns=fixed_mtime_ns, st_size=st.st_size)
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+
+    # v1: no providers (the "poison" snapshot).
+    path.write_text(json.dumps({"providers": {}, "believed_free": []}), encoding="utf-8")
+    first = config_mod.load_config(str(path))
+    assert first["providers"] == {}
+
+    # v2: providers present, different byte length, but the SAME (pinned) mtime.
+    path.write_text(
+        json.dumps({
+            "providers": {"p": {"base_url": "http://x", "api_key": "k", "model_filter": None}},
+            "believed_free": [],
+        }),
+        encoding="utf-8",
+    )
+    second = config_mod.load_config(str(path))  # note: no force_reload
+    assert "p" in second["providers"], "same-mtime rewrite was not picked up (stale cache)"
+
+
 def test_parse_model_string_basic():
     p, m = config_mod.parse_model_string("openai/gpt-4o")
     assert p == "openai"
