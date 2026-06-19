@@ -399,6 +399,12 @@ def _merge_pricing(sidecar: dict, updates: dict, litellm_ran: bool) -> bool:
     could not be fetched this run, the existing block is kept as the baseline so a
     transient outage never wipes pricing. Returns True if the block changed.
     Network/parse failures are non-fatal — stale pricing beats aborting the run.
+
+    Believed-free models are always stripped from the final block. Some providers
+    (e.g. Cloudflare) have a paid-tier per-token price in the LiteLLM map even
+    though their free plan is quota-limited rather than zero-priced. Keeping those
+    entries causes compute_cost() to attribute a cost to every free-tier request,
+    which eventually lands the model in cost_observed_free_tier and breaks routing.
     """
     existing = sidecar.get("pricing")
     if not isinstance(existing, dict):
@@ -412,6 +418,12 @@ def _merge_pricing(sidecar: dict, updates: dict, litellm_ran: bool) -> bool:
             baseline = existing
     overrides = _collect_source_pricing(updates)
     merged = {**baseline, **overrides}
+    # Strip any model that is currently believed_free — their cost accounting
+    # belongs in the free-tier path, not the paid pricing block.
+    free_models: set[str] = set()
+    for prov_data in sidecar.get("providers", {}).values():
+        free_models.update(m.lower() for m in prov_data.get("believed_free", []))
+    merged = {k: v for k, v in merged.items() if k not in free_models}
     final = dict(sorted(merged.items()))
     if final == existing:
         return False
