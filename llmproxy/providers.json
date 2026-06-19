@@ -63,8 +63,12 @@
       "base_url": "https://inference-api.nousresearch.com/v1",
       "key_required": true,
       "key_hint": "Get your API key at nousresearch.com",
-      "believed_free": [],
-      "model_reasoning": {},
+      "believed_free": [
+        "nous/stepfun/step-3.7-flash:free"
+      ],
+      "model_reasoning": {
+        "nous/stepfun/step-3.7-flash:free": "exploratory"
+      },
       "free_limits": {},
       "fallback_models": []
     },
