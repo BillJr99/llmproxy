@@ -53,7 +53,7 @@ class EndpointProbeSource(Source):
 
         # Build set of believed_free :free-suffixed models per provider.
         believed_free_per_provider: dict[str, set[str]] = {}
-        for prov_name, prov_data in sidecar.get("providers", {}).items():
+        for _prov_name, prov_data in sidecar.get("providers", {}).items():
             for qualified in prov_data.get("believed_free", []):
                 if "/" not in qualified:
                     continue

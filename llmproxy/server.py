@@ -1429,12 +1429,13 @@ def _maybe_fire_endpoint_probe(
     freq_min = ep_cfg.get("frequency_minutes", 30)
     freq_days = freq_min / 1440.0
     try:
-        import sys, os as _os
+        import os as _os
+        import sys
         repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
         if repo_root not in sys.path:
             sys.path.insert(0, repo_root)
-        from scripts.update_free_models import _probe_due
         from llmproxy.config import load_endpoint_probe_state
+        from scripts.update_free_models import _probe_due
     except Exception:  # noqa: BLE001 — scripts/ may not be available
         return
     state = load_endpoint_probe_state(config_path)
@@ -1471,12 +1472,13 @@ def _maybe_fire_cost_probe(
     cost_probe_cfg = free_tier.get("cost_probe", {})
     freq_days = cost_probe_cfg.get("frequency_days", 0)
     try:
-        import sys, os as _os
+        import os as _os
+        import sys
         repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
         if repo_root not in sys.path:
             sys.path.insert(0, repo_root)
-        from scripts.update_free_models import _probe_due
         from llmproxy.config import load_cost_probe_state
+        from scripts.update_free_models import _probe_due
     except Exception:  # noqa: BLE001
         return
     state = load_cost_probe_state(config_path)
@@ -1516,13 +1518,14 @@ def _maybe_fire_pr_if_due(config: dict, config_path: str | None) -> None:
     if not freq_days or freq_days <= 0:
         return  # no throttle configured — PR is opened immediately after updates
     try:
-        import sys, os as _os
+        import os as _os
+        import sys
         repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
         if repo_root not in sys.path:
             sys.path.insert(0, repo_root)
-        from scripts.update_free_models import _probe_due
         from llmproxy.config import load_pr_state
         from llmproxy.providers import DATA_PATH as _DATA_PATH
+        from scripts.update_free_models import _probe_due
     except Exception:  # noqa: BLE001
         return
     pr_state = load_pr_state(config_path)
@@ -1648,12 +1651,14 @@ def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: st
     freq_days = pr_cfg.get("frequency_days", 0)
     if freq_days and freq_days > 0:
         try:
-            import sys as _sys, os as _os2
+            import os as _os2
+            import sys as _sys
             repo_root = _os2.path.dirname(_os2.path.dirname(_os2.path.abspath(__file__)))
             if repo_root not in _sys.path:
                 _sys.path.insert(0, repo_root)
             from scripts.update_free_models import _probe_due
-            from .config import load_pr_state, save_pr_state as _save_pr_state
+
+            from .config import load_pr_state
         except Exception:  # noqa: BLE001
             _probe_due = None  # type: ignore[assignment]
         if _probe_due is not None:
@@ -1717,7 +1722,9 @@ def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: st
         if url:
             logger.info("[providers-pr] %s", url)
             try:
-                from datetime import UTC as _UTC, datetime as _datetime
+                from datetime import UTC as _UTC
+                from datetime import datetime as _datetime
+
                 from .config import save_pr_state as _save_pr_state2
                 _save_pr_state2({"last_pr_at": _datetime.now(_UTC).isoformat()})
             except Exception as _exc:  # noqa: BLE001

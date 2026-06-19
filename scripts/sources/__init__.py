@@ -7,11 +7,11 @@ Sources are registered in ALL_SOURCES so the CLI can enumerate them.
 from .api_models import ApiModelsSource
 from .base import Evidence, Source
 from .community import CommunitySource
+from .cost_probe import CostProbeSource
+from .endpoint_probe import EndpointProbeSource
 from .fireworks import FireworksSource
 from .litellm_cost_map import LiteLLMCostMapSource
 from .openrouter import OpenRouterSource
-from .cost_probe import CostProbeSource
-from .endpoint_probe import EndpointProbeSource
 from .together import TogetherSource
 
 ALL_SOURCES: dict[str, type[Source]] = {
