@@ -2943,6 +2943,37 @@ def _provider_exposes_to_virtual_models(provider_cfg: dict) -> bool:
     return provider_cfg.get("expose_to_virtual_models", True) is not False
 
 
+def _apply_favorite_free_ordering(
+    candidates: list[tuple[str, dict, str]],
+    config: dict,
+) -> list[tuple[str, dict, str]]:
+    """Promote favorite_free_models to the front in ranked order.
+
+    Only candidates already present in the pool are promoted — favorites not in
+    the pool (e.g. cost-observed, not believed_free) are silently skipped.
+    Non-matching candidates retain their existing order after the favorites.
+
+    Matching is case-insensitive and ignores :variant suffixes (e.g. :free,
+    :nitro) so that "x/y" matches both "x/y" and "x/y:free".
+    """
+    favorites = config.get("favorite_free_models", [])
+    if not favorites:
+        return candidates
+    remaining = list(candidates)
+    front: list[tuple[str, dict, str]] = []
+    for fav in favorites:
+        fav_lower = fav.lower()
+        for i, (pname, _pcfg, umodel) in enumerate(remaining):
+            umodel_lower = umodel.lower()
+            umodel_base = umodel_lower.split(":")[0]  # strip :variant suffix
+            qualified = f"{pname}/{umodel}".lower()
+            qualified_base = f"{pname}/{umodel_base}"
+            if fav_lower in (umodel_lower, umodel_base, qualified, qualified_base):
+                front.append(remaining.pop(i))
+                break
+    return front + remaining
+
+
 def _param_count(model_id: str) -> float:
     """Best-effort parameter count (in billions) parsed from a model id.
 
@@ -3436,6 +3467,7 @@ def _loadbalanced_ordered_candidates(
             continue
         if tier == _TIER_FREE:
             bucket = _quality_ordered_candidates(bucket, free_limits, reasoning_map)
+            bucket = _apply_favorite_free_ordering(bucket, config)
         elif tier == _TIER_LOCAL:
             # $0 like free — prefer the strongest local model (e.g. the larger
             # Ollama model) rather than rotating randomly.
@@ -4253,6 +4285,8 @@ def _proxy_endpoint(
             logger.info("  [%s] request-fit first-pick tier=%s", model_full, _target_reasoning_tier(payload))
         if needed:
             ordered = _order_by_capability(ordered, needed, _model_capabilities(config))
+        if is_free_virtual:
+            ordered = _apply_favorite_free_ordering(ordered, config)
         logger.info("  [%s] cycling through %d candidate(s)", model_full, len(ordered))
         if is_streaming:
             timeout = server_cfg.get("stream_timeout", 300)

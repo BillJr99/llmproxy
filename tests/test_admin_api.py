@@ -207,6 +207,47 @@ def test_put_believed_free_rejects_non_list(client):
     assert resp.status_code == 400
 
 
+# --------------------------------------------------------------------------- #
+# Favorite free models
+
+def test_get_favorite_free_models_default_empty(client):
+    resp = client.get("/admin/api/favorite-free-models")
+    assert resp.status_code == 200
+    assert resp.get_json()["favorite_free_models"] == []
+
+
+def test_put_favorite_free_models_valid(client, cfg_path):
+    favs = ["google/gemini-2.5-flash", "openai/gpt-4o-mini"]
+    resp = client.put("/admin/api/favorite-free-models", json=favs)
+    assert resp.status_code == 200
+    assert resp.get_json()["favorite_free_models"] == favs
+    assert _read_config(cfg_path)["favorite_free_models"] == favs
+
+
+def test_put_favorite_free_models_rejects_non_list(client):
+    resp = client.put("/admin/api/favorite-free-models", json={"model": "x"})
+    assert resp.status_code == 400
+
+
+def test_put_favorite_free_models_rejects_non_string_entries(client):
+    resp = client.put("/admin/api/favorite-free-models", json=["ok", 42])
+    assert resp.status_code == 400
+
+
+def test_favorite_free_models_in_config_get(client, cfg_path):
+    favs = ["google/gemini-flash"]
+    client.put("/admin/api/favorite-free-models", json=favs)
+    resp = client.get("/admin/api/config")
+    assert resp.status_code == 200
+    assert resp.get_json()["favorite_free_models"] == favs
+
+
+def test_get_favorite_free_models_round_trips_empty_list(client, cfg_path):
+    client.put("/admin/api/favorite-free-models", json=[])
+    resp = client.get("/admin/api/favorite-free-models")
+    assert resp.get_json()["favorite_free_models"] == []
+
+
 def test_put_model_reasoning_validates_level(client):
     resp = client.put("/admin/api/model-reasoning", json={"m": "ultra"})
     assert resp.status_code == 400
