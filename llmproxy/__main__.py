@@ -272,6 +272,10 @@ def main() -> None:
         # worker. The task spawns its own daemon thread, so it never blocks boot.
         def _post_worker_init(worker):  # noqa: ANN001 — gunicorn hook signature
             from .server import _run_startup_tasks_once
+            # Drop any config cache state inherited from the pre-fork master so
+            # this worker reads providers fresh from disk rather than serving a
+            # snapshot the master happened to cache before forking.
+            load_config(force_reload=True)
             _run_startup_tasks_once()
 
         workers = 2
