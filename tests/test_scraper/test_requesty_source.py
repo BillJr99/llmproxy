@@ -23,6 +23,7 @@ def test_free_models_emitted(fixtures_dir: Path, monkeypatch):
     by_id = {e.model_id: e for e in evs}
     assert by_id["requesty/nvidia/nemotron-3-super-120b-a12b"].is_free is True
     assert by_id["requesty/nvidia/nemotron-3-nano-30b-a3b"].is_free is True
+    assert by_id["requesty/google/gemma-4-31b-it"].is_free is True
     assert by_id["requesty/anthropic/claude-opus-4-7"].is_free is False
     assert by_id["requesty/openai/gpt-5.2"].is_free is False
 

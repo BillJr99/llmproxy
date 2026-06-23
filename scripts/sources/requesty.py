@@ -1,19 +1,20 @@
 """Requesty source — pricing-aware /v1/models detection.
 
 Requesty's `/v1/models` endpoint (OpenAI-compatible) returns pricing
-metadata per model. Models with zero input/output cost are genuinely free
-(Requesty publishes a small set of $0-cost models from upstream providers
-that host them for free, e.g. some Nemotron/Llama variants). Requires
-``REQUESTY_API_KEY`` in the environment; without it, the source yields
-nothing.
+metadata per model as flat top-level fields — `input_price`, `output_price`,
+`cached_price` — not nested under a `pricing` sub-object. Models with zero
+input/output cost are genuinely free (Requesty publishes a small set of
+$0-cost models from upstream providers that host them for free, e.g. some
+Nemotron and Poolside variants). Requires ``REQUESTY_API_KEY`` in the
+environment; without it, the source yields nothing.
 
 Model ids are already namespaced by upstream provider (e.g.
 "anthropic/claude-opus-4-7"); we prefix with our own provider key for the
 fully-qualified id, consistent with every other source.
 
-Pricing units are unverified against a live response (could be per-token,
-like OpenRouter, or per-million-tokens, like Together) — confirm once a
-real REQUESTY_API_KEY is available and adjust _to_float/_pricing if needed.
+Prices are plain per-token dollar amounts (confirmed against a live
+response), consistent with OpenRouter's convention rather than Together's
+per-million-token convention.
 """
 
 from __future__ import annotations
@@ -56,15 +57,8 @@ class RequestySource(Source):
             mid = model.get("id")
             if not mid:
                 continue
-            pricing = model.get("pricing") or {}
-            in_raw = pricing.get("input")
-            if in_raw is None:
-                in_raw = pricing.get("input_price")
-            out_raw = pricing.get("output")
-            if out_raw is None:
-                out_raw = pricing.get("output_price")
-            in_cost = _to_float(in_raw)
-            out_cost = _to_float(out_raw)
+            in_cost = _to_float(model.get("input_price"))
+            out_cost = _to_float(model.get("output_price"))
             is_free = (in_cost == 0.0 and out_cost == 0.0)
             out.append(Evidence(
                 provider="requesty",
@@ -74,7 +68,7 @@ class RequestySource(Source):
                 confidence="high",
                 url=self.url,
                 pricing=_pricing(in_cost, out_cost),
-                notes=f"input={pricing.get('input')!r} output={pricing.get('output')!r}",
+                notes=f"input_price={model.get('input_price')!r} output_price={model.get('output_price')!r}",
             ))
         return out
 
