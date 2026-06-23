@@ -25,6 +25,7 @@
     "deepseek",
     "cohere",
     "openrouter",
+    "requesty",
     "ollama-cloud",
     "moonshot",
     "minimax",
@@ -1388,6 +1389,17 @@
       "key_hint": "Get your API key at venice.ai/settings/api",
       "believed_free": [],
       "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "requesty": {
+      "display": "Requesty (LLM router)",
+      "base_url": "https://router.requesty.ai/v1",
+      "key_required": true,
+      "key_hint": "Get your API key at app.requesty.ai",
+      "believed_free": [],
+      "model_reasoning": {},
+      "model_capabilities": {},
       "free_limits": {},
       "fallback_models": []
     },

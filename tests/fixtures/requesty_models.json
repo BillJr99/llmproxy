@@ -1,0 +1,41 @@
+[
+  {
+    "id": "nvidia/nemotron-3-super-120b-a12b",
+    "object": "model",
+    "owned_by": "nvidia",
+    "input_price": 0,
+    "output_price": 0,
+    "cached_price": 0
+  },
+  {
+    "id": "nvidia/nemotron-3-nano-30b-a3b",
+    "object": "model",
+    "owned_by": "nvidia",
+    "input_price": 0,
+    "output_price": 0,
+    "cached_price": 0
+  },
+  {
+    "id": "google/gemma-4-31b-it",
+    "object": "model",
+    "owned_by": "google",
+    "input_price": 0,
+    "output_price": 0,
+    "cached_price": 0
+  },
+  {
+    "id": "anthropic/claude-opus-4-7",
+    "object": "model",
+    "owned_by": "anthropic",
+    "input_price": 0.000015,
+    "output_price": 0.000075,
+    "cached_price": 0.0000015
+  },
+  {
+    "id": "openai/gpt-5.2",
+    "object": "model",
+    "owned_by": "openai",
+    "input_price": 0.000002,
+    "output_price": 0.000008
+  }
+]

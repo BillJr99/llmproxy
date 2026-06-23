@@ -90,6 +90,11 @@
       "api_key": "sk-or-...",
       "model_filter": null
     },
+    "requesty": {
+      "base_url": "https://router.requesty.ai/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
     "ollama-cloud": {
       "base_url": "https://ollama.com/v1",
       "api_key": "...",

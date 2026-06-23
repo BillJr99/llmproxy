@@ -1284,6 +1284,8 @@ for human review.
 | `api`        | medium     | Calls each provider's OpenAI-compatible `/v1/models` endpoint when `<PROVIDER>_API_KEY` is set in your environment. Used to detect *removals* (a believed-free model that's no longer listed). |
 | `litellm_cost_map` | medium | Reads the public [litellm](https://github.com/BerriAI/litellm) pricing map: flags zero-priced models as free **and** snapshots per-token prices for paid ones into the sidecar `pricing` block (used by the proxy to cost tokens offline — see [Token + cost accounting](#usage-accounting)). |
 | `together`   | high       | When `TOGETHER_API_KEY` is set, reads Together's `/v1/models` pricing — zero-priced models are free; paid models contribute per-token prices to the `pricing` block. |
+| `fireworks`  | high       | When `FIREWORKS_API_KEY` is set, reads Fireworks' `/inference/v1/models` and flags models marked `is_free`/`serverless_billing: free` or zero-priced as free. |
+| `requesty`   | high       | When `REQUESTY_API_KEY` is set, reads Requesty's `/v1/models` pricing — zero-priced models are free; paid models contribute per-token prices to the `pricing` block. |
 | `community`  | low        | Pulls the [tashfeenahmed/freellmapi](https://github.com/tashfeenahmed/freellmapi) community list as a sanity signal. |
 | `probe`      | high · **opt-in** | Sends a tiny real chat request to each `believed_free` model and flags any that report a cost. Off by default; enable with `probe_cost: true` in `config.json` or the `--probe` flag. Spends a little quota. |
 
