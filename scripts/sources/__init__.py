@@ -12,6 +12,7 @@ from .endpoint_probe import EndpointProbeSource
 from .fireworks import FireworksSource
 from .litellm_cost_map import LiteLLMCostMapSource
 from .openrouter import OpenRouterSource
+from .requesty import RequestySource
 from .together import TogetherSource
 
 ALL_SOURCES: dict[str, type[Source]] = {
@@ -21,6 +22,7 @@ ALL_SOURCES: dict[str, type[Source]] = {
     "litellm_cost_map": LiteLLMCostMapSource,
     "together": TogetherSource,
     "fireworks": FireworksSource,
+    "requesty": RequestySource,
     # Active cost probe. Excluded from the default source set because it sends
     # real requests; opt in via free_tier.cost_probe.enabled or --cost-probe.
     "cost_probe": CostProbeSource,
