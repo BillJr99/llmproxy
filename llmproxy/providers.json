@@ -108,22 +108,18 @@
       "believed_free": [
         "google/gemini-2.0-flash",
         "google/gemini-2.0-flash-lite",
-        "google/gemini-2.5-flash",
+        "google/gemini-2.5-computer-use-preview-10-2025",
         "google/gemini-2.5-flash-image",
-        "google/gemini-2.5-flash-lite",
         "google/gemini-2.5-flash-lite-preview-09-2025",
         "google/gemini-2.5-flash-native-audio-preview-12-2025",
         "google/gemini-2.5-flash-preview-09-2025",
         "google/gemini-2.5-pro",
-        "google/gemini-3-flash-preview",
         "google/gemini-3-pro-image",
         "google/gemini-3-pro-preview",
         "google/gemini-3.1-flash-image",
-        "google/gemini-3.1-flash-lite",
-        "google/gemini-3.1-flash-lite-preview",
+        "google/gemini-3.1-flash-lite-image",
         "google/gemini-3.1-flash-tts-preview",
         "google/gemini-3.1-pro-preview",
-        "google/gemini-3.5-flash",
         "google/gemini-3.5-live-translate-preview",
         "google/gemma-3-12b-it",
         "google/gemma-3-1b-it",
@@ -133,6 +129,7 @@
       "model_reasoning": {
         "google/gemini-2.0-flash": "exploratory",
         "google/gemini-2.0-flash-lite": "exploratory",
+        "google/gemini-2.5-computer-use-preview-10-2025": "exploratory",
         "google/gemini-2.5-flash": "standard",
         "google/gemini-2.5-flash-image": "exploratory",
         "google/gemini-2.5-flash-lite": "exploratory",
@@ -145,6 +142,7 @@
         "google/gemini-3-pro-preview": "exploratory",
         "google/gemini-3.1-flash-image": "exploratory",
         "google/gemini-3.1-flash-lite": "exploratory",
+        "google/gemini-3.1-flash-lite-image": "exploratory",
         "google/gemini-3.1-flash-lite-preview": "exploratory",
         "google/gemini-3.1-flash-tts-preview": "exploratory",
         "google/gemini-3.1-pro-preview": "exploratory",
@@ -212,12 +210,12 @@
       "key_required": true,
       "key_hint": "Get your API key at cloud.cerebras.ai",
       "believed_free": [
-        "cerebras/gpt-oss-120b",
+        "cerebras/gemma-4-31b1",
         "cerebras/llama3.1-8b",
-        "cerebras/qwen-3-235b-a22b-instruct-2507",
-        "cerebras/zai-glm-4.7"
+        "cerebras/qwen-3-235b-a22b-instruct-2507"
       ],
       "model_reasoning": {
+        "cerebras/gemma-4-31b1": "exploratory",
         "cerebras/gpt-oss-120b": "deep",
         "cerebras/llama3.1-8b": "exploratory",
         "cerebras/qwen-3-235b-a22b-instruct-2507": "deep",
@@ -558,16 +556,10 @@
         "groq/gemma2-9b-it",
         "groq/groq/compound",
         "groq/groq/compound-mini",
-        "groq/llama-3.1-8b-instant",
         "groq/llama-4-scout-17b-16e-instruct",
-        "groq/meta-llama/llama-4-scout-17b-16e-instruct",
         "groq/meta-llama/llama-prompt-guard-2-22m",
         "groq/meta-llama/llama-prompt-guard-2-86m",
         "groq/mixtral-8x7b-32768",
-        "groq/openai/gpt-oss-120b",
-        "groq/openai/gpt-oss-20b",
-        "groq/openai/gpt-oss-safeguard-20b",
-        "groq/qwen/qwen3-32b",
         "groq/qwen/qwen3.6-27b",
         "groq/whisper-large-v3",
         "groq/whisper-large-v3-turbo"
@@ -642,23 +634,11 @@
           "tokens_per_minute": 70000,
           "tokens_per_day": null
         },
-        "groq/llama-3.1-8b-instant": {
-          "requests_per_minute": 30,
-          "requests_per_day": 14400,
-          "tokens_per_minute": 6000,
-          "tokens_per_day": 500000
-        },
         "groq/llama-4-scout-17b-16e-instruct": {
           "requests_per_minute": 30,
           "requests_per_day": 1000,
           "tokens_per_minute": 6000,
           "tokens_per_day": 1000000
-        },
-        "groq/meta-llama/llama-4-scout-17b-16e-instruct": {
-          "requests_per_minute": 30,
-          "requests_per_day": 1000,
-          "tokens_per_minute": 30000,
-          "tokens_per_day": 500000
         },
         "groq/meta-llama/llama-prompt-guard-2-22m": {
           "requests_per_minute": 30,
@@ -677,30 +657,6 @@
           "requests_per_day": 14400,
           "tokens_per_minute": null,
           "tokens_per_day": null
-        },
-        "groq/openai/gpt-oss-120b": {
-          "requests_per_minute": 30,
-          "requests_per_day": 1000,
-          "tokens_per_minute": 8000,
-          "tokens_per_day": 200000
-        },
-        "groq/openai/gpt-oss-20b": {
-          "requests_per_minute": 30,
-          "requests_per_day": 1000,
-          "tokens_per_minute": 8000,
-          "tokens_per_day": 200000
-        },
-        "groq/openai/gpt-oss-safeguard-20b": {
-          "requests_per_minute": 30,
-          "requests_per_day": 1000,
-          "tokens_per_minute": 8000,
-          "tokens_per_day": 200000
-        },
-        "groq/qwen/qwen3-32b": {
-          "requests_per_minute": 60,
-          "requests_per_day": 1000,
-          "tokens_per_minute": 6000,
-          "tokens_per_day": 500000
         },
         "groq/qwen/qwen3.6-27b": {
           "requests_per_minute": 30,
@@ -1037,7 +993,6 @@
         "openrouter/liquid/lfm-2.5-1.2b-thinking:free",
         "openrouter/meta-llama/llama-3.2-3b-instruct:free",
         "openrouter/meta-llama/llama-3.3-70b-instruct:free",
-        "openrouter/nex-agi/nex-n2-pro:free",
         "openrouter/nousresearch/hermes-3-llama-3.1-405b:free",
         "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
         "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
@@ -1051,6 +1006,7 @@
         "openrouter/openrouter/free",
         "openrouter/openrouter/owl-alpha",
         "openrouter/poolside/laguna-m.1:free",
+        "openrouter/poolside/laguna-xs-2.1:free",
         "openrouter/poolside/laguna-xs.2:free",
         "openrouter/qwen/qwen3-coder:free",
         "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"
@@ -1085,6 +1041,7 @@
         "openrouter/openrouter/free": "exploratory",
         "openrouter/openrouter/owl-alpha": "exploratory",
         "openrouter/poolside/laguna-m.1:free": "exploratory",
+        "openrouter/poolside/laguna-xs-2.1:free": "exploratory",
         "openrouter/poolside/laguna-xs.2:free": "exploratory",
         "openrouter/qwen/qwen-2.5-7b-instruct:free": "exploratory",
         "openrouter/qwen/qwen3-coder:free": "deep",
@@ -1158,12 +1115,6 @@
         "openrouter/meta-llama/llama-3.3-70b-instruct:free": [
           "tools"
         ],
-        "openrouter/nex-agi/nex-n2-pro:free": [
-          "tools",
-          "vision",
-          "reasoning",
-          "json"
-        ],
         "openrouter/nvidia/nemotron-3-nano-30b-a3b:free": [
           "tools",
           "reasoning"
@@ -1216,6 +1167,10 @@
           "json"
         ],
         "openrouter/poolside/laguna-m.1:free": [
+          "tools",
+          "reasoning"
+        ],
+        "openrouter/poolside/laguna-xs-2.1:free": [
           "tools",
           "reasoning"
         ],
@@ -1652,10 +1607,6 @@
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 4e-07
     },
-    "cerebras/gpt-oss-120b": {
-      "input_cost_per_token": 3.5e-07,
-      "output_cost_per_token": 7.5e-07
-    },
     "cerebras/llama-3.3-70b": {
       "input_cost_per_token": 8.5e-07,
       "output_cost_per_token": 1.2e-06
@@ -1664,19 +1615,11 @@
       "input_cost_per_token": 6e-07,
       "output_cost_per_token": 6e-07
     },
-    "cerebras/llama3.1-8b": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 1e-07
-    },
     "cerebras/qwen-3-32b": {
       "input_cost_per_token": 4e-07,
       "output_cost_per_token": 8e-07
     },
     "cerebras/zai-glm-4.6": {
-      "input_cost_per_token": 2.25e-06,
-      "output_cost_per_token": 2.75e-06
-    },
-    "cerebras/zai-glm-4.7": {
       "input_cost_per_token": 2.25e-06,
       "output_cost_per_token": 2.75e-06
     },
@@ -1700,25 +1643,17 @@
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 2e-06
     },
-    "cohere/command-r": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 6e-07
-    },
     "cohere/command-r-08-2024": {
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 6e-07
-    },
-    "cohere/command-r-plus": {
-      "input_cost_per_token": 2.5e-06,
-      "output_cost_per_token": 1e-05
     },
     "cohere/command-r-plus-08-2024": {
       "input_cost_per_token": 2.5e-06,
       "output_cost_per_token": 1e-05
     },
     "cohere/command-r7b-12-2024": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 3.75e-08
+      "input_cost_per_token": 3.75e-08,
+      "output_cost_per_token": 1.5e-07
     },
     "deepseek/deepseek-chat": {
       "input_cost_per_token": 2.8e-07,
@@ -1743,6 +1678,14 @@
     "deepseek/deepseek-v3.2": {
       "input_cost_per_token": 2.8e-07,
       "output_cost_per_token": 4e-07
+    },
+    "deepseek/deepseek-v4-flash": {
+      "input_cost_per_token": 1.4e-07,
+      "output_cost_per_token": 2.8e-07
+    },
+    "deepseek/deepseek-v4-pro": {
+      "input_cost_per_token": 4.35e-07,
+      "output_cost_per_token": 8.7e-07
     },
     "fireworks/accounts/fireworks/models/chronos-hermes-13b-v2": {
       "input_cost_per_token": 2e-07,
@@ -1940,6 +1883,14 @@
       "input_cost_per_token": 5.6e-07,
       "output_cost_per_token": 1.68e-06
     },
+    "fireworks/accounts/fireworks/models/deepseek-v4-flash": {
+      "input_cost_per_token": 1.4e-07,
+      "output_cost_per_token": 2.8e-07
+    },
+    "fireworks/accounts/fireworks/models/deepseek-v4-pro": {
+      "input_cost_per_token": 1.74e-06,
+      "output_cost_per_token": 3.48e-06
+    },
     "fireworks/accounts/fireworks/models/devstral-small-2505": {
       "input_cost_per_token": 9e-07,
       "output_cost_per_token": 9e-07
@@ -2044,13 +1995,17 @@
       "input_cost_per_token": 1.4e-06,
       "output_cost_per_token": 4.4e-06
     },
+    "fireworks/accounts/fireworks/models/glm-5p2": {
+      "input_cost_per_token": 1.4e-06,
+      "output_cost_per_token": 4.4e-06
+    },
     "fireworks/accounts/fireworks/models/gpt-oss-120b": {
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 6e-07
     },
     "fireworks/accounts/fireworks/models/gpt-oss-20b": {
-      "input_cost_per_token": 5e-08,
-      "output_cost_per_token": 2e-07
+      "input_cost_per_token": 7e-08,
+      "output_cost_per_token": 3e-07
     },
     "fireworks/accounts/fireworks/models/gpt-oss-safeguard-120b": {
       "input_cost_per_token": 1.2e-06,
@@ -2103,6 +2058,14 @@
     "fireworks/accounts/fireworks/models/kimi-k2p5": {
       "input_cost_per_token": 6e-07,
       "output_cost_per_token": 3e-06
+    },
+    "fireworks/accounts/fireworks/models/kimi-k2p6": {
+      "input_cost_per_token": 9.5e-07,
+      "output_cost_per_token": 4e-06
+    },
+    "fireworks/accounts/fireworks/models/kimi-k2p7-code": {
+      "input_cost_per_token": 9.5e-07,
+      "output_cost_per_token": 4e-06
     },
     "fireworks/accounts/fireworks/models/llama-guard-2-8b": {
       "input_cost_per_token": 2e-07,
@@ -2233,6 +2196,14 @@
       "output_cost_per_token": 1.2e-06
     },
     "fireworks/accounts/fireworks/models/minimax-m2p1": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "fireworks/accounts/fireworks/models/minimax-m2p7": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "fireworks/accounts/fireworks/models/minimax-m3": {
       "input_cost_per_token": 3e-07,
       "output_cost_per_token": 1.2e-06
     },
@@ -2648,6 +2619,10 @@
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 2e-07
     },
+    "fireworks/accounts/fireworks/models/qwen3p7-plus": {
+      "input_cost_per_token": 4e-07,
+      "output_cost_per_token": 1.6e-06
+    },
     "fireworks/accounts/fireworks/models/qwq-32b": {
       "input_cost_per_token": 9e-07,
       "output_cost_per_token": 9e-07
@@ -2712,6 +2687,26 @@
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 2e-07
     },
+    "fireworks/accounts/fireworks/routers/glm-5p1-fast": {
+      "input_cost_per_token": 2.8e-06,
+      "output_cost_per_token": 8.8e-06
+    },
+    "fireworks/accounts/fireworks/routers/kimi-k2p6-fast": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 8e-06
+    },
+    "fireworks/accounts/fireworks/routers/kimi-k2p7-code-fast": {
+      "input_cost_per_token": 1.9e-06,
+      "output_cost_per_token": 8e-06
+    },
+    "fireworks/deepseek-v4-flash": {
+      "input_cost_per_token": 1.4e-07,
+      "output_cost_per_token": 2.8e-07
+    },
+    "fireworks/deepseek-v4-pro": {
+      "input_cost_per_token": 1.74e-06,
+      "output_cost_per_token": 3.48e-06
+    },
     "fireworks/fireworks-ai-4.1b-to-16b": {
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 2e-07
@@ -2740,25 +2735,61 @@
       "input_cost_per_token": 1.4e-06,
       "output_cost_per_token": 4.4e-06
     },
+    "fireworks/glm-5p1-fast": {
+      "input_cost_per_token": 2.8e-06,
+      "output_cost_per_token": 8.8e-06
+    },
+    "fireworks/glm-5p2": {
+      "input_cost_per_token": 1.4e-06,
+      "output_cost_per_token": 4.4e-06
+    },
+    "fireworks/gpt-oss-120b": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "fireworks/gpt-oss-20b": {
+      "input_cost_per_token": 7e-08,
+      "output_cost_per_token": 3e-07
+    },
     "fireworks/kimi-k2p5": {
       "input_cost_per_token": 6e-07,
       "output_cost_per_token": 3e-06
+    },
+    "fireworks/kimi-k2p6": {
+      "input_cost_per_token": 9.5e-07,
+      "output_cost_per_token": 4e-06
+    },
+    "fireworks/kimi-k2p6-fast": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 8e-06
+    },
+    "fireworks/kimi-k2p7-code": {
+      "input_cost_per_token": 9.5e-07,
+      "output_cost_per_token": 4e-06
+    },
+    "fireworks/kimi-k2p7-code-fast": {
+      "input_cost_per_token": 1.9e-06,
+      "output_cost_per_token": 8e-06
     },
     "fireworks/minimax-m2p1": {
       "input_cost_per_token": 3e-07,
       "output_cost_per_token": 1.2e-06
     },
-    "google/gemini-2.0-flash": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 4e-07
+    "fireworks/minimax-m2p7": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "fireworks/minimax-m3": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "fireworks/qwen3p7-plus": {
+      "input_cost_per_token": 4e-07,
+      "output_cost_per_token": 1.6e-06
     },
     "google/gemini-2.0-flash-001": {
       "input_cost_per_token": 1e-07,
       "output_cost_per_token": 4e-07
-    },
-    "google/gemini-2.0-flash-lite": {
-      "input_cost_per_token": 7.5e-08,
-      "output_cost_per_token": 3e-07
     },
     "google/gemini-2.0-flash-lite-001": {
       "input_cost_per_token": 7.5e-08,
@@ -2768,19 +2799,7 @@
       "input_cost_per_token": 1.25e-06,
       "output_cost_per_token": 1e-05
     },
-    "google/gemini-2.5-flash": {
-      "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 2.5e-06
-    },
-    "google/gemini-2.5-flash-lite": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 4e-07
-    },
     "google/gemini-2.5-flash-lite-preview-06-17": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 4e-07
-    },
-    "google/gemini-2.5-flash-lite-preview-09-2025": {
       "input_cost_per_token": 1e-07,
       "output_cost_per_token": 4e-07
     },
@@ -2792,53 +2811,17 @@
       "input_cost_per_token": 3e-07,
       "output_cost_per_token": 2.5e-06
     },
-    "google/gemini-2.5-flash-native-audio-preview-12-2025": {
-      "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 2.5e-06
-    },
-    "google/gemini-2.5-flash-preview-09-2025": {
-      "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 2.5e-06
-    },
-    "google/gemini-2.5-pro": {
-      "input_cost_per_token": 1.25e-06,
-      "output_cost_per_token": 1e-05
-    },
     "google/gemini-2.5-pro-preview-tts": {
       "input_cost_per_token": 1.25e-06,
       "output_cost_per_token": 1e-05
-    },
-    "google/gemini-3-flash-preview": {
-      "input_cost_per_token": 5e-07,
-      "output_cost_per_token": 3e-06
-    },
-    "google/gemini-3-pro-preview": {
-      "input_cost_per_token": 2e-06,
-      "output_cost_per_token": 1.2e-05
-    },
-    "google/gemini-3.1-flash-lite": {
-      "input_cost_per_token": 2.5e-07,
-      "output_cost_per_token": 1.5e-06
-    },
-    "google/gemini-3.1-flash-lite-preview": {
-      "input_cost_per_token": 2.5e-07,
-      "output_cost_per_token": 1.5e-06
     },
     "google/gemini-3.1-flash-live-preview": {
       "input_cost_per_token": 7.5e-07,
       "output_cost_per_token": 4.5e-06
     },
-    "google/gemini-3.1-pro-preview": {
-      "input_cost_per_token": 2e-06,
-      "output_cost_per_token": 1.2e-05
-    },
     "google/gemini-3.1-pro-preview-customtools": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1.2e-05
-    },
-    "google/gemini-3.5-flash": {
-      "input_cost_per_token": 1.5e-06,
-      "output_cost_per_token": 9e-06
     },
     "google/gemini-exp-1206": {
       "input_cost_per_token": 3e-07,
@@ -2880,10 +2863,6 @@
       "input_cost_per_token": 5e-08,
       "output_cost_per_token": 8e-08
     },
-    "groq/llama-3.1-8b-instant": {
-      "input_cost_per_token": 5e-08,
-      "output_cost_per_token": 8e-08
-    },
     "groq/llama-3.3-70b-versatile": {
       "input_cost_per_token": 5.9e-07,
       "output_cost_per_token": 7.9e-07
@@ -2892,10 +2871,6 @@
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 6e-07
     },
-    "groq/meta-llama/llama-4-scout-17b-16e-instruct": {
-      "input_cost_per_token": 1.1e-07,
-      "output_cost_per_token": 3.4e-07
-    },
     "groq/meta-llama/llama-guard-4-12b": {
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 2e-07
@@ -2903,22 +2878,6 @@
     "groq/moonshotai/kimi-k2-instruct-0905": {
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 3e-06
-    },
-    "groq/openai/gpt-oss-120b": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 6e-07
-    },
-    "groq/openai/gpt-oss-20b": {
-      "input_cost_per_token": 7.5e-08,
-      "output_cost_per_token": 3e-07
-    },
-    "groq/openai/gpt-oss-safeguard-20b": {
-      "input_cost_per_token": 7.5e-08,
-      "output_cost_per_token": 3e-07
-    },
-    "groq/qwen/qwen3-32b": {
-      "input_cost_per_token": 2.9e-07,
-      "output_cost_per_token": 5.9e-07
     },
     "mistral/codestral-2405": {
       "input_cost_per_token": 1e-06,
@@ -3052,13 +3011,25 @@
       "input_cost_per_token": 4e-07,
       "output_cost_per_token": 2e-06
     },
+    "mistral/mistral-medium-2508": {
+      "input_cost_per_token": 4e-07,
+      "output_cost_per_token": 2e-06
+    },
+    "mistral/mistral-medium-2604": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 7.5e-06
+    },
     "mistral/mistral-medium-3-1-2508": {
       "input_cost_per_token": 4e-07,
       "output_cost_per_token": 2e-06
     },
+    "mistral/mistral-medium-3-5": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 7.5e-06
+    },
     "mistral/mistral-medium-latest": {
-      "input_cost_per_token": 4e-07,
-      "output_cost_per_token": 2e-06
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 7.5e-06
     },
     "mistral/mistral-small": {
       "input_cost_per_token": 1e-07,
@@ -3139,10 +3110,6 @@
     "moonshot/kimi-k2.6": {
       "input_cost_per_token": 9.5e-07,
       "output_cost_per_token": 4e-06
-    },
-    "moonshot/kimi-latest": {
-      "input_cost_per_token": 2e-06,
-      "output_cost_per_token": 5e-06
     },
     "moonshot/kimi-latest-128k": {
       "input_cost_per_token": 2e-06,
@@ -3252,10 +3219,6 @@
       "input_cost_per_token": 2.5e-07,
       "output_cost_per_token": 1.25e-06
     },
-    "openrouter/anthropic/claude-3.5-haiku": {
-      "input_cost_per_token": 8e-07,
-      "output_cost_per_token": 4e-06
-    },
     "openrouter/anthropic/claude-3.5-sonnet": {
       "input_cost_per_token": 3e-06,
       "output_cost_per_token": 1.5e-05
@@ -3288,10 +3251,6 @@
       "input_cost_per_token": 5e-06,
       "output_cost_per_token": 2.5e-05
     },
-    "openrouter/anthropic/claude-opus-4.6-fast": {
-      "input_cost_per_token": 3e-05,
-      "output_cost_per_token": 0.00015
-    },
     "openrouter/anthropic/claude-opus-4.7": {
       "input_cost_per_token": 5e-06,
       "output_cost_per_token": 2.5e-05
@@ -3320,13 +3279,17 @@
       "input_cost_per_token": 3e-06,
       "output_cost_per_token": 1.5e-05
     },
+    "openrouter/anthropic/claude-sonnet-5": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
     "openrouter/arcee-ai/coder-large": {
       "input_cost_per_token": 5e-07,
       "output_cost_per_token": 8e-07
     },
     "openrouter/arcee-ai/trinity-large-thinking": {
-      "input_cost_per_token": 2.2e-07,
-      "output_cost_per_token": 8.5e-07
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 8e-07
     },
     "openrouter/arcee-ai/trinity-mini": {
       "input_cost_per_token": 4.5e-08,
@@ -3385,8 +3348,8 @@
       "output_cost_per_token": 8.001e-07
     },
     "openrouter/deepseek/deepseek-chat-v3-0324": {
-      "input_cost_per_token": 2e-07,
-      "output_cost_per_token": 7.7e-07
+      "input_cost_per_token": 2.4e-07,
+      "output_cost_per_token": 9e-07
     },
     "openrouter/deepseek/deepseek-chat-v3.1": {
       "input_cost_per_token": 2.1e-07,
@@ -3423,10 +3386,6 @@
     "openrouter/deepseek/deepseek-v4-pro": {
       "input_cost_per_token": 4.35e-07,
       "output_cost_per_token": 8.7e-07
-    },
-    "openrouter/essentialai/rnj-1-instruct": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 1.5e-07
     },
     "openrouter/google/gemini-2.0-flash-001": {
       "input_cost_per_token": 1e-07,
@@ -3485,6 +3444,10 @@
       "output_cost_per_token": 3e-06
     },
     "openrouter/google/gemini-3.1-flash-lite": {
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 1.5e-06
+    },
+    "openrouter/google/gemini-3.1-flash-lite-image": {
       "input_cost_per_token": 2.5e-07,
       "output_cost_per_token": 1.5e-06
     },
@@ -3581,8 +3544,8 @@
       "output_cost_per_token": 1e-06
     },
     "openrouter/meta-llama/llama-3-70b-instruct": {
-      "input_cost_per_token": 5.1e-07,
-      "output_cost_per_token": 7.4e-07
+      "input_cost_per_token": 5.9e-07,
+      "output_cost_per_token": 7.9e-07
     },
     "openrouter/meta-llama/llama-3-8b-instruct": {
       "input_cost_per_token": 1.4e-07,
@@ -3625,12 +3588,8 @@
       "output_cost_per_token": 1.8e-07
     },
     "openrouter/microsoft/phi-4": {
-      "input_cost_per_token": 6.5e-08,
+      "input_cost_per_token": 7e-08,
       "output_cost_per_token": 1.4e-07
-    },
-    "openrouter/microsoft/phi-4-mini-instruct": {
-      "input_cost_per_token": 8e-08,
-      "output_cost_per_token": 3.5e-07
     },
     "openrouter/microsoft/wizardlm-2-8x22b": {
       "input_cost_per_token": 6.2e-07,
@@ -3646,23 +3605,23 @@
     },
     "openrouter/minimax/minimax-m2": {
       "input_cost_per_token": 2.55e-07,
-      "output_cost_per_token": 1e-06
+      "output_cost_per_token": 1.02e-06
     },
     "openrouter/minimax/minimax-m2-her": {
       "input_cost_per_token": 3e-07,
       "output_cost_per_token": 1.2e-06
     },
     "openrouter/minimax/minimax-m2.1": {
-      "input_cost_per_token": 2.9e-07,
-      "output_cost_per_token": 9.5e-07
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06
     },
     "openrouter/minimax/minimax-m2.5": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 9e-07
+      "input_cost_per_token": 1.2e-07,
+      "output_cost_per_token": 4.8e-07
     },
     "openrouter/minimax/minimax-m2.7": {
-      "input_cost_per_token": 2.5e-07,
-      "output_cost_per_token": 1e-06
+      "input_cost_per_token": 1.8e-07,
+      "output_cost_per_token": 7.2e-07
     },
     "openrouter/minimax/minimax-m3": {
       "input_cost_per_token": 3e-07,
@@ -3765,8 +3724,8 @@
       "output_cost_per_token": 2.025e-06
     },
     "openrouter/moonshotai/kimi-k2.6": {
-      "input_cost_per_token": 6.7e-07,
-      "output_cost_per_token": 3.5e-06
+      "input_cost_per_token": 6.6e-07,
+      "output_cost_per_token": 3.41e-06
     },
     "openrouter/moonshotai/kimi-k2.7-code": {
       "input_cost_per_token": 7.4e-07,
@@ -3779,6 +3738,10 @@
     "openrouter/morph/morph-v3-large": {
       "input_cost_per_token": 9e-07,
       "output_cost_per_token": 1.9e-06
+    },
+    "openrouter/nex-agi/nex-n2-pro": {
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 1e-06
     },
     "openrouter/nousresearch/hermes-3-llama-3.1-405b": {
       "input_cost_per_token": 1e-06,
@@ -3805,7 +3768,7 @@
       "output_cost_per_token": 2e-07
     },
     "openrouter/nvidia/nemotron-3-super-120b-a12b": {
-      "input_cost_per_token": 9e-08,
+      "input_cost_per_token": 8e-08,
       "output_cost_per_token": 4.5e-07
     },
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b": {
@@ -4001,8 +3964,8 @@
       "output_cost_per_token": 3e-05
     },
     "openrouter/openai/gpt-oss-120b": {
-      "input_cost_per_token": 3.9e-08,
-      "output_cost_per_token": 1.8e-07
+      "input_cost_per_token": 3e-08,
+      "output_cost_per_token": 1.5e-07
     },
     "openrouter/openai/gpt-oss-20b": {
       "input_cost_per_token": 2.9e-08,
@@ -4080,13 +4043,13 @@
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 4e-07
     },
+    "openrouter/poolside/laguna-xs-2.1": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 1.2e-07
+    },
     "openrouter/poolside/laguna-xs.2": {
       "input_cost_per_token": 1e-07,
       "output_cost_per_token": 2e-07
-    },
-    "openrouter/prime-intellect/intellect-3": {
-      "input_cost_per_token": 2e-07,
-      "output_cost_per_token": 1.1e-06
     },
     "openrouter/qwen/qwen-2.5-72b-instruct": {
       "input_cost_per_token": 3.6e-07,
@@ -4133,8 +4096,8 @@
       "output_cost_per_token": 1e-07
     },
     "openrouter/qwen/qwen3-235b-a22b-thinking-2507": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 1e-07
+      "input_cost_per_token": 1.495e-07,
+      "output_cost_per_token": 1.495e-06
     },
     "openrouter/qwen/qwen3-30b-a3b": {
       "input_cost_per_token": 1.2e-07,
@@ -4145,16 +4108,16 @@
       "output_cost_per_token": 1.9305e-07
     },
     "openrouter/qwen/qwen3-30b-a3b-thinking-2507": {
-      "input_cost_per_token": 8e-08,
-      "output_cost_per_token": 4e-07
+      "input_cost_per_token": 1.3e-07,
+      "output_cost_per_token": 1.56e-06
     },
     "openrouter/qwen/qwen3-32b": {
       "input_cost_per_token": 8e-08,
       "output_cost_per_token": 2.8e-07
     },
     "openrouter/qwen/qwen3-8b": {
-      "input_cost_per_token": 5e-08,
-      "output_cost_per_token": 4e-07
+      "input_cost_per_token": 1.17e-07,
+      "output_cost_per_token": 4.55e-07
     },
     "openrouter/qwen/qwen3-coder": {
       "input_cost_per_token": 2.2e-07,
@@ -4213,8 +4176,8 @@
       "output_cost_per_token": 4.16e-07
     },
     "openrouter/qwen/qwen3-vl-8b-instruct": {
-      "input_cost_per_token": 8e-08,
-      "output_cost_per_token": 5e-07
+      "input_cost_per_token": 1.17e-07,
+      "output_cost_per_token": 4.55e-07
     },
     "openrouter/qwen/qwen3-vl-8b-thinking": {
       "input_cost_per_token": 1.17e-07,
@@ -4253,8 +4216,8 @@
       "output_cost_per_token": 1.8e-06
     },
     "openrouter/qwen/qwen3.6-27b": {
-      "input_cost_per_token": 2.885e-07,
-      "output_cost_per_token": 3.17e-06
+      "input_cost_per_token": 2.85e-07,
+      "output_cost_per_token": 2.4e-06
     },
     "openrouter/qwen/qwen3.6-35b-a3b": {
       "input_cost_per_token": 1.4e-07,
@@ -4296,6 +4259,10 @@
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 3e-06
     },
+    "openrouter/sakana/fugu-ultra": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 3e-05
+    },
     "openrouter/sao10k/l3-lunaris-8b": {
       "input_cost_per_token": 4e-08,
       "output_cost_per_token": 5e-08
@@ -4313,7 +4280,7 @@
       "output_cost_per_token": 7.5e-07
     },
     "openrouter/stepfun/step-3.5-flash": {
-      "input_cost_per_token": 9e-08,
+      "input_cost_per_token": 1e-07,
       "output_cost_per_token": 3e-07
     },
     "openrouter/stepfun/step-3.7-flash": {
@@ -4329,16 +4296,16 @@
       "output_cost_per_token": 5.7e-07
     },
     "openrouter/tencent/hy3-preview": {
-      "input_cost_per_token": 6.6e-08,
-      "output_cost_per_token": 2.6e-07
+      "input_cost_per_token": 6.3e-08,
+      "output_cost_per_token": 2.1e-07
     },
     "openrouter/thedrummer/cydonia-24b-v4.1": {
       "input_cost_per_token": 3e-07,
       "output_cost_per_token": 5e-07
     },
     "openrouter/thedrummer/rocinante-12b": {
-      "input_cost_per_token": 1.7e-07,
-      "output_cost_per_token": 4.3e-07
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 5e-07
     },
     "openrouter/thedrummer/skyfall-36b-v2": {
       "input_cost_per_token": 5.5e-07,
@@ -4385,7 +4352,7 @@
       "output_cost_per_token": 3e-07
     },
     "openrouter/xiaomi/mimo-v2.5": {
-      "input_cost_per_token": 1.4e-07,
+      "input_cost_per_token": 1.05e-07,
       "output_cost_per_token": 2.8e-07
     },
     "openrouter/xiaomi/mimo-v2.5-pro": {
@@ -4433,12 +4400,16 @@
       "output_cost_per_token": 4e-06
     },
     "openrouter/z-ai/glm-5.1": {
-      "input_cost_per_token": 9.8e-07,
-      "output_cost_per_token": 3.08e-06
+      "input_cost_per_token": 9.66e-07,
+      "output_cost_per_token": 3.036e-06
     },
     "openrouter/z-ai/glm-5.2": {
+      "input_cost_per_token": 7.7e-07,
+      "output_cost_per_token": 2.42e-06
+    },
+    "openrouter/z-ai/glm-5v-turbo": {
       "input_cost_per_token": 1.2e-06,
-      "output_cost_per_token": 4.1e-06
+      "output_cost_per_token": 4e-06
     },
     "openrouter/~anthropic/claude-fable-latest": {
       "input_cost_per_token": 1e-05,
@@ -4453,8 +4424,8 @@
       "output_cost_per_token": 2.5e-05
     },
     "openrouter/~anthropic/claude-sonnet-latest": {
-      "input_cost_per_token": 3e-06,
-      "output_cost_per_token": 1.5e-05
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
     },
     "openrouter/~google/gemini-flash-latest": {
       "input_cost_per_token": 1.5e-06,
@@ -4465,8 +4436,8 @@
       "output_cost_per_token": 1.2e-05
     },
     "openrouter/~moonshotai/kimi-latest": {
-      "input_cost_per_token": 6.7e-07,
-      "output_cost_per_token": 3.5e-06
+      "input_cost_per_token": 6.6e-07,
+      "output_cost_per_token": 3.41e-06
     },
     "openrouter/~openai/gpt-latest": {
       "input_cost_per_token": 5e-06,
@@ -4492,9 +4463,17 @@
       "input_cost_per_token": 3e-06,
       "output_cost_per_token": 4.5e-06
     },
-    "sambanova/gpt-oss-120b": {
+    "sambanova/deepseek-v3.2": {
       "input_cost_per_token": 3e-06,
       "output_cost_per_token": 4.5e-06
+    },
+    "sambanova/gemma-4-31b-it": {
+      "input_cost_per_token": 3.8e-07,
+      "output_cost_per_token": 1.15e-06
+    },
+    "sambanova/gpt-oss-120b": {
+      "input_cost_per_token": 2.2e-07,
+      "output_cost_per_token": 5.9e-07
     },
     "sambanova/llama-4-maverick-17b-128e-instruct": {
       "input_cost_per_token": 6.3e-07,
@@ -4529,8 +4508,8 @@
       "output_cost_per_token": 3e-07
     },
     "sambanova/minimax-m2.7": {
-      "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 1.2e-06
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 2.4e-06
     },
     "sambanova/qwen2-audio-7b-instruct": {
       "input_cost_per_token": 5e-07,

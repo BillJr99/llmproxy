@@ -228,31 +228,26 @@
     "nvidia/meta/llama-3.1-70b-instruct",
     "google/gemini-2.0-flash",
     "google/gemini-2.0-flash-lite",
-    "google/gemini-2.5-flash",
+    "google/gemini-2.5-computer-use-preview-10-2025",
     "google/gemini-2.5-flash-image",
-    "google/gemini-2.5-flash-lite",
     "google/gemini-2.5-flash-lite-preview-09-2025",
     "google/gemini-2.5-flash-native-audio-preview-12-2025",
     "google/gemini-2.5-flash-preview-09-2025",
     "google/gemini-2.5-pro",
-    "google/gemini-3-flash-preview",
     "google/gemini-3-pro-image",
     "google/gemini-3-pro-preview",
     "google/gemini-3.1-flash-image",
-    "google/gemini-3.1-flash-lite",
-    "google/gemini-3.1-flash-lite-preview",
+    "google/gemini-3.1-flash-lite-image",
     "google/gemini-3.1-flash-tts-preview",
     "google/gemini-3.1-pro-preview",
-    "google/gemini-3.5-flash",
     "google/gemini-3.5-live-translate-preview",
     "google/gemma-3-12b-it",
     "google/gemma-3-1b-it",
     "google/gemma-3-27b-it",
     "google/gemma-3-4b-it",
-    "cerebras/gpt-oss-120b",
+    "cerebras/gemma-4-31b1",
     "cerebras/llama3.1-8b",
     "cerebras/qwen-3-235b-a22b-instruct-2507",
-    "cerebras/zai-glm-4.7",
     "github/ai21-labs/AI21-Jamba-1.5-Large",
     "github/cohere/Cohere-command-r-08-2024",
     "github/cohere/Cohere-command-r-plus-08-2024",
@@ -296,16 +291,10 @@
     "groq/gemma2-9b-it",
     "groq/groq/compound",
     "groq/groq/compound-mini",
-    "groq/llama-3.1-8b-instant",
     "groq/llama-4-scout-17b-16e-instruct",
-    "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     "groq/meta-llama/llama-prompt-guard-2-22m",
     "groq/meta-llama/llama-prompt-guard-2-86m",
     "groq/mixtral-8x7b-32768",
-    "groq/openai/gpt-oss-120b",
-    "groq/openai/gpt-oss-20b",
-    "groq/openai/gpt-oss-safeguard-20b",
-    "groq/qwen/qwen3-32b",
     "groq/qwen/qwen3.6-27b",
     "groq/whisper-large-v3",
     "groq/whisper-large-v3-turbo",
@@ -410,7 +399,6 @@
     "openrouter/liquid/lfm-2.5-1.2b-thinking:free",
     "openrouter/meta-llama/llama-3.2-3b-instruct:free",
     "openrouter/meta-llama/llama-3.3-70b-instruct:free",
-    "openrouter/nex-agi/nex-n2-pro:free",
     "openrouter/nousresearch/hermes-3-llama-3.1-405b:free",
     "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
     "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
@@ -424,6 +412,7 @@
     "openrouter/openrouter/free",
     "openrouter/openrouter/owl-alpha",
     "openrouter/poolside/laguna-m.1:free",
+    "openrouter/poolside/laguna-xs-2.1:free",
     "openrouter/poolside/laguna-xs.2:free",
     "openrouter/qwen/qwen3-coder:free",
     "openrouter/qwen/qwen3-next-80b-a3b-instruct:free",
@@ -444,6 +433,7 @@
     "nvidia/meta/llama-3.1-70b-instruct": "standard",
     "google/gemini-2.0-flash": "exploratory",
     "google/gemini-2.0-flash-lite": "exploratory",
+    "google/gemini-2.5-computer-use-preview-10-2025": "exploratory",
     "google/gemini-2.5-flash": "standard",
     "google/gemini-2.5-flash-image": "exploratory",
     "google/gemini-2.5-flash-lite": "exploratory",
@@ -456,6 +446,7 @@
     "google/gemini-3-pro-preview": "exploratory",
     "google/gemini-3.1-flash-image": "exploratory",
     "google/gemini-3.1-flash-lite": "exploratory",
+    "google/gemini-3.1-flash-lite-image": "exploratory",
     "google/gemini-3.1-flash-lite-preview": "exploratory",
     "google/gemini-3.1-flash-tts-preview": "exploratory",
     "google/gemini-3.1-pro-preview": "exploratory",
@@ -465,6 +456,7 @@
     "google/gemma-3-1b-it": "exploratory",
     "google/gemma-3-27b-it": "standard",
     "google/gemma-3-4b-it": "exploratory",
+    "cerebras/gemma-4-31b1": "exploratory",
     "cerebras/gpt-oss-120b": "deep",
     "cerebras/llama3.1-8b": "exploratory",
     "cerebras/qwen-3-235b-a22b-instruct-2507": "deep",
@@ -653,6 +645,7 @@
     "openrouter/openrouter/free": "exploratory",
     "openrouter/openrouter/owl-alpha": "exploratory",
     "openrouter/poolside/laguna-m.1:free": "exploratory",
+    "openrouter/poolside/laguna-xs-2.1:free": "exploratory",
     "openrouter/poolside/laguna-xs.2:free": "exploratory",
     "openrouter/qwen/qwen-2.5-7b-instruct:free": "exploratory",
     "openrouter/qwen/qwen3-coder:free": "deep",
@@ -942,12 +935,6 @@
     "openrouter/meta-llama/llama-3.3-70b-instruct:free": [
       "tools"
     ],
-    "openrouter/nex-agi/nex-n2-pro:free": [
-      "tools",
-      "vision",
-      "reasoning",
-      "json"
-    ],
     "openrouter/nvidia/nemotron-3-nano-30b-a3b:free": [
       "tools",
       "reasoning"
@@ -1000,6 +987,10 @@
       "json"
     ],
     "openrouter/poolside/laguna-m.1:free": [
+      "tools",
+      "reasoning"
+    ],
+    "openrouter/poolside/laguna-xs-2.1:free": [
       "tools",
       "reasoning"
     ],
@@ -1129,23 +1120,11 @@
       "tokens_per_minute": 70000,
       "tokens_per_day": null
     },
-    "groq/llama-3.1-8b-instant": {
-      "requests_per_minute": 30,
-      "requests_per_day": 14400,
-      "tokens_per_minute": 6000,
-      "tokens_per_day": 500000
-    },
     "groq/llama-4-scout-17b-16e-instruct": {
       "requests_per_minute": 30,
       "requests_per_day": 1000,
       "tokens_per_minute": 6000,
       "tokens_per_day": 1000000
-    },
-    "groq/meta-llama/llama-4-scout-17b-16e-instruct": {
-      "requests_per_minute": 30,
-      "requests_per_day": 1000,
-      "tokens_per_minute": 30000,
-      "tokens_per_day": 500000
     },
     "groq/meta-llama/llama-prompt-guard-2-22m": {
       "requests_per_minute": 30,
@@ -1164,30 +1143,6 @@
       "requests_per_day": 14400,
       "tokens_per_minute": null,
       "tokens_per_day": null
-    },
-    "groq/openai/gpt-oss-120b": {
-      "requests_per_minute": 30,
-      "requests_per_day": 1000,
-      "tokens_per_minute": 8000,
-      "tokens_per_day": 200000
-    },
-    "groq/openai/gpt-oss-20b": {
-      "requests_per_minute": 30,
-      "requests_per_day": 1000,
-      "tokens_per_minute": 8000,
-      "tokens_per_day": 200000
-    },
-    "groq/openai/gpt-oss-safeguard-20b": {
-      "requests_per_minute": 30,
-      "requests_per_day": 1000,
-      "tokens_per_minute": 8000,
-      "tokens_per_day": 200000
-    },
-    "groq/qwen/qwen3-32b": {
-      "requests_per_minute": 60,
-      "requests_per_day": 1000,
-      "tokens_per_minute": 6000,
-      "tokens_per_day": 500000
     },
     "groq/qwen/qwen3.6-27b": {
       "requests_per_minute": 30,
