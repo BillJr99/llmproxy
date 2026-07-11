@@ -9,7 +9,18 @@ Schema:
   "providers": {
     "<provider_name>": {
       "base_url": "https://...",
-      "api_key": "sk-...",
+      "api_key": "sk-...",                      // single credential (legacy)
+      "accounts": [                             // optional; multiple credentials
+        {"key": "sk-a", "label": "team-a"},     // for this provider. The proxy
+        {"key": "${KEY_B}", "priority": 1}      // rotates across them to multiply
+      ],                                        // free-tier headroom, keying quota
+                                                // + saturation state per account.
+                                                // "api_keys": ["sk-a","sk-b"] is a
+                                                // shorthand. api_key stays the
+                                                // fallback when neither is set.
+      "account_strategy": "round_robin",        // optional; round_robin (default)
+                                                // spreads load, priority prefers
+                                                // the lowest-priority account first
       "model_filter": ["model-a", "model-b"],  // null or absent = allow all
       "expose_to_virtual_models": false         // optional; default true. Set
                                                // false to hide this provider
@@ -73,6 +84,7 @@ import os
 import re
 import tempfile
 import traceback
+from collections import namedtuple
 from pathlib import Path
 
 from . import providers as _providers
@@ -526,6 +538,143 @@ def provider_api_key(provider_cfg: dict) -> str:
     """Return the provider's api_key with ``${VAR}`` refs resolved. Use this
     wherever the Authorization bearer token is built."""
     return resolve_env_refs(provider_cfg.get("api_key")) or ""
+
+
+# ---------------------------------------------------------------------------
+# Multiple accounts per provider — free-tier headroom via credential rotation
+# ---------------------------------------------------------------------------
+
+# A single provider may carry several credentials ("accounts") so the proxy can
+# rotate across them and multiply that provider's free-tier headroom. An account
+# is a resolved key plus display metadata; ``id`` is the stable handle used to
+# key per-account usage/saturation state. A provider with exactly one account
+# (the common case — a lone ``api_key``) uses ``id=None`` so every downstream
+# usage key stays byte-identical to the historical ``provider/model`` form.
+Account = namedtuple("Account", ["id", "key", "key_raw", "label", "priority"])
+
+
+def _account_priority(entry: dict) -> int:
+    """Coerce an account's optional ``priority`` to an int (default 0)."""
+    try:
+        return int(entry.get("priority"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _account_id_from_label(label, idx: int) -> str:
+    """Derive a stable, key-safe account id from a label, falling back to ``kN``.
+
+    The id becomes part of ``provider#<id>/model`` usage keys, so any character
+    that would confuse that form (``/``, ``#``, whitespace) is collapsed to
+    ``_``. An empty/blank label falls back to the account's declared index.
+    """
+    if label:
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(label)).strip("_")
+        if safe:
+            return safe
+    return f"k{idx}"
+
+
+def _normalize_account_entries(provider_cfg: dict) -> list:
+    """Return the raw account dicts declared on a provider, in declared order.
+
+    Recognized shapes, in precedence order (first non-empty wins):
+      * ``accounts`` — list of ``{"key": ..., "label"?: ..., "priority"?: ...}``
+        (a bare string entry is also accepted as shorthand for ``{"key": ...}``)
+      * ``api_keys`` — list of key strings, each becoming an account
+      * ``api_key``  — the legacy single-key field (one account)
+
+    The legacy ``api_key`` is always the fallback, so every existing config —
+    including keyless local providers (``api_key`` absent) — keeps working.
+    """
+    entries: list = []
+    raw = provider_cfg.get("accounts")
+    if isinstance(raw, list) and raw:
+        for item in raw:
+            if isinstance(item, dict) and item.get("key") is not None:
+                entries.append({
+                    "key": item.get("key"),
+                    "label": item.get("label"),
+                    "priority": item.get("priority"),
+                })
+            elif isinstance(item, str):
+                entries.append({"key": item, "label": None, "priority": None})
+        if entries:
+            return entries
+    keys = provider_cfg.get("api_keys")
+    if isinstance(keys, list) and keys:
+        for item in keys:
+            if isinstance(item, str):
+                entries.append({"key": item, "label": None, "priority": None})
+        if entries:
+            return entries
+    return [{"key": provider_cfg.get("api_key"), "label": None, "priority": None}]
+
+
+def provider_account_strategy(provider_cfg: dict) -> str:
+    """Return the provider's account-rotation strategy.
+
+    ``round_robin`` (default) spreads load across accounts; ``priority`` always
+    prefers the lowest-``priority`` account first, falling through to the next
+    only when it is exhausted. Unknown values fall back to ``round_robin``.
+    """
+    strat = str(provider_cfg.get("account_strategy") or "round_robin").strip().lower()
+    return strat if strat in ("round_robin", "priority") else "round_robin"
+
+
+def provider_accounts(provider_cfg: dict) -> list:
+    """Return the provider's credentials as an ordered list of :class:`Account`.
+
+    Each account's ``key`` is resolved from ``${VAR}`` refs at call time (exactly
+    like :func:`provider_api_key`), while ``key_raw`` preserves the unresolved
+    form for admin display/masking. With the ``priority`` strategy the list is
+    ordered lowest-priority-first (stable for ties); otherwise it is in declared
+    order and callers apply round-robin rotation.
+
+    A single-account provider yields one ``Account`` with ``id=None`` so per-
+    account usage/saturation keys collapse to today's ``provider/model`` form.
+    """
+    entries = _normalize_account_entries(provider_cfg)
+    indexed = list(enumerate(entries))  # keep declared index for stable ids/ties
+    if provider_account_strategy(provider_cfg) == "priority":
+        indexed.sort(key=lambda t: (_account_priority(t[1]), t[0]))
+    single = len(indexed) <= 1
+    accounts: list = []
+    seen: set = set()
+    for orig_idx, entry in indexed:
+        label = entry.get("label")
+        acct_id = None if single else _account_id_from_label(label, orig_idx)
+        if acct_id is not None and acct_id in seen:  # guard duplicate labels
+            acct_id = f"{acct_id}_{orig_idx}"
+        seen.add(acct_id)
+        accounts.append(Account(
+            id=acct_id,
+            key=resolve_env_refs(entry.get("key")) or "",
+            key_raw=entry.get("key"),
+            label=(label or "") if acct_id is None else (label or acct_id),
+            priority=_account_priority(entry),
+        ))
+    return accounts
+
+
+def account_bound_cfg(provider_cfg: dict, account: Account) -> dict:
+    """Return a shallow copy of *provider_cfg* bound to *account*'s credential.
+
+    The account's (unresolved) key is written into ``api_key`` and its id into
+    ``_account_id`` so that (a) every existing ``provider_api_key(cfg)`` call
+    site transparently uses the chosen account's key with **no signature
+    change**, and (b) usage/saturation recording can recover the account id. The
+    copy is runtime-only and never persisted.
+    """
+    bound = dict(provider_cfg)
+    bound["api_key"] = account.key_raw
+    bound["_account_id"] = account.id
+    return bound
+
+
+def provider_account_id(provider_cfg: dict):
+    """Return the bound account id on a runtime cfg copy (``None`` if unbound)."""
+    return provider_cfg.get("_account_id")
 
 
 def value_has_env_ref(value) -> bool:

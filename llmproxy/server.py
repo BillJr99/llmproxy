@@ -265,6 +265,20 @@ _cost_observed_reaction_inflight = False
 COST_OBSERVED_KEY = "cost_observed_free_tier"
 
 
+def _usage_key(provider_name: str, upstream_model: str, account_id: str | None = None) -> str:
+    """Build the registry key for a provider/model, optionally scoped to an account.
+
+    With ``account_id=None`` this reproduces the historical ``provider/model``
+    key byte-for-byte, so single-credential providers meter exactly as before.
+    When a provider has multiple accounts, each meters its own free-tier quota
+    under ``provider#<account_id>/model`` — the ``#`` segment never collides with
+    the ``/`` provider-separator or an upstream id.
+    """
+    if account_id:
+        return f"{provider_name}#{account_id}/{upstream_model}".lower()
+    return f"{provider_name}/{upstream_model}".lower()
+
+
 def _get_or_create_tracker(key: str) -> ModelUsage:
     with _usage_registry_lock:
         tracker = _usage_registry.get(key)
@@ -393,6 +407,7 @@ def _record_usage(
     usage: dict | None = None,
     config: dict | None = None,
     count_request: bool = True,
+    account_id: str | None = None,
 ) -> None:
     """Record a served request and/or its token + cost usage.
 
@@ -400,8 +415,12 @@ def _record_usage(
     balancer; the streaming path counts the request up front (no usage yet) and
     calls again post-stream with ``count_request=False`` to add the token totals
     parsed from the final SSE chunk.
+
+    *account_id* scopes the request to one of a provider's credentials so each
+    account meters its own free-tier quota; ``None`` (the default) keeps the
+    historical per-model accounting untouched.
     """
-    key = f"{provider_name}/{upstream_model}".lower()
+    key = _usage_key(provider_name, upstream_model, account_id)
     tracker = _get_or_create_tracker(key)
 
     prompt = completion = total = 0
@@ -422,17 +441,28 @@ def _record_usage(
     if usage and cost > 0:
         cfg = config if config is not None else load_config()
         if _is_model_free(provider_name, upstream_model, cfg):
-            if _flag_paid_free(key, cost, source or "unknown"):
+            # Cost-observation is a property of the *model*, not the account, so
+            # it is flagged/persisted at model granularity regardless of account.
+            if _flag_paid_free(_usage_key(provider_name, upstream_model), cost, source or "unknown"):
                 # First observation — persist the original-cased qualified id so
                 # the updater never re-adds it to believed_free.
                 _persist_cost_observed(f"{provider_name}/{upstream_model}")
 
 
-def _record_stream_usage(provider_name: str, upstream_model: str, tail: bytes, config: dict | None) -> None:
+def _record_stream_usage(
+    provider_name: str,
+    upstream_model: str,
+    tail: bytes,
+    config: dict | None,
+    account_id: str | None = None,
+) -> None:
     """Parse the tail of a streamed response and record its tokens/cost (no request count)."""
     usage = parse_stream_usage(tail)
     if usage:
-        _record_usage(provider_name, upstream_model, usage=usage, config=config, count_request=False)
+        _record_usage(
+            provider_name, upstream_model, usage=usage, config=config,
+            count_request=False, account_id=account_id,
+        )
 
 
 def _get_usage_snapshot(key: str) -> tuple[int, int]:

@@ -73,6 +73,48 @@ def test_usage_records_tokens_and_totals(usage_server):
     assert m["unexpected_cost"] is False
 
 
+def test_usage_key_anonymous_matches_legacy_form(usage_server):
+    # No account -> byte-identical to the historical provider/model key.
+    assert usage_server._usage_key("groq", "free-model") == "groq/free-model"
+    assert usage_server._usage_key("groq", "free-model", None) == "groq/free-model"
+
+
+def test_usage_key_scopes_by_account(usage_server):
+    assert usage_server._usage_key("groq", "free-model", "team-a") == "groq#team-a/free-model"
+
+
+def test_per_account_usage_is_metered_separately(usage_server):
+    # Two accounts of the same provider/model each keep their own counters.
+    common = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    cfg = usage_server.load_config()
+    usage_server._record_usage("groq", "free-model", usage=common, config=cfg, account_id="a")
+    usage_server._record_usage("groq", "free-model", usage=common, config=cfg, account_id="a")
+    usage_server._record_usage("groq", "free-model", usage=common, config=cfg, account_id="b")
+
+    reg = usage_server._usage_registry
+    assert "groq#a/free-model" in reg
+    assert "groq#b/free-model" in reg
+    assert reg["groq#a/free-model"].snapshot()[1] == 2  # requests_today
+    assert reg["groq#b/free-model"].snapshot()[1] == 1
+    # The anonymous per-model key is untouched when accounts are used.
+    assert "groq/free-model" not in reg
+
+
+def test_per_account_cost_flag_is_model_level(usage_server):
+    # A believed_free model reporting cost flags at MODEL granularity even when
+    # the request was recorded under a specific account.
+    usage_server._record_usage(
+        "groq", "free-model",
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cost": 0.002},
+        config=usage_server.load_config(),
+        account_id="team-a",
+    )
+    body = usage_server.app.test_client().get("/v1/usage").get_json()
+    flagged = body["flagged_paid_free_models"]
+    assert len(flagged) == 1
+    assert flagged[0]["model"] == "groq/free-model"
+
+
 def test_believed_free_cost_is_flagged(usage_server):
     # A believed_free model whose response reports a provider cost gets flagged.
     usage_server._record_usage(
