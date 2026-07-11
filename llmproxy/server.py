@@ -82,11 +82,15 @@ from . import __version__
 from . import fusion as _fusion
 from .config import (
     RESERVED_PROVIDER_NAMES,
+    account_bound_cfg,
     get_config_path,
     get_provider,
     load_config,
     model_is_allowed,
     parse_model_string,
+    provider_account_id,
+    provider_account_strategy,
+    provider_accounts,
     provider_api_key,
     provider_base_url,
     resolve_env_refs,
@@ -265,6 +269,142 @@ _cost_observed_reaction_inflight = False
 COST_OBSERVED_KEY = "cost_observed_free_tier"
 
 
+# ---------------------------------------------------------------------------
+# Saturation registry — remember quota-exhausted candidates across requests
+# ---------------------------------------------------------------------------
+#
+# The in-request cycling engine already rotates off a 429; this registry makes
+# that rotation *sticky*: a candidate that returns a quota/rate-limit error is
+# cooled until its documented reset (Retry-After when provided, else a default
+# window), so subsequent requests on any virtual endpoint skip it instead of
+# re-picking the same depleted model/account first. Per-worker & in-memory, like
+# the usage counters. Keyed identically to the usage registry (per account when
+# a provider has several); a provider-wide sentinel model opens a circuit for a
+# whole provider/account when its shared allowance is depleted.
+_saturation_registry: dict[str, float] = {}  # key -> monotonic expiry (seconds)
+_saturation_lock = threading.Lock()
+_DEFAULT_SATURATION_COOLDOWN_S = 60.0
+_MAX_SATURATION_COOLDOWN_S = 3600.0
+_PROVIDER_CIRCUIT_MODEL = "__provider__"  # sentinel model for a provider-wide circuit
+
+# HTTP statuses that mean "out of quota / rate limited": 402 Payment Required
+# (out of credits) and 429 Too Many Requests. Both mark the model unavailable
+# until its reset; a plain 5xx is transient and retried without a cooldown.
+_QUOTA_STATUSES = frozenset({402, 429})
+
+# Machine-readable quota codes (specific enough to trust on their own) and
+# generic phrases (only trusted inside an error-shaped body).
+_QUOTA_CODES = ("resource_exhausted", "insufficient_quota", "rate_limit_exceeded")
+_QUOTA_PHRASES = ("quota", "rate limit", "too many requests")
+
+
+def _is_quota_error(status: int | None, body_bytes: bytes | None = None) -> bool:
+    """True when a response signals quota / rate-limit exhaustion.
+
+    Fires on HTTP 402/429 and on error bodies (a 200-with-error or a 4xx) whose
+    code or message matches a known quota marker — Gemini ``RESOURCE_EXHAUSTED``,
+    OpenAI ``insufficient_quota`` / ``rate_limit_exceeded``, or a generic
+    "quota" / "rate limit" / "too many requests" phrase inside an error body.
+    Deliberately distinct from a plain transient 5xx (retryable, but no cooldown).
+    """
+    if status in _QUOTA_STATUSES:
+        return True
+    if not body_bytes:
+        return False
+    try:
+        text = body_bytes.decode("utf-8", "ignore").lower()
+    except Exception:  # noqa: BLE001
+        return False
+    if any(code in text for code in _QUOTA_CODES):
+        return True
+    if "error" in text and any(p in text for p in _QUOTA_PHRASES):
+        return True
+    return False
+
+
+def _parse_retry_after(value) -> float | None:
+    """Parse a ``Retry-After`` header (delta-seconds or HTTP-date) to seconds."""
+    if not value:
+        return None
+    value = str(value).strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(value)
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.UTC)
+        return max(0.0, (dt - datetime.datetime.now(datetime.UTC)).total_seconds())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _saturation_cooldown_seconds(retry_after=None) -> float:
+    """Resolve the cooldown window: Retry-After if given, else configured default."""
+    parsed = _parse_retry_after(retry_after)
+    if parsed is not None and parsed > 0:
+        return min(parsed, _MAX_SATURATION_COOLDOWN_S)
+    try:
+        configured = load_config().get("server", {}).get(
+            "saturation_cooldown_seconds", _DEFAULT_SATURATION_COOLDOWN_S
+        )
+        cooldown = float(configured)
+    except (TypeError, ValueError):
+        cooldown = _DEFAULT_SATURATION_COOLDOWN_S
+    return max(0.0, min(cooldown, _MAX_SATURATION_COOLDOWN_S))
+
+
+def _mark_saturated(key: str, retry_after=None) -> None:
+    """Cool *key* (a usage-registry key) until its reset so callers rotate off it."""
+    cooldown = _saturation_cooldown_seconds(retry_after)
+    if cooldown <= 0:
+        return
+    with _saturation_lock:
+        _saturation_registry[key] = time.monotonic() + cooldown
+
+
+def _is_saturated(key: str) -> bool:
+    """True while *key* is still cooling; lazily evicts expired entries."""
+    now = time.monotonic()
+    with _saturation_lock:
+        expiry = _saturation_registry.get(key)
+        if expiry is None:
+            return False
+        if expiry <= now:
+            del _saturation_registry[key]
+            return False
+        return True
+
+
+def _mark_provider_circuit(provider_name: str, account_id: str | None = None, retry_after=None) -> None:
+    """Open a provider-wide (per-account) circuit so concurrent requests skip it."""
+    _mark_saturated(_usage_key(provider_name, _PROVIDER_CIRCUIT_MODEL, account_id), retry_after)
+
+
+def _is_candidate_saturated(provider_name: str, upstream_model: str, account_id: str | None = None) -> bool:
+    """True when either this model/account or its provider-wide circuit is cooling."""
+    return (
+        _is_saturated(_usage_key(provider_name, upstream_model, account_id))
+        or _is_saturated(_usage_key(provider_name, _PROVIDER_CIRCUIT_MODEL, account_id))
+    )
+
+
+def _usage_key(provider_name: str, upstream_model: str, account_id: str | None = None) -> str:
+    """Build the registry key for a provider/model, optionally scoped to an account.
+
+    With ``account_id=None`` this reproduces the historical ``provider/model``
+    key byte-for-byte, so single-credential providers meter exactly as before.
+    When a provider has multiple accounts, each meters its own free-tier quota
+    under ``provider#<account_id>/model`` — the ``#`` segment never collides with
+    the ``/`` provider-separator or an upstream id.
+    """
+    if account_id:
+        return f"{provider_name}#{account_id}/{upstream_model}".lower()
+    return f"{provider_name}/{upstream_model}".lower()
+
+
 def _get_or_create_tracker(key: str) -> ModelUsage:
     with _usage_registry_lock:
         tracker = _usage_registry.get(key)
@@ -393,6 +533,7 @@ def _record_usage(
     usage: dict | None = None,
     config: dict | None = None,
     count_request: bool = True,
+    account_id: str | None = None,
 ) -> None:
     """Record a served request and/or its token + cost usage.
 
@@ -400,8 +541,12 @@ def _record_usage(
     balancer; the streaming path counts the request up front (no usage yet) and
     calls again post-stream with ``count_request=False`` to add the token totals
     parsed from the final SSE chunk.
+
+    *account_id* scopes the request to one of a provider's credentials so each
+    account meters its own free-tier quota; ``None`` (the default) keeps the
+    historical per-model accounting untouched.
     """
-    key = f"{provider_name}/{upstream_model}".lower()
+    key = _usage_key(provider_name, upstream_model, account_id)
     tracker = _get_or_create_tracker(key)
 
     prompt = completion = total = 0
@@ -422,17 +567,28 @@ def _record_usage(
     if usage and cost > 0:
         cfg = config if config is not None else load_config()
         if _is_model_free(provider_name, upstream_model, cfg):
-            if _flag_paid_free(key, cost, source or "unknown"):
+            # Cost-observation is a property of the *model*, not the account, so
+            # it is flagged/persisted at model granularity regardless of account.
+            if _flag_paid_free(_usage_key(provider_name, upstream_model), cost, source or "unknown"):
                 # First observation — persist the original-cased qualified id so
                 # the updater never re-adds it to believed_free.
                 _persist_cost_observed(f"{provider_name}/{upstream_model}")
 
 
-def _record_stream_usage(provider_name: str, upstream_model: str, tail: bytes, config: dict | None) -> None:
+def _record_stream_usage(
+    provider_name: str,
+    upstream_model: str,
+    tail: bytes,
+    config: dict | None,
+    account_id: str | None = None,
+) -> None:
     """Parse the tail of a streamed response and record its tokens/cost (no request count)."""
     usage = parse_stream_usage(tail)
     if usage:
-        _record_usage(provider_name, upstream_model, usage=usage, config=config, count_request=False)
+        _record_usage(
+            provider_name, upstream_model, usage=usage, config=config,
+            count_request=False, account_id=account_id,
+        )
 
 
 def _get_usage_snapshot(key: str) -> tuple[int, int]:
@@ -450,12 +606,14 @@ def _get_token_snapshot(key: str) -> tuple[int, int]:
 
 
 def _reset_usage() -> None:
-    """Clear all in-memory usage counters and paid-free flags."""
+    """Clear all in-memory usage counters, paid-free flags, and saturation state."""
     global _usage_since
     with _usage_registry_lock:
         _usage_registry.clear()
     with _paid_free_lock:
         _paid_free_flags.clear()
+    with _saturation_lock:
+        _saturation_registry.clear()
     _usage_since = datetime.datetime.now(datetime.UTC).isoformat()
 
 
@@ -2274,7 +2432,14 @@ def _proxy_request(
                 if 200 <= resp.status_code < 300 else resp.content
             )
             content_type = "application/json"
-        return Response(content, status=resp.status_code, content_type=content_type)
+        out = Response(content, status=resp.status_code, content_type=content_type)
+        # Preserve Retry-After on quota/rate-limit responses so the cycling loop
+        # can cool the candidate for exactly as long as the upstream asks.
+        if resp.status_code in _QUOTA_STATUSES:
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after:
+                out.headers["Retry-After"] = retry_after
+        return out
     except requests.exceptions.Timeout:
         return _error(
             f"Upstream provider '{provider_name}' timed out after {timeout}s.",
@@ -2297,6 +2462,7 @@ def _translated_stream_response(
     upstream_model: str,
     config: dict | None,
     prefix: bytes = b"",
+    account_id: str | None = None,
 ) -> Response:
     """Pipe a *non-identity* upstream SSE stream through the dialect adapters.
 
@@ -2338,7 +2504,8 @@ def _translated_stream_response(
             yield f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
         finally:
             if config is not None and upstream_model and captured:
-                _record_usage(provider_name, upstream_model, usage=captured, config=config)
+                _record_usage(provider_name, upstream_model, usage=captured,
+                              config=config, account_id=account_id)
 
     return Response(generate(), content_type="text/event-stream")
 
@@ -2849,6 +3016,79 @@ def _candidate_max_attempts(idx: int, total: int) -> int:
     return (_VIRTUAL_MAX_RETRIES + 1) if idx == total - 1 else 1
 
 
+def _record_quota_saturation(provider_name: str, provider_cfg: dict, upstream_model: str, retry_after) -> None:
+    """Cool a candidate (and, for allowance-backed providers, its circuit) on a quota error.
+
+    Marks the specific account/model saturated so it drops to the back of the
+    pool until its reset. When the provider carries a shared ``free_allowance``
+    the whole provider/account circuit is opened too, so concurrent in-flight
+    requests stop hammering an allowance that's already depleted.
+    """
+    account_id = provider_account_id(provider_cfg)
+    _mark_saturated(_usage_key(provider_name, upstream_model, account_id), retry_after)
+    if _provider_free_allowance(provider_cfg):
+        _mark_provider_circuit(provider_name, account_id, retry_after)
+
+
+def _call_with_account_failover(
+    endpoint: str,
+    provider_name: str,
+    provider_cfg: dict,
+    payload: dict,
+    timeout: int,
+    *,
+    forwarded_headers: dict | None = None,
+) -> tuple["Response | None", str | None]:
+    """Call one model, rotating across the provider's accounts on quota errors.
+
+    Tries the provider's accounts fresh-first (cooling ones last), cooling any
+    that return a 402/429 or quota-shaped body so the rotation is sticky. Returns
+    early on the first usable response or on a non-quota hard error (which another
+    account would hit the same way). Returns ``(resp, account_id)`` of the winning
+    — or last — attempt. Usage is NOT recorded here; the caller records it under
+    the returned account_id. This is fusion's per-model equivalent of the plain
+    cycling engine's account rotation, used by the panel, judge, and synthesizer.
+    """
+    upstream_model = payload.get("model")
+    accounts = provider_accounts(provider_cfg)
+    fresh = [a for a in accounts if not _is_candidate_saturated(provider_name, upstream_model, a.id)]
+    cooling = [a for a in accounts if _is_candidate_saturated(provider_name, upstream_model, a.id)]
+    last_resp: Response | None = None
+    last_acct: str | None = None
+    for acct in fresh + cooling:
+        bound = account_bound_cfg(provider_cfg, acct)
+        resp = _proxy_request(endpoint, provider_name, bound, payload, timeout,
+                              forwarded_headers=forwarded_headers)
+        last_resp, last_acct = resp, acct.id
+        if resp.status_code < 400:
+            if not _response_unusable(resp.get_data()):
+                return resp, acct.id
+            if _is_quota_error(200, resp.get_data()):
+                _record_quota_saturation(provider_name, bound, upstream_model, None)
+                continue
+            return resp, acct.id  # unusable but not quota — let the caller decide
+        if _is_quota_error(resp.status_code, resp.get_data()):
+            _record_quota_saturation(provider_name, bound, upstream_model, resp.headers.get("Retry-After"))
+            continue
+        return resp, acct.id  # non-quota hard error — another account won't help
+    return last_resp, last_acct
+
+
+def _bind_freshest_account(provider_name: str, provider_cfg: dict, upstream_model: str) -> tuple[dict, str | None]:
+    """Return ``(cfg, account_id)`` bound to the freshest non-cooling account.
+
+    A single-credential provider returns its cfg unchanged. Used by the streaming
+    synthesizer, which cannot rotate mid-stream, to at least avoid a credential
+    already known to be rate-limited.
+    """
+    accounts = provider_accounts(provider_cfg)
+    if len(accounts) <= 1:
+        return provider_cfg, provider_account_id(provider_cfg)
+    fresh = [a for a in accounts if not _is_candidate_saturated(provider_name, upstream_model, a.id)]
+    chosen = (fresh or accounts)[0]
+    return account_bound_cfg(provider_cfg, chosen), chosen.id
+
+
 def _proxy_cycling_non_streaming(
     endpoint: str,
     label: str,
@@ -2878,6 +3118,7 @@ def _proxy_cycling_non_streaming(
     total = len(candidates)
     last: Response | None = None
     for idx, (provider_name, provider_cfg, upstream_model) in enumerate(candidates):
+        account_id = provider_account_id(provider_cfg)
         upstream_payload = {**payload, "model": upstream_model}
         max_attempts = _candidate_max_attempts(idx, total)
         for attempt in range(max_attempts):
@@ -2902,6 +3143,10 @@ def _proxy_cycling_non_streaming(
                 last = resp
                 continue
             if _response_unusable(body):
+                # Some providers report quota exhaustion as a 200 with an error
+                # body — cool it so the rotation is sticky across requests.
+                if _is_quota_error(200, body):
+                    _record_quota_saturation(provider_name, provider_cfg, upstream_model, None)
                 logger.warning(
                     "  [%s] %s/%s returned 200 with an unusable body (error/empty), trying next",
                     label, provider_name, upstream_model,
@@ -2909,8 +3154,12 @@ def _proxy_cycling_non_streaming(
                 last = resp
                 continue
             if on_success is not None:
-                on_success(provider_name, upstream_model, body)
+                on_success(provider_name, upstream_model, body, account_id)
             return resp
+        if _is_quota_error(resp.status_code, resp.get_data()):
+            _record_quota_saturation(
+                provider_name, provider_cfg, upstream_model, resp.headers.get("Retry-After")
+            )
         logger.warning(
             "  [%s] %s/%s returned %d, trying next", label, provider_name, upstream_model, resp.status_code
         )
@@ -2955,6 +3204,7 @@ def _proxy_cycling_streaming(
     last_error: tuple[bytes, int, str] | None = None
 
     for idx, (provider_name, provider_cfg, upstream_model) in enumerate(candidates):
+        account_id = provider_account_id(provider_cfg)
         upstream_payload = {**payload, "model": upstream_model}
         max_attempts = _candidate_max_attempts(idx, total)
         base_url = provider_base_url(provider_cfg)
@@ -2996,6 +3246,10 @@ def _proxy_cycling_streaming(
         if resp is None:
             continue
         if resp.status_code >= 400:
+            if _is_quota_error(resp.status_code, resp.content):
+                _record_quota_saturation(
+                    provider_name, provider_cfg, upstream_model, resp.headers.get("Retry-After")
+                )
             last_error = (
                 resp.content,
                 resp.status_code,
@@ -3014,6 +3268,9 @@ def _proxy_cycling_streaming(
             # the first token is never dropped.
             error_body, prefix, rest = _peek_stream(resp)
             if error_body is not None:
+                # A stream that opens with a quota error cools the candidate too.
+                if _is_quota_error(None, error_body):
+                    _record_quota_saturation(provider_name, provider_cfg, upstream_model, None)
                 last_error = (error_body, 502, "text/event-stream")
                 resp.close()
                 logger.warning(
@@ -3032,12 +3289,13 @@ def _proxy_cycling_streaming(
         # committing.  Proactive capability ordering still steers streaming
         # requests to capable models.
         if on_success is not None:
-            on_success(provider_name, upstream_model)
+            on_success(provider_name, upstream_model, None, account_id)
 
         # Translation path: pipe the native stream through the adapters.
         if not (outbound.is_identity and inbound.is_identity):
             return _translated_stream_response(
-                resp, outbound, inbound, provider_name, upstream_model, config, prefix=prefix
+                resp, outbound, inbound, provider_name, upstream_model, config,
+                prefix=prefix, account_id=account_id,
             )
 
         captured_resp = resp
@@ -3048,7 +3306,7 @@ def _proxy_cycling_streaming(
 
         @stream_with_context
         def generate(r=captured_resp, pn=captured_provider, um=captured_model,
-                     pfx=captured_prefix, rst=captured_rest):
+                     pfx=captured_prefix, rst=captured_rest, acct=account_id):
             tail = bytearray()
             try:
                 with r:
@@ -3070,7 +3328,7 @@ def _proxy_cycling_streaming(
                 msg = str(e).replace('"', "'")
                 yield f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
             finally:
-                _record_stream_usage(pn, um, bytes(tail), config)
+                _record_stream_usage(pn, um, bytes(tail), config, account_id=acct)
 
         return Response(generate(), content_type="text/event-stream")
 
@@ -3083,11 +3341,57 @@ def _proxy_cycling_streaming(
 def _cycling_candidates(
     candidates: list[tuple[str, dict, str]],
 ) -> list[tuple[str, dict, str]]:
-    """Rotate candidates to a random starting position for load spreading."""
+    """Rotate candidates to a random starting position for load spreading.
+
+    Also demotes any candidate currently cooling in the saturation registry to
+    the back so non-free/non-loadbalanced virtuals (per-provider, reasoning,
+    capability families) still rotate off a recently rate-limited model/account
+    on the next request, while keeping it reachable as a last resort.
+    """
     if not candidates:
         return candidates
     start = random.randrange(len(candidates))
-    return candidates[start:] + candidates[:start]
+    rotated = candidates[start:] + candidates[:start]
+    fresh = [c for c in rotated if not _is_candidate_saturated(c[0], c[2], provider_account_id(c[1]))]
+    cooling = [c for c in rotated if _is_candidate_saturated(c[0], c[2], provider_account_id(c[1]))]
+    return fresh + cooling if cooling else rotated
+
+
+def _expand_accounts(
+    candidates: list[tuple[str, dict, str]],
+) -> list[tuple[str, dict, str]]:
+    """Fan each candidate out into one per configured account, expanded LAST.
+
+    Ordering upstream runs at model granularity; this final pass replaces each
+    ``(provider, cfg, model)`` with one candidate per credential, bound to that
+    account's key via :func:`account_bound_cfg`. A model's accounts stay
+    **adjacent, in the model's ranked slot**, so the cycling walk tries every
+    credential of a model (accounts-first) before moving to the next model —
+    same model, fresh quota is always the cheapest way to keep serving.
+
+    Within a model, accounts that are not currently cooling come first (rotated
+    to a random start for ``round_robin``, kept in priority order otherwise);
+    accounts cooling after a recent 402/429 are appended last but still
+    reachable. A single-account provider (the common case) expands to exactly
+    one candidate with the original cfg untouched, so keys/headers/behavior are
+    byte-identical to before.
+    """
+    if not candidates:
+        return candidates
+    expanded: list[tuple[str, dict, str]] = []
+    for pn, pc, um in candidates:
+        accounts = provider_accounts(pc)
+        if len(accounts) <= 1:
+            expanded.append((pn, pc, um))  # lone credential — leave cfg as-is
+            continue
+        fresh = [a for a in accounts if not _is_candidate_saturated(pn, um, a.id)]
+        cooling = [a for a in accounts if _is_candidate_saturated(pn, um, a.id)]
+        if provider_account_strategy(pc) == "round_robin" and len(fresh) > 1:
+            start = random.randrange(len(fresh))
+            fresh = fresh[start:] + fresh[:start]
+        for acct in fresh + cooling:
+            expanded.append((pn, account_bound_cfg(pc, acct), um))
+    return expanded
 
 
 def _capacity_ordered_candidates(
@@ -3100,11 +3404,20 @@ def _capacity_ordered_candidates(
     Algorithm:
     - Each candidate is scored via _capacity_score() using its RPM/RPD usage.
     - Candidates with no configured limits score 1.0 (treated as unlimited).
+    - A candidate currently cooling in the saturation registry (recent 402/429)
+      is forced to score 0.0, so a just-rate-limited account/model drops to the
+      back on the *next* request too — the "transparent rotation" the free
+      virtual promises — rather than being re-picked first every time.
     - Candidates with score > 0 are drawn via weighted reservoir sampling so
       higher-capacity models are preferred while load is still distributed.
-    - Candidates with score == 0 (at limit) are appended as last-resort fallbacks;
-      they still get tried so a saturated model doesn't cause an avoidable 503.
-    - Falls back to random rotation when no candidate has any configured limits.
+    - Candidates with score == 0 (at limit or cooling) are appended as
+      last-resort fallbacks; they still get tried so a saturated model doesn't
+      cause an avoidable 503.
+    - Falls back to random rotation when no candidate has any configured limits
+      and none is currently cooling.
+
+    Usage/saturation are keyed per account (see _usage_key), so with several
+    accounts on a provider each meters and cools independently.
 
     Note: tracking is per-worker-process; gunicorn multi-worker deployments
     may undercount usage relative to the provider's actual view.
@@ -3112,24 +3425,32 @@ def _capacity_ordered_candidates(
     if not candidates:
         return candidates
 
+    def _acct(pc):
+        return provider_account_id(pc)
+
     any_limits = any(
-        f"{pn}/{um}".lower() in free_limits for pn, _, um in candidates
+        _usage_key(pn, um, _acct(pc)) in free_limits or f"{pn}/{um}".lower() in free_limits
+        for pn, pc, um in candidates
     )
-    if not any_limits:
+    any_saturated = any(
+        _is_candidate_saturated(pn, um, _acct(pc)) for pn, pc, um in candidates
+    )
+    if not any_limits and not any_saturated:
         start = random.randrange(len(candidates))
         return candidates[start:] + candidates[:start]
 
     scored: list[tuple[tuple[str, dict, str], float]] = []
     for pn, pc, um in candidates:
-        key = f"{pn}/{um}".lower()
-        limits = free_limits.get(key, {})
-        used_min, used_day = _get_usage_snapshot(key)
-        used_tok_min, used_tok_day = _get_token_snapshot(key)
-        score = _capacity_score(used_min, used_day, limits, used_tok_min, used_tok_day)
-        logger.debug(
-            "[capacity] %s/%s  score=%.3f  used_min=%d  used_day=%d  tok_min=%d  tok_day=%d",
-            pn, um, score, used_min, used_day, used_tok_min, used_tok_day,
-        )
+        account_id = _acct(pc)
+        key = _usage_key(pn, um, account_id)
+        limits = free_limits.get(key, {}) or free_limits.get(f"{pn}/{um}".lower(), {})
+        if _is_candidate_saturated(pn, um, account_id):
+            score = 0.0  # recently rate-limited — cool it off, keep it reachable
+        else:
+            used_min, used_day = _get_usage_snapshot(key)
+            used_tok_min, used_tok_day = _get_token_snapshot(key)
+            score = _capacity_score(used_min, used_day, limits, used_tok_min, used_tok_day)
+        logger.debug("[capacity] %s  score=%.3f", key, score)
         scored.append(((pn, pc, um), score))
 
     viable = [(c, s) for c, s in scored if s > 0.0]
@@ -3160,6 +3481,17 @@ def _capacity_ordered_candidates(
 def _provider_exposes_to_virtual_models(provider_cfg: dict) -> bool:
     """Return False only when the provider explicitly opts out via expose_to_virtual_models: false."""
     return provider_cfg.get("expose_to_virtual_models", True) is not False
+
+
+def _allow_implicit_paid(config: dict) -> bool:
+    """True when virtual routing may fall back to paid models implicitly.
+
+    Default False: cost-avoiding virtuals (loadbalanced) stop at the free/local
+    tiers and surface a clear 429/503 when they are exhausted, so a paid model is
+    only ever reached by direct ``provider/model`` name. Set
+    ``server.allow_implicit_paid: true`` to restore the free→local→paid waterfall.
+    """
+    return bool(config.get("server", {}).get("allow_implicit_paid", False))
 
 
 def _apply_favorite_free_ordering(
@@ -3244,11 +3576,15 @@ def _quality_ordered_candidates(
 
     scored: list[tuple[tuple[str, dict, str], float]] = []
     for pn, pc, um in candidates:
-        key = f"{pn}/{um}".lower()
-        limits = free_limits.get(key, {})
-        used_min, used_day = _get_usage_snapshot(key)
-        used_tok_min, used_tok_day = _get_token_snapshot(key)
-        score = _capacity_score(used_min, used_day, limits, used_tok_min, used_tok_day)
+        account_id = provider_account_id(pc)
+        key = _usage_key(pn, um, account_id)
+        limits = free_limits.get(key, {}) or free_limits.get(f"{pn}/{um}".lower(), {})
+        if _is_candidate_saturated(pn, um, account_id):
+            score = 0.0  # cooling after a recent 402/429 — demote, keep reachable
+        else:
+            used_min, used_day = _get_usage_snapshot(key)
+            used_tok_min, used_tok_day = _get_token_snapshot(key)
+            score = _capacity_score(used_min, used_day, limits, used_tok_min, used_tok_day)
         scored.append(((pn, pc, um), score))
 
     def _key(item: tuple[tuple[str, dict, str], float]):
@@ -3647,19 +3983,23 @@ def _loadbalanced_ordered_candidates(
     payload: dict,
     config: dict,
 ) -> list[tuple[str, dict, str]]:
-    """Order candidates as a cost waterfall: free → local → paid.
+    """Order candidates as a cost waterfall: free → local → (paid, opt-in).
 
     Cost tier is the dominant (outer) key — a paid model is NEVER ordered before
-    a free or local one, so cost-avoidance always wins and paid stays a true last
-    resort (failover, which is silent and robust, handles feasibility). Within
-    the $0 tiers candidates are ordered **best-first**: among free models that
-    still have headroom the most sophisticated (see _quality_key) is tried first,
-    with capacity as a tiebreak; local is likewise strongest-first. This keeps
-    spend at ~$0 while elevating answer quality, rather than picking a weak free
-    model just because the prompt is short. Paid stays cheapest-first. A final
-    capability sort still pulls models that satisfy a *forced* tool/vision/JSON
-    requirement to the front of each tier.
+    a free or local one, so cost-avoidance always wins. Within the $0 tiers
+    candidates are ordered **best-first**: among free models that still have
+    headroom the most sophisticated (see _quality_key) is tried first, with
+    capacity as a tiebreak; local is likewise strongest-first. This keeps spend at
+    ~$0 while elevating answer quality, rather than picking a weak free model just
+    because the prompt is short. A final capability sort still pulls models that
+    satisfy a *forced* tool/vision/JSON requirement to the front of each tier.
+
+    **Paid is opt-in.** Paid models are dropped from the implicit waterfall unless
+    ``server.allow_implicit_paid`` is true; they stay reachable only by direct
+    ``provider/model`` name. With the gate off (the default) an exhausted free +
+    local pool surfaces a clear 429/503 rather than silently spending money.
     """
+    allow_paid = _allow_implicit_paid(config)
     tiers: dict[int, list[tuple[str, dict, str]]] = {
         _TIER_FREE: [], _TIER_LOCAL: [], _TIER_PAID: [],
     }
@@ -3684,6 +4024,8 @@ def _loadbalanced_ordered_candidates(
         bucket = tiers[tier]
         if not bucket:
             continue
+        if tier == _TIER_PAID and not allow_paid:
+            continue  # paid never an implicit fallback unless explicitly enabled
         if tier == _TIER_FREE:
             bucket = _quality_ordered_candidates(bucket, free_limits, reasoning_map)
             bucket = _apply_favorite_free_ordering(bucket, config)
@@ -4119,6 +4461,57 @@ def _fusion_pool(model_full: str, config: dict, fcfg: dict, payload: dict, free:
     return pool
 
 
+def _rank_aux_models(
+    pool: list[tuple[str, dict, str]],
+    explicit: str | None,
+    config: dict,
+    prefer_caps: frozenset[str] = frozenset(),
+    exclude_first: tuple[str, dict, str] | None = None,
+) -> list[tuple[str, dict, str]]:
+    """Rank judge/synthesizer candidate models in preference order.
+
+    An explicit configured model leads when it resolves. Otherwise *pool* models
+    tagged with any of *prefer_caps* (e.g. reasoning) come first, then the rest,
+    with *exclude_first* (the model already chosen for the other stage) pushed
+    last so the judge and synthesizer differ where possible. Callers try each in
+    order — with per-account failover — until one answers, so a rate-limited
+    judge/synth rotates to the next model instead of collapsing the pipeline.
+    """
+    ordered: list[tuple[str, dict, str]] = []
+    seen: set[str] = set()
+
+    def _add(c: tuple[str, dict, str]) -> None:
+        key = f"{c[0]}/{c[2]}".lower()
+        if key not in seen:
+            seen.add(key)
+            ordered.append(c)
+
+    if explicit:
+        pn, pc, uid, err = _resolve_provider(explicit)
+        if err is None and pc is not None:
+            _add((pn, pc, uid))
+        else:
+            logger.warning("[fusion] configured model %r unresolved; auto-picking.", explicit)
+
+    if pool:
+        cap_map = _model_capabilities(config)
+        exclude_key = f"{exclude_first[0]}/{exclude_first[2]}".lower() if exclude_first else None
+
+        def _has(c: tuple[str, dict, str]) -> bool:
+            return (any(_model_has_capability(c[0], c[2], cap, cap_map) for cap in prefer_caps)
+                    if prefer_caps else False)
+
+        def _key(c: tuple[str, dict, str]) -> str:
+            return f"{c[0]}/{c[2]}".lower()
+
+        preferred = [c for c in pool if _has(c) and _key(c) != exclude_key]
+        others = [c for c in pool if not _has(c) and _key(c) != exclude_key]
+        excluded = [c for c in pool if _key(c) == exclude_key]
+        for c in preferred + others + excluded:
+            _add(c)
+    return ordered
+
+
 def _pick_aux_model(
     pool: list[tuple[str, dict, str]],
     explicit: str | None,
@@ -4126,35 +4519,9 @@ def _pick_aux_model(
     prefer_caps: frozenset[str] = frozenset(),
     exclude_first: tuple[str, dict, str] | None = None,
 ) -> tuple[str, dict, str] | None:
-    """Choose a judge or synthesizer model.
-
-    An explicit configured model id wins when it resolves; otherwise a model is
-    auto-picked from *pool*, preferring one tagged with any of *prefer_caps*
-    (e.g. reasoning) and, where possible, not the same model already chosen for
-    the other stage (*exclude_first*) so the judge and synthesizer differ.
-    """
-    if explicit:
-        pn, pc, uid, err = _resolve_provider(explicit)
-        if err is None and pc is not None:
-            return (pn, pc, uid)
-        logger.warning("[fusion] configured model %r unresolved; auto-picking.", explicit)
-
-    if not pool:
-        return None
-    cap_map = _model_capabilities(config)
-    exclude_key = f"{exclude_first[0]}/{exclude_first[2]}" if exclude_first else None
-    ranked = [
-        (c, f"{c[0]}/{c[2]}",
-         any(_model_has_capability(c[0], c[2], cap, cap_map) for cap in prefer_caps) if prefer_caps else False)
-        for c in pool
-    ]
-    for c, key, has in ranked:
-        if has and key != exclude_key:
-            return c
-    for c, key, _has in ranked:
-        if key != exclude_key:
-            return c
-    return pool[0]
+    """Return the single best judge/synthesizer model (see _rank_aux_models)."""
+    ranked = _rank_aux_models(pool, explicit, config, prefer_caps, exclude_first)
+    return ranked[0] if ranked else None
 
 
 def _proxy_fusion(
@@ -4212,15 +4579,15 @@ def _proxy_fusion(
     def _call_panel(cand: tuple[str, dict, str]):
         pn, pc, uid = cand
         try:
-            resp = _proxy_request(
+            resp, acct = _call_with_account_failover(
                 endpoint, pn, pc, {**stripped, "model": uid}, candidate_timeout,
                 forwarded_headers=forwarded_headers,
             )
-            return cand, resp
+            return cand, resp, acct
         except Exception as e:  # noqa: BLE001
             print(f"[server:_proxy_fusion:panel] {pn}/{uid}: {e}")
             traceback.print_exc()
-            return cand, None
+            return cand, None, None
 
     # One panel fan-out, with reserve backfill so a few transient upstream
     # failures (rate limits, blips) on the chosen members don't collapse the whole
@@ -4239,14 +4606,14 @@ def _proxy_fusion(
             with ThreadPoolExecutor(max_workers=min(len(pending), 8)) as ex:
                 results = list(ex.map(_call_panel, pending))
             failures = 0
-            for cand, resp in results:
+            for cand, resp, acct in results:
                 pn, _pc, uid = cand
                 key = f"{pn}/{uid}"
                 if resp is not None and resp.status_code < 400:
                     body = resp.get_data()
                     text = _fusion.extract_message_text(body)
                     if text.strip():
-                        _record_usage(pn, uid, usage=extract_usage(body), config=config)
+                        _record_usage(pn, uid, usage=extract_usage(body), config=config, account_id=acct)
                         entries.append({"label": key, "content": text})
                         used.append(key)
                         success.append((cand, body))
@@ -4293,34 +4660,48 @@ def _proxy_fusion(
             status=503,
         )
 
-    # 3. Judge compares the panel responses and emits structured analysis.
-    judge_tuple = _pick_aux_model(pool, fcfg.get("judge_model"), config, prefer_caps=frozenset({"reasoning"}))
+    # 3. Judge compares the panel responses and emits structured analysis. Try
+    # judge candidates in ranked order, each with per-account failover, so a
+    # rate-limited judge rotates to the next model instead of dropping analysis.
+    judge_ranked = _rank_aux_models(pool, fcfg.get("judge_model"), config,
+                                    prefer_caps=frozenset({"reasoning"}))
+    judge_tuple = judge_ranked[0] if judge_ranked else None  # for synth exclusion
     analysis: dict | None = None
     judge_id: str | None = None
-    if judge_tuple is not None:
-        jpn, jpc, juid = judge_tuple
-        judge_id = f"{jpn}/{juid}"
-        jmsgs = _fusion.build_judge_messages(original_messages, panel_entries)
+    jmsgs = _fusion.build_judge_messages(original_messages, panel_entries)
+    for cand in judge_ranked:
+        jpn, jpc, juid = cand
         try:
-            jresp = _proxy_request(endpoint, jpn, jpc, {"model": juid, "messages": jmsgs}, candidate_timeout)
-            if jresp.status_code < 400:
-                _record_usage(jpn, juid, usage=extract_usage(jresp.get_data()), config=config)
-                analysis = _fusion.parse_analysis(_fusion.extract_message_text(jresp.get_data()))
-            else:
-                logger.warning("  [fusion] judge %s returned %d", judge_id, jresp.status_code)
+            jresp, jacct = _call_with_account_failover(
+                endpoint, jpn, jpc, {"model": juid, "messages": jmsgs}, candidate_timeout,
+                forwarded_headers=forwarded_headers,
+            )
         except Exception as e:  # noqa: BLE001
-            print(f"[server:_proxy_fusion:judge] {judge_id}: {e}")
+            print(f"[server:_proxy_fusion:judge] {jpn}/{juid}: {e}")
             traceback.print_exc()
+            continue
+        if jresp is not None and jresp.status_code < 400 and not _response_unusable(jresp.get_data()):
+            _record_usage(jpn, juid, usage=extract_usage(jresp.get_data()), config=config, account_id=jacct)
+            analysis = _fusion.parse_analysis(_fusion.extract_message_text(jresp.get_data()))
+            judge_id = f"{jpn}/{juid}"
+            judge_tuple = cand
+            break
+        status = jresp.status_code if jresp is not None else "error"
+        logger.warning("  [fusion] judge %s/%s -> %s, trying next", jpn, juid, status)
 
-    # 4. Synthesizer writes the final answer grounded in the analysis.
-    synth_tuple = _pick_aux_model(
+    # 4. Synthesizer writes the final answer grounded in the analysis. Rank synth
+    # candidates (excluding the judge where possible); a panel member is the
+    # last-resort synth model so there is always at least one.
+    synth_ranked = _rank_aux_models(
         pool, fcfg.get("synthesizer_model"), config,
         prefer_caps=frozenset({"reasoning"}), exclude_first=judge_tuple,
-    ) or panel_success[0][0]
-    spn, spc, suid = synth_tuple
-    synth_id = f"{spn}/{suid}"
+    ) or [panel_success[0][0]]
     smsgs = _fusion.build_synthesizer_messages(original_messages, panel_entries, analysis)
-    synth_payload = {**stripped, "model": suid, "messages": smsgs}
+
+    # Provenance names the synth model actually used; default to the first ranked
+    # (updated below when a later candidate wins after rotation).
+    spn, spc, suid = synth_ranked[0]
+    synth_id = f"{spn}/{suid}"
 
     def _report(fell_back: bool, with_analysis: bool) -> dict:
         return _fusion.build_report(
@@ -4329,13 +4710,16 @@ def _proxy_fusion(
             fell_back=fell_back, free=free,
         )
 
-    header_report = json.dumps(_report(False, with_analysis=False), ensure_ascii=True)
-
     # Streaming: stream only the synthesis stage; provenance rides the header.
+    # Can't rotate mid-stream, so bind the freshest account of the first synth
+    # model and degrade to a panel answer if it fails to start.
     if is_streaming:
+        stream_cfg, _sacct = _bind_freshest_account(spn, spc, suid)
+        header_report = json.dumps(_report(False, with_analysis=False), ensure_ascii=True)
         stream_timeout = server_cfg.get("stream_timeout", 300)
         resp = _proxy_streaming(
-            endpoint, spn, spc, {**synth_payload, "stream": True},
+            endpoint, spn, stream_cfg,
+            {**stripped, "model": suid, "messages": smsgs, "stream": True},
             stream_timeout, config=config, inbound=inbound_adapter,
         )
         if getattr(resp, "status_code", 200) < 400:
@@ -4353,22 +4737,38 @@ def _proxy_fusion(
             resp.headers["X-LLMProxy-Fusion"] = header_report
         return resp
 
-    # Non-streaming synthesis.
-    try:
-        sresp = _proxy_request(endpoint, spn, spc, synth_payload, timeout)
-    except Exception as e:  # noqa: BLE001
-        print(f"[server:_proxy_fusion:synth] {synth_id}: {e}")
-        traceback.print_exc()
-        sresp = None
+    # Non-streaming synthesis: rotate across synth candidates (each with
+    # per-account failover) until one returns a usable answer.
+    sresp = None
+    sacct = None
+    for cand in synth_ranked:
+        cpn, cpc, cuid = cand
+        try:
+            r, a = _call_with_account_failover(
+                endpoint, cpn, cpc, {**stripped, "model": cuid, "messages": smsgs}, timeout,
+                forwarded_headers=forwarded_headers,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[server:_proxy_fusion:synth] {cpn}/{cuid}: {e}")
+            traceback.print_exc()
+            continue
+        if r is not None and r.status_code < 400 and not _response_unusable(r.get_data()):
+            sresp, sacct = r, a
+            spn, spc, suid = cand
+            synth_id = f"{spn}/{suid}"
+            break
+        status = r.status_code if r is not None else "error"
+        logger.warning("  [fusion] synth %s/%s -> %s, trying next", cpn, cuid, status)
 
-    if sresp is None or sresp.status_code >= 400:
+    if sresp is None:
         # Graceful fallback: return the first successful panel response, flagged.
-        logger.warning("  [fusion] synth %s failed; falling back to panel answer", synth_id)
+        logger.warning("  [fusion] all synth candidates failed; falling back to panel answer")
         out = _fusion.inject_report(panel_success[0][1], _report(True, with_analysis=True))
     else:
-        _record_usage(spn, suid, usage=extract_usage(sresp.get_data()), config=config)
+        _record_usage(spn, suid, usage=extract_usage(sresp.get_data()), config=config, account_id=sacct)
         out = _fusion.inject_report(sresp.get_data(), _report(False, with_analysis=True))
 
+    header_report = json.dumps(_report(False, with_analysis=False), ensure_ascii=True)
     if not inbound_adapter.is_identity:
         out = inbound_adapter.render_response(out)
     resp = Response(out, status=200, content_type="application/json")
@@ -4481,12 +4881,15 @@ def _proxy_endpoint(
         else:
             ordered = _cycling_candidates(candidates)
 
-        # Record token/cost (and request count) for every cycled candidate.
-        def on_success(pn: str, um: str, body=None) -> None:
+        # Record token/cost (and request count) for every cycled candidate,
+        # scoped to the account that actually served it so per-account free-tier
+        # quota is metered independently.
+        def on_success(pn: str, um: str, body=None, account_id=None) -> None:
             _record_usage(
                 pn, um,
                 usage=extract_usage(body) if body is not None else None,
                 config=config,
+                account_id=account_id,
             )
         # Proactively prefer candidates that support the capabilities this
         # request needs (tools/vision/reasoning/json).  Stable, never drops
@@ -4506,6 +4909,10 @@ def _proxy_endpoint(
             ordered = _order_by_capability(ordered, needed, _model_capabilities(config))
         if is_free_virtual:
             ordered = _apply_favorite_free_ordering(ordered, config)
+        # Expand accounts LAST: each model's credentials become adjacent
+        # candidates in its ranked slot, so cycling rotates accounts-first then
+        # models. A no-op for single-credential providers.
+        ordered = _expand_accounts(ordered)
         logger.info("  [%s] cycling through %d candidate(s)", model_full, len(ordered))
         if is_streaming:
             timeout = server_cfg.get("stream_timeout", 300)
@@ -4655,8 +5062,26 @@ def embeddings() -> Response:
 # /v1/usage — token + cost accounting report
 # ---------------------------------------------------------------------------
 
+def _split_usage_key(key: str) -> tuple[str, str | None, str]:
+    """Parse a usage/saturation key into (provider_name, account_id, model).
+
+    Handles both the anonymous ``provider/model`` form (account_id ``None``) and
+    the per-account ``provider#account/model`` form written when a provider has
+    multiple credentials.
+    """
+    provider_part, _, upstream_model = key.partition("/")
+    provider_name, sep, account_id = provider_part.partition("#")
+    return provider_name, (account_id if sep else None), upstream_model
+
+
 def _build_usage_report() -> dict:
-    """Snapshot the in-memory usage registry into a JSON-serializable report."""
+    """Snapshot the in-memory usage registry into a JSON-serializable report.
+
+    Each metered credential is one entry; a provider with several accounts yields
+    one row per account (with an ``account`` field), so per-account free-tier
+    consumption is visible. Single-credential providers omit ``account`` and read
+    exactly as before. Account labels are surfaced, never the key material.
+    """
     config = load_config()
     with _usage_registry_lock:
         items = list(_usage_registry.items())
@@ -4669,10 +5094,10 @@ def _build_usage_report() -> dict:
     for key, tracker in items:
         snap = tracker.cost_snapshot()
         tok_min, tok_day = tracker.token_snapshot()
-        provider_name, _, upstream_model = key.partition("/")
+        provider_name, account_id, upstream_model = _split_usage_key(key)
         believed_free = bool(upstream_model) and _is_model_free(provider_name, upstream_model, config)
-        models.append({
-            "model": key,
+        entry = {
+            "model": f"{provider_name}/{upstream_model}" if upstream_model else key,
             "requests": snap["requests"],
             "prompt_tokens": snap["prompt_tokens"],
             "completion_tokens": snap["completion_tokens"],
@@ -4684,11 +5109,14 @@ def _build_usage_report() -> dict:
             "cost_sources": snap["cost_sources"],
             "believed_free": believed_free,
             "unexpected_cost": believed_free and snap["cost"] > 0,
-        })
+        }
+        if account_id is not None:
+            entry["account"] = account_id  # label/id only — never the key
+        models.append(entry)
         for field in ("requests", "prompt_tokens", "completion_tokens", "total_tokens", "cost"):
             totals[field] += snap[field]
     totals["cost"] = round(totals["cost"], 8)
-    models.sort(key=lambda m: m["model"])
+    models.sort(key=lambda m: (m["model"], m.get("account") or ""))
 
     with _paid_free_lock:
         flagged = [

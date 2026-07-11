@@ -19,6 +19,11 @@
 #     --name llmproxy \
 #     llmproxy
 #
+# If upstream provider domains fail to resolve (a common symptom after a Docker
+# update that resets the daemon's DNS/iptables), pin public resolvers with
+# --dns (the compose file already sets these for you):
+#     docker run -d --dns 1.1.1.1 --dns 8.8.8.8  ...  llmproxy
+#
 # First-time setup (interactive — requires -it):
 #   mkdir -p ~/.config/llmproxy
 #   docker run -it --rm \
@@ -59,6 +64,20 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
+
+# ── Network debugging tools ────────────────────────────────────────────────
+# The slim base ships without DNS/ping utilities, so `docker exec` debugging of
+# upstream connectivity (e.g. a provider domain failing to resolve) is awkward.
+# Add a minimal, well-known set: ping (iputils-ping), nslookup/dig (dnsutils),
+# curl, and ip/ss (iproute2). ca-certificates keeps HTTPS verification working.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        dnsutils \
+        iproute2 \
+        iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
 
 # ── Install dependencies in a separate layer for cache efficiency ──────────
 COPY requirements.txt .

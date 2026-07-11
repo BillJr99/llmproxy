@@ -215,6 +215,12 @@ on the **same** candidate once with a short backoff — a brief blip on an other
 healthy model won't cost you a needless failover. Non-transient errors (400/401/404
 and the like) fail straight over, since a retry wouldn't help.
 
+**Quota errors are remembered.** A 402/429 (or a quota-signalling error body)
+doesn't just fail over within the request — it cools that account/model for a
+short window so **later** requests skip it too. See
+[quota-aware rotation](#quota-rotation); with [multiple accounts](#accounts) the
+rotation is accounts-first (same model, fresh credential) before moving on.
+
 When **every** candidate has failed, llmproxy returns the last upstream response
 (so you still see the real diagnostic body and status) rather than a synthesized
 error; if no candidate was even reachable it returns a `503`.
@@ -333,9 +339,12 @@ in the cheapest tier:
 2. **Local** models next — also $0, but kept a step below free *cloud* so local
    compute is reserved for when free cloud is exhausted. Local models are likewise
    ordered strongest-first (the bigger/deeper local model is preferred).
-3. **Cheapest capable paid** model as a last resort — only reached when no free
-   or local model can serve the request. Among paid candidates the least
-   expensive (per the [`pricing`](#configuration) block) is tried first.
+3. **Cheapest capable paid** model as a last resort — only when no free or local
+   model can serve the request **and** [`server.allow_implicit_paid`](#allow_implicit_paid)
+   is enabled. By default paid is dropped from this implicit waterfall (an
+   exhausted free + local pool returns a clear 429/503), so paid stays reachable
+   only by direct `provider/model` name. Among paid candidates the least expensive
+   (per the [`pricing`](#configuration) block) is tried first.
 
 This deliberately favors quality over load-spreading within the free tier: a
 short prompt no longer gets routed to a weak model just because it's short, so
@@ -647,6 +656,13 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "<name>": {
       "base_url": "https://...",
       "api_key": "sk-...",
+
+      "accounts": [
+        {"key": "sk-a", "label": "team-a"},
+        {"key": "${KEY_B}", "label": "team-b", "priority": 1}
+      ],
+      "account_strategy": "round_robin",
+
       "model_filter": ["model-a", "model-b"],
 
       "protocol": "openai",
@@ -716,7 +732,9 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "request_timeout": 120,
     "stream_timeout": 300,
     "response_cache_ttl": 120,
-    "stream_include_usage": true
+    "stream_include_usage": true,
+    "allow_implicit_paid": false,
+    "saturation_cooldown_seconds": 60
   }
 }
 ```
@@ -870,6 +888,68 @@ process — so it is "as far as we can tell in the moment". Any field set to `nu
 is ignored; a provider with no `free_allowance` simply never gains free-in-the-
 moment status.
 
+<a name="accounts"></a>
+### Multiple accounts per provider — credential rotation
+
+A single provider can carry **several credentials** ("accounts") so the proxy
+rotates across them and multiplies that provider's free-tier headroom. Declare
+them with `accounts` (or the shorthand `api_keys`) alongside — or instead of — the
+single `api_key`:
+
+```json
+"providers": {
+  "groq": {
+    "base_url": "https://api.groq.com/openai/v1",
+    "accounts": [
+      {"key": "${GROQ_KEY_A}", "label": "team-a"},
+      {"key": "${GROQ_KEY_B}", "label": "team-b", "priority": 1}
+    ],
+    "account_strategy": "round_robin"
+  }
+}
+```
+
+- Each account's `key` resolves `${VAR}` references at request time, exactly like
+  the single `api_key`. `api_keys: ["sk-a", "sk-b"]` is a bare-string shorthand.
+  The legacy `api_key` remains the fallback when neither is set, so **every
+  existing single-key config keeps working unchanged**.
+- **`account_strategy`** — `round_robin` (default) spreads load across accounts;
+  `priority` always prefers the lowest-`priority` account first, falling through
+  to the next only when it is exhausted.
+- **Rotation is accounts-first, then models.** On every virtual endpoint
+  (`llmproxy/free`, `llmproxy/loadbalanced`, `llmproxy/fusion`, the per-provider
+  and reasoning/capability families) a request tries a model's accounts before
+  moving to the next model — same model with fresh quota is the cheapest way to
+  keep serving. Each account meters its **own** free-tier quota (`free_limits`)
+  and is tracked separately in [`GET /v1/usage`](#usage-accounting).
+
+<a name="quota-rotation"></a>
+### Quota-aware rotation — 402/429 cools a candidate until it recovers
+
+When an upstream reports quota exhaustion — HTTP **402** or **429**, or an error
+body carrying a quota signal (`RESOURCE_EXHAUSTED`, `insufficient_quota`,
+`rate_limit_exceeded`, or a "quota"/"rate limit" message) — llmproxy marks that
+account/model **saturated** and rotates to the next candidate. The mark is
+*sticky*: subsequent requests on any virtual endpoint skip the cooled candidate
+until it recovers, so `llmproxy/free` transparently avoids a rate-limited model
+instead of re-picking it every time. The cooldown honors an upstream
+`Retry-After` header when present, otherwise `server.saturation_cooldown_seconds`
+(default 60). When a provider has a shared [`free_allowance`](#free_allowance), a
+quota error also opens a short provider-wide circuit so concurrent requests stop
+draining an already-depleted allowance. All of this is in-memory and per worker
+process, and requires no configuration.
+
+<a name="allow_implicit_paid"></a>
+### `server.allow_implicit_paid` — keep cost-avoiding routes free
+
+`llmproxy/loadbalanced` walks a cost waterfall (free → local → paid). By default
+(`server.allow_implicit_paid: false`) the **paid** tier is dropped from that
+implicit waterfall: when the free and local tiers are exhausted the request
+returns a clear 429/503 rather than silently spending money, and paid models stay
+reachable only by their direct `provider/model` name. Set
+`server.allow_implicit_paid: true` to restore the historical free → local → paid
+fallback. `llmproxy/free` never routes to paid regardless of this flag.
+
 <a name="favorite_free_models"></a>
 ### `favorite_free_models` — ranked priority list for free-tier routing
 
@@ -952,6 +1032,11 @@ curl http://localhost:8080/v1/usage | jq
 - **`flagged_paid_free_models`** lists any model in `believed_free` that served
   a request reporting a **non-zero** cost. Use this to spot a model that has
   quietly left its free tier.
+- **Per-account rows.** When a provider has [multiple accounts](#accounts), each
+  metered credential is its own row carrying an `account` field (the account's
+  label, never the key), so per-account free-tier consumption is visible; the
+  `model` id stays the clean `provider/model` form and `totals` aggregate across
+  accounts. Single-credential providers omit `account` and read exactly as above.
 
   On the **first** such observation the proxy also appends the model's qualified
   id to **`cost_observed_free_tier`** in your live `config.json` (a best-effort,

@@ -270,6 +270,41 @@ def _mask_secret(value) -> str:
     return f"{s[:3]}…{s[-4:]}"
 
 
+def _accounts_view(cfg: dict) -> list | None:
+    """Masked view of a provider's multiple-account credentials, or None.
+
+    Never returns raw key material: each account exposes only a masked key plus
+    key_set / key_is_env flags, alongside its (non-secret) label and priority.
+    Recognizes both the ``accounts`` and ``api_keys`` shapes.
+    """
+    raw = cfg.get("accounts")
+    entries: list[tuple] = []
+    if isinstance(raw, list) and raw:
+        for item in raw:
+            if isinstance(item, dict):
+                entries.append((item.get("key"), item.get("label"), item.get("priority")))
+            elif isinstance(item, str):
+                entries.append((item, None, None))
+    elif isinstance(cfg.get("api_keys"), list) and cfg["api_keys"]:
+        entries = [(k, None, None) for k in cfg["api_keys"]]
+    else:
+        return None
+
+    out: list[dict] = []
+    for key, label, priority in entries:
+        item = {
+            "key": _mask_secret(key),
+            "key_set": bool(key),
+            "key_is_env": value_has_env_ref(key),
+        }
+        if label is not None:
+            item["label"] = label
+        if priority is not None:
+            item["priority"] = priority
+        out.append(item)
+    return out
+
+
 def _provider_view(cfg: dict) -> dict:
     """Return a provider config copy safe for GET responses: api_key masked,
     with flags telling the UI whether a key exists and whether it's an env ref."""
@@ -279,6 +314,11 @@ def _provider_view(cfg: dict) -> dict:
     view["api_key_set"] = bool(raw_key)
     view["api_key_is_env"] = value_has_env_ref(raw_key)
     view["base_url_is_env"] = value_has_env_ref(cfg.get("base_url"))
+    if "account_strategy" in cfg:
+        view["account_strategy"] = cfg.get("account_strategy")
+    accounts = _accounts_view(cfg)
+    if accounts is not None:
+        view["accounts"] = accounts  # keys masked; raw material never leaves here
     return view
 
 
@@ -354,7 +394,78 @@ def _clean_provider_payload(payload: dict, existing: dict | None) -> tuple[dict 
         else:
             return None, f"protocol must be one of {_PROVIDER_PROTOCOLS}."
 
+    if "account_strategy" in payload:
+        val = payload["account_strategy"]
+        if val in (None, "", "round_robin"):
+            cfg.pop("account_strategy", None)  # round_robin is the default
+        elif val == "priority":
+            cfg["account_strategy"] = "priority"
+        else:
+            return None, "account_strategy must be 'round_robin' or 'priority'."
+
+    if "api_keys" in payload:
+        val = payload["api_keys"]
+        if val in (None, []):
+            cfg.pop("api_keys", None)
+        elif isinstance(val, list) and all(isinstance(x, str) and x.strip() for x in val):
+            cfg["api_keys"] = [x.strip() for x in val]
+        else:
+            return None, "api_keys must be a list of non-empty strings."
+
+    if "accounts" in payload:
+        cleaned, err = _clean_accounts(payload["accounts"], existing)
+        if err is not None:
+            return None, err
+        if cleaned:
+            cfg["accounts"] = cleaned
+        else:
+            cfg.pop("accounts", None)
+
     return cfg, None
+
+
+def _clean_accounts(val, existing: dict | None) -> tuple[list | None, str | None]:
+    """Validate a provider's ``accounts`` list.
+
+    Each entry is ``{"key", "label"?, "priority"?}``. A blank/omitted key on an
+    edit preserves the existing account's key matched by label (the same
+    "blank means unchanged" convention as the single api_key field), so the
+    masked GET view can be re-submitted without re-entering secrets.
+    """
+    if val in (None, []):
+        return None, None
+    if not isinstance(val, list):
+        return None, "accounts must be a list of objects."
+
+    existing_by_label: dict = {}
+    for a in (existing or {}).get("accounts", []) or []:
+        if isinstance(a, dict) and a.get("label"):
+            existing_by_label[a["label"]] = a.get("key")
+
+    cleaned: list[dict] = []
+    for item in val:
+        if not isinstance(item, dict):
+            return None, "each account must be an object."
+        key = item.get("key")
+        label = item.get("label")
+        if key is None or (isinstance(key, str) and key.strip() == ""):
+            key = existing_by_label.get(label)  # blank => keep existing by label
+            if not key:
+                return None, "each account requires a key."
+        elif not isinstance(key, str):
+            return None, "account key must be a string."
+        else:
+            key = key.strip()
+        entry: dict = {"key": key}
+        if label not in (None, ""):
+            entry["label"] = label
+        if item.get("priority") is not None:
+            try:
+                entry["priority"] = int(item["priority"])
+            except (TypeError, ValueError):
+                return None, "account priority must be an integer."
+        cleaned.append(entry)
+    return cleaned, None
 
 
 # ---------------------------------------------------------------------------

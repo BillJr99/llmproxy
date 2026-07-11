@@ -67,7 +67,10 @@ def lb_config(tmp_path: Path) -> Path:
         "free_limits": {},
         "server": {"host": "127.0.0.1", "port": 8080, "log_level": "ERROR",
                    "request_timeout": 5, "stream_timeout": 5, "models_cache_ttl": 0,
-                   "response_cache_ttl": 0},
+                   "response_cache_ttl": 0,
+                   # These tests exercise the paid-tier ordering logic, so opt
+                   # into the implicit paid waterfall (off by default now).
+                   "allow_implicit_paid": True},
     }
     p = tmp_path / "config.json"
     p.write_text(json.dumps(cfg))
@@ -299,3 +302,33 @@ def test_quality_ordering_preserves_cost_waterfall(server):
     pairs = _order(server, {"messages": [{"role": "user", "content": "hi"}]})
     tiers = _tiers(server, pairs)
     assert tiers == sorted(tiers), tiers
+
+
+# ── paid is opt-in (server.allow_implicit_paid) ──────────────────────────────
+
+def test_paid_dropped_from_waterfall_by_default(monkeypatch, lb_config):
+    # Without server.allow_implicit_paid, the cost waterfall stops at free/local
+    # and never routes to a paid model implicitly — paid stays reachable only by
+    # direct provider/model name.
+    cfg = json.loads(lb_config.read_text())
+    cfg["server"].pop("allow_implicit_paid", None)  # default (off)
+    lb_config.write_text(json.dumps(cfg))
+    srv = _load_server_with_config(monkeypatch, lb_config)
+    monkeypatch.setattr(srv, "load_pricing_map", lambda *a, **k: dict(_PRICING))
+    _seed_route_cache(srv, {
+        "freecloud__free-1": ("freecloud", "free-1"),
+        "localp__big": ("localp", "big"),
+        "paida__expensive": ("paida", "expensive"),
+        "paidb__cheap": ("paidb", "cheap"),
+    })
+    pairs = _order(srv, {"messages": [{"role": "user", "content": "hi"}]})
+    providers = {pn for pn, _um in pairs}
+    assert "paida" not in providers and "paidb" not in providers
+    assert "freecloud" in providers and "localp" in providers
+
+
+def test_paid_included_when_flag_enabled(server):
+    # With the flag on (the fixture default), paid remains a last-resort tier.
+    pairs = _order(server, {"messages": [{"role": "user", "content": "hi"}]})
+    providers = {pn for pn, _um in pairs}
+    assert "paida" in providers or "paidb" in providers
