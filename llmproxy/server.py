@@ -87,6 +87,7 @@ from .config import (
     load_config,
     model_is_allowed,
     parse_model_string,
+    provider_account_id,
     provider_api_key,
     provider_base_url,
     resolve_env_refs,
@@ -263,6 +264,128 @@ _cost_observed_persist_lock = threading.Lock()
 _cost_observed_reaction_lock = threading.Lock()
 _cost_observed_reaction_inflight = False
 COST_OBSERVED_KEY = "cost_observed_free_tier"
+
+
+# ---------------------------------------------------------------------------
+# Saturation registry — remember quota-exhausted candidates across requests
+# ---------------------------------------------------------------------------
+#
+# The in-request cycling engine already rotates off a 429; this registry makes
+# that rotation *sticky*: a candidate that returns a quota/rate-limit error is
+# cooled until its documented reset (Retry-After when provided, else a default
+# window), so subsequent requests on any virtual endpoint skip it instead of
+# re-picking the same depleted model/account first. Per-worker & in-memory, like
+# the usage counters. Keyed identically to the usage registry (per account when
+# a provider has several); a provider-wide sentinel model opens a circuit for a
+# whole provider/account when its shared allowance is depleted.
+_saturation_registry: dict[str, float] = {}  # key -> monotonic expiry (seconds)
+_saturation_lock = threading.Lock()
+_DEFAULT_SATURATION_COOLDOWN_S = 60.0
+_MAX_SATURATION_COOLDOWN_S = 3600.0
+_PROVIDER_CIRCUIT_MODEL = "__provider__"  # sentinel model for a provider-wide circuit
+
+# HTTP statuses that mean "out of quota / rate limited": 402 Payment Required
+# (out of credits) and 429 Too Many Requests. Both mark the model unavailable
+# until its reset; a plain 5xx is transient and retried without a cooldown.
+_QUOTA_STATUSES = frozenset({402, 429})
+
+# Machine-readable quota codes (specific enough to trust on their own) and
+# generic phrases (only trusted inside an error-shaped body).
+_QUOTA_CODES = ("resource_exhausted", "insufficient_quota", "rate_limit_exceeded")
+_QUOTA_PHRASES = ("quota", "rate limit", "too many requests")
+
+
+def _is_quota_error(status: int | None, body_bytes: bytes | None = None) -> bool:
+    """True when a response signals quota / rate-limit exhaustion.
+
+    Fires on HTTP 402/429 and on error bodies (a 200-with-error or a 4xx) whose
+    code or message matches a known quota marker — Gemini ``RESOURCE_EXHAUSTED``,
+    OpenAI ``insufficient_quota`` / ``rate_limit_exceeded``, or a generic
+    "quota" / "rate limit" / "too many requests" phrase inside an error body.
+    Deliberately distinct from a plain transient 5xx (retryable, but no cooldown).
+    """
+    if status in _QUOTA_STATUSES:
+        return True
+    if not body_bytes:
+        return False
+    try:
+        text = body_bytes.decode("utf-8", "ignore").lower()
+    except Exception:  # noqa: BLE001
+        return False
+    if any(code in text for code in _QUOTA_CODES):
+        return True
+    if "error" in text and any(p in text for p in _QUOTA_PHRASES):
+        return True
+    return False
+
+
+def _parse_retry_after(value) -> float | None:
+    """Parse a ``Retry-After`` header (delta-seconds or HTTP-date) to seconds."""
+    if not value:
+        return None
+    value = str(value).strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(value)
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.UTC)
+        return max(0.0, (dt - datetime.datetime.now(datetime.UTC)).total_seconds())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _saturation_cooldown_seconds(retry_after=None) -> float:
+    """Resolve the cooldown window: Retry-After if given, else configured default."""
+    parsed = _parse_retry_after(retry_after)
+    if parsed is not None and parsed > 0:
+        return min(parsed, _MAX_SATURATION_COOLDOWN_S)
+    try:
+        configured = load_config().get("server", {}).get(
+            "saturation_cooldown_seconds", _DEFAULT_SATURATION_COOLDOWN_S
+        )
+        cooldown = float(configured)
+    except (TypeError, ValueError):
+        cooldown = _DEFAULT_SATURATION_COOLDOWN_S
+    return max(0.0, min(cooldown, _MAX_SATURATION_COOLDOWN_S))
+
+
+def _mark_saturated(key: str, retry_after=None) -> None:
+    """Cool *key* (a usage-registry key) until its reset so callers rotate off it."""
+    cooldown = _saturation_cooldown_seconds(retry_after)
+    if cooldown <= 0:
+        return
+    with _saturation_lock:
+        _saturation_registry[key] = time.monotonic() + cooldown
+
+
+def _is_saturated(key: str) -> bool:
+    """True while *key* is still cooling; lazily evicts expired entries."""
+    now = time.monotonic()
+    with _saturation_lock:
+        expiry = _saturation_registry.get(key)
+        if expiry is None:
+            return False
+        if expiry <= now:
+            del _saturation_registry[key]
+            return False
+        return True
+
+
+def _mark_provider_circuit(provider_name: str, account_id: str | None = None, retry_after=None) -> None:
+    """Open a provider-wide (per-account) circuit so concurrent requests skip it."""
+    _mark_saturated(_usage_key(provider_name, _PROVIDER_CIRCUIT_MODEL, account_id), retry_after)
+
+
+def _is_candidate_saturated(provider_name: str, upstream_model: str, account_id: str | None = None) -> bool:
+    """True when either this model/account or its provider-wide circuit is cooling."""
+    return (
+        _is_saturated(_usage_key(provider_name, upstream_model, account_id))
+        or _is_saturated(_usage_key(provider_name, _PROVIDER_CIRCUIT_MODEL, account_id))
+    )
 
 
 def _usage_key(provider_name: str, upstream_model: str, account_id: str | None = None) -> str:
@@ -480,12 +603,14 @@ def _get_token_snapshot(key: str) -> tuple[int, int]:
 
 
 def _reset_usage() -> None:
-    """Clear all in-memory usage counters and paid-free flags."""
+    """Clear all in-memory usage counters, paid-free flags, and saturation state."""
     global _usage_since
     with _usage_registry_lock:
         _usage_registry.clear()
     with _paid_free_lock:
         _paid_free_flags.clear()
+    with _saturation_lock:
+        _saturation_registry.clear()
     _usage_since = datetime.datetime.now(datetime.UTC).isoformat()
 
 
@@ -3130,11 +3255,20 @@ def _capacity_ordered_candidates(
     Algorithm:
     - Each candidate is scored via _capacity_score() using its RPM/RPD usage.
     - Candidates with no configured limits score 1.0 (treated as unlimited).
+    - A candidate currently cooling in the saturation registry (recent 402/429)
+      is forced to score 0.0, so a just-rate-limited account/model drops to the
+      back on the *next* request too — the "transparent rotation" the free
+      virtual promises — rather than being re-picked first every time.
     - Candidates with score > 0 are drawn via weighted reservoir sampling so
       higher-capacity models are preferred while load is still distributed.
-    - Candidates with score == 0 (at limit) are appended as last-resort fallbacks;
-      they still get tried so a saturated model doesn't cause an avoidable 503.
-    - Falls back to random rotation when no candidate has any configured limits.
+    - Candidates with score == 0 (at limit or cooling) are appended as
+      last-resort fallbacks; they still get tried so a saturated model doesn't
+      cause an avoidable 503.
+    - Falls back to random rotation when no candidate has any configured limits
+      and none is currently cooling.
+
+    Usage/saturation are keyed per account (see _usage_key), so with several
+    accounts on a provider each meters and cools independently.
 
     Note: tracking is per-worker-process; gunicorn multi-worker deployments
     may undercount usage relative to the provider's actual view.
@@ -3142,24 +3276,32 @@ def _capacity_ordered_candidates(
     if not candidates:
         return candidates
 
+    def _acct(pc):
+        return provider_account_id(pc)
+
     any_limits = any(
-        f"{pn}/{um}".lower() in free_limits for pn, _, um in candidates
+        _usage_key(pn, um, _acct(pc)) in free_limits or f"{pn}/{um}".lower() in free_limits
+        for pn, pc, um in candidates
     )
-    if not any_limits:
+    any_saturated = any(
+        _is_candidate_saturated(pn, um, _acct(pc)) for pn, pc, um in candidates
+    )
+    if not any_limits and not any_saturated:
         start = random.randrange(len(candidates))
         return candidates[start:] + candidates[:start]
 
     scored: list[tuple[tuple[str, dict, str], float]] = []
     for pn, pc, um in candidates:
-        key = f"{pn}/{um}".lower()
-        limits = free_limits.get(key, {})
-        used_min, used_day = _get_usage_snapshot(key)
-        used_tok_min, used_tok_day = _get_token_snapshot(key)
-        score = _capacity_score(used_min, used_day, limits, used_tok_min, used_tok_day)
-        logger.debug(
-            "[capacity] %s/%s  score=%.3f  used_min=%d  used_day=%d  tok_min=%d  tok_day=%d",
-            pn, um, score, used_min, used_day, used_tok_min, used_tok_day,
-        )
+        account_id = _acct(pc)
+        key = _usage_key(pn, um, account_id)
+        limits = free_limits.get(key, {}) or free_limits.get(f"{pn}/{um}".lower(), {})
+        if _is_candidate_saturated(pn, um, account_id):
+            score = 0.0  # recently rate-limited — cool it off, keep it reachable
+        else:
+            used_min, used_day = _get_usage_snapshot(key)
+            used_tok_min, used_tok_day = _get_token_snapshot(key)
+            score = _capacity_score(used_min, used_day, limits, used_tok_min, used_tok_day)
+        logger.debug("[capacity] %s  score=%.3f", key, score)
         scored.append(((pn, pc, um), score))
 
     viable = [(c, s) for c, s in scored if s > 0.0]
@@ -3190,6 +3332,17 @@ def _capacity_ordered_candidates(
 def _provider_exposes_to_virtual_models(provider_cfg: dict) -> bool:
     """Return False only when the provider explicitly opts out via expose_to_virtual_models: false."""
     return provider_cfg.get("expose_to_virtual_models", True) is not False
+
+
+def _allow_implicit_paid(config: dict) -> bool:
+    """True when virtual routing may fall back to paid models implicitly.
+
+    Default False: cost-avoiding virtuals (loadbalanced) stop at the free/local
+    tiers and surface a clear 429/503 when they are exhausted, so a paid model is
+    only ever reached by direct ``provider/model`` name. Set
+    ``server.allow_implicit_paid: true`` to restore the free→local→paid waterfall.
+    """
+    return bool(config.get("server", {}).get("allow_implicit_paid", False))
 
 
 def _apply_favorite_free_ordering(
@@ -3274,11 +3427,15 @@ def _quality_ordered_candidates(
 
     scored: list[tuple[tuple[str, dict, str], float]] = []
     for pn, pc, um in candidates:
-        key = f"{pn}/{um}".lower()
-        limits = free_limits.get(key, {})
-        used_min, used_day = _get_usage_snapshot(key)
-        used_tok_min, used_tok_day = _get_token_snapshot(key)
-        score = _capacity_score(used_min, used_day, limits, used_tok_min, used_tok_day)
+        account_id = provider_account_id(pc)
+        key = _usage_key(pn, um, account_id)
+        limits = free_limits.get(key, {}) or free_limits.get(f"{pn}/{um}".lower(), {})
+        if _is_candidate_saturated(pn, um, account_id):
+            score = 0.0  # cooling after a recent 402/429 — demote, keep reachable
+        else:
+            used_min, used_day = _get_usage_snapshot(key)
+            used_tok_min, used_tok_day = _get_token_snapshot(key)
+            score = _capacity_score(used_min, used_day, limits, used_tok_min, used_tok_day)
         scored.append(((pn, pc, um), score))
 
     def _key(item: tuple[tuple[str, dict, str], float]):
@@ -3677,19 +3834,23 @@ def _loadbalanced_ordered_candidates(
     payload: dict,
     config: dict,
 ) -> list[tuple[str, dict, str]]:
-    """Order candidates as a cost waterfall: free → local → paid.
+    """Order candidates as a cost waterfall: free → local → (paid, opt-in).
 
     Cost tier is the dominant (outer) key — a paid model is NEVER ordered before
-    a free or local one, so cost-avoidance always wins and paid stays a true last
-    resort (failover, which is silent and robust, handles feasibility). Within
-    the $0 tiers candidates are ordered **best-first**: among free models that
-    still have headroom the most sophisticated (see _quality_key) is tried first,
-    with capacity as a tiebreak; local is likewise strongest-first. This keeps
-    spend at ~$0 while elevating answer quality, rather than picking a weak free
-    model just because the prompt is short. Paid stays cheapest-first. A final
-    capability sort still pulls models that satisfy a *forced* tool/vision/JSON
-    requirement to the front of each tier.
+    a free or local one, so cost-avoidance always wins. Within the $0 tiers
+    candidates are ordered **best-first**: among free models that still have
+    headroom the most sophisticated (see _quality_key) is tried first, with
+    capacity as a tiebreak; local is likewise strongest-first. This keeps spend at
+    ~$0 while elevating answer quality, rather than picking a weak free model just
+    because the prompt is short. A final capability sort still pulls models that
+    satisfy a *forced* tool/vision/JSON requirement to the front of each tier.
+
+    **Paid is opt-in.** Paid models are dropped from the implicit waterfall unless
+    ``server.allow_implicit_paid`` is true; they stay reachable only by direct
+    ``provider/model`` name. With the gate off (the default) an exhausted free +
+    local pool surfaces a clear 429/503 rather than silently spending money.
     """
+    allow_paid = _allow_implicit_paid(config)
     tiers: dict[int, list[tuple[str, dict, str]]] = {
         _TIER_FREE: [], _TIER_LOCAL: [], _TIER_PAID: [],
     }
@@ -3714,6 +3875,8 @@ def _loadbalanced_ordered_candidates(
         bucket = tiers[tier]
         if not bucket:
             continue
+        if tier == _TIER_PAID and not allow_paid:
+            continue  # paid never an implicit fallback unless explicitly enabled
         if tier == _TIER_FREE:
             bucket = _quality_ordered_candidates(bucket, free_limits, reasoning_map)
             bucket = _apply_favorite_free_ordering(bucket, config)
