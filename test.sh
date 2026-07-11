@@ -359,7 +359,7 @@ else
   # A plain prompt and a 'think hard' prompt should both get a usable reply. The
   # waterfall prefers free → local → paid and fails over silently, so this checks
   # that a reasonable model answers, not which tier served it.
-  code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy/loadbalanced\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}")
+  code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy/loadbalanced\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":64}")
   if ok2xx "$code"; then
     content=$(jqr '.choices[0].message.content')
     [ -n "$content" ] && pass "plain prompt → $code ${DIM}(replied)${RST}" || fail "plain prompt → $code but empty body"

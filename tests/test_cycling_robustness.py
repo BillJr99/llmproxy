@@ -196,6 +196,113 @@ def test_failover_on_empty_content(server, monkeypatch):
     assert b"ok" in resp.get_data()
 
 
+# ── auto budget escalation ──────────────────────────────────────────────────
+
+def test_is_budget_truncated_empty(server):
+    f = server._is_budget_truncated_empty
+    # empty content cut off on length → recoverable with more budget
+    assert f(json.dumps(
+        {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}
+    ).encode()) is True
+    assert f(json.dumps(
+        {"choices": [{"message": {"content": "   "}, "finish_reason": "max_tokens"}]}
+    ).encode()) is True
+    # empty but NOT truncated (stopped normally) → not a budget problem
+    assert f(json.dumps(
+        {"choices": [{"message": {"content": ""}, "finish_reason": "stop"}]}
+    ).encode()) is False
+    # truncated but already has content → usable, leave it alone
+    assert f(json.dumps(
+        {"choices": [{"message": {"content": "hi"}, "finish_reason": "length"}]}
+    ).encode()) is False
+    # empty + tool call is usable output, not a starved body
+    assert f(json.dumps(
+        {"choices": [{"message": {"content": "", "tool_calls": [{"id": "1"}]},
+                      "finish_reason": "length"}]}
+    ).encode()) is False
+    assert f(b"not json") is False
+
+
+def test_bumped_budget(server):
+    f = server._bumped_budget
+    factor = server._BUDGET_BUMP_FACTOR
+    ceiling = server._BUDGET_BUMP_CEILING
+    assert f({"max_tokens": 8})["max_tokens"] == 8 * factor
+    assert f({"max_completion_tokens": 8})["max_completion_tokens"] == 8 * factor
+    # clamps at the ceiling
+    assert f({"max_tokens": ceiling // 2 + 1})["max_tokens"] == ceiling
+    # already at/over the ceiling → no bump
+    assert f({"max_tokens": ceiling}) is None
+    # no budget field / uncapped request → nothing to bump
+    assert f({}) is None
+    assert f({"max_tokens": 0}) is None
+    # a bool is not a real budget (True == 1 in Python) — must be ignored
+    assert f({"max_tokens": True}) is None
+
+
+def test_budget_escalation_recovers_answer(server, monkeypatch):
+    # A reasoning model returns an empty, length-truncated body at max_tokens=8,
+    # then answers once the budget is bumped — all on the SAME candidate, with no
+    # failover to a weaker model.
+    calls: list[dict] = []
+    starved = {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}
+
+    def fake(endpoint, pn, cfg, payload, timeout):
+        calls.append(dict(payload))
+        if payload.get("max_tokens", 0) <= 8:
+            return _json_resp(starved)
+        return _json_resp(_OK)
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    candidates = [("p1", {}, "m1"), ("p2", {}, "m2")]
+    resp = server._proxy_cycling_non_streaming(
+        "chat/completions", "t", candidates, {"max_tokens": 8}, 5
+    )
+    # Only m1 was tried; the second call carried the bumped budget.
+    assert [c["model"] for c in calls] == ["m1", "m1"]
+    assert calls[1]["max_tokens"] == 8 * server._BUDGET_BUMP_FACTOR
+    assert b"ok" in resp.get_data()
+
+
+def test_budget_escalation_is_bounded_then_fails_over(server, monkeypatch):
+    # A model that stays empty no matter the budget must not loop forever: the
+    # escalation is capped, then the loop fails over to the next candidate.
+    calls: list[dict] = []
+    starved = {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}
+
+    def fake(endpoint, pn, cfg, payload, timeout):
+        calls.append(dict(payload))
+        return _json_resp(starved) if payload["model"] == "m1" else _json_resp(_OK)
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    candidates = [("p1", {}, "m1"), ("p2", {}, "m2")]
+    resp = server._proxy_cycling_non_streaming(
+        "chat/completions", "t", candidates, {"max_tokens": 8}, 5
+    )
+    m1_calls = [c for c in calls if c["model"] == "m1"]
+    # one initial + at most _BUDGET_BUMP_MAX_RETRIES bumped attempts, then failover
+    assert len(m1_calls) == 1 + server._BUDGET_BUMP_MAX_RETRIES
+    assert calls[-1]["model"] == "m2"
+    assert b"ok" in resp.get_data()
+
+
+def test_no_budget_escalation_without_max_tokens(server, monkeypatch):
+    # An uncapped request that comes back empty+truncated can't be bumped (no
+    # budget field), so it fails over immediately without extra same-candidate hits.
+    calls: list[dict] = []
+    starved = {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}
+
+    def fake(endpoint, pn, cfg, payload, timeout):
+        calls.append(dict(payload))
+        return _json_resp(starved) if payload["model"] == "m1" else _json_resp(_OK)
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    candidates = [("p1", {}, "m1"), ("p2", {}, "m2")]
+    resp = server._proxy_cycling_non_streaming("chat/completions", "t", candidates, {}, 5)
+    assert [c["model"] for c in calls] == ["m1", "m2"]
+    assert b"ok" in resp.get_data()
+
+
 def test_transient_fails_over_immediately_when_alternatives_remain(server, monkeypatch):
     # A 429/5xx with another candidate available must fail over at once (no
     # same-candidate retry) so a rate-limited model never stalls the pipeline.

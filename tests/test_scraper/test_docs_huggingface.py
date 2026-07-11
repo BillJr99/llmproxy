@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import responses
+
+pytest.importorskip("bs4")  # docs scrapers parse HTML with BeautifulSoup
 
 from scripts.sources.docs.huggingface import URL, HuggingFaceDocs
 

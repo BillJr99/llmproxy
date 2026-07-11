@@ -160,6 +160,15 @@ _VIRTUAL_CANDIDATE_TIMEOUT: int = 60
 _VIRTUAL_MAX_RETRIES: int = 1
 # Backoff (seconds) between those same-candidate retries.
 _VIRTUAL_RETRY_BACKOFF: float = 0.5
+# Auto-budget escalation: when a candidate answers 200 but the completion is
+# empty *because* it was truncated on ``max_tokens`` (a reasoning model that
+# spent the whole budget thinking), the same candidate is retried with a larger
+# budget before failing over. The budget is multiplied by _BUDGET_BUMP_FACTOR
+# each retry, capped at _BUDGET_BUMP_CEILING, for at most _BUDGET_BUMP_MAX_RETRIES
+# rounds — bounded so a pathological model can't drive unbounded cost/latency.
+_BUDGET_BUMP_FACTOR: int = 4
+_BUDGET_BUMP_CEILING: int = 4096
+_BUDGET_BUMP_MAX_RETRIES: int = 2
 # Stable per-process timestamp used as the OpenAI-standard ``created`` fallback
 # for models whose upstream listing omits it (and for synthetic virtual models).
 _SERVER_EPOCH: int = int(time.time())
@@ -2968,6 +2977,57 @@ def _choice_yields_output(choice: dict) -> bool:
     return False
 
 
+def _is_budget_truncated_empty(body_bytes: bytes) -> bool:
+    """True when a 200 delivered no visible output *only* because it ran out of
+    token budget: every choice is empty (no text, no tool call) and at least one
+    was cut off with ``finish_reason`` "length".
+
+    This is the signature of a reasoning model that spent its whole ``max_tokens``
+    budget on thinking and had nothing left for the answer. Retrying the same
+    model with a larger budget can recover a real reply, so the cycling loop
+    escalates the budget before failing over (see ``_escalate_budget_if_starved``).
+    A body that already carries usable output, or that was truncated for any other
+    reason, is left alone.
+    """
+    try:
+        data = json.loads(body_bytes)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    choices = data.get("choices")
+    if not choices or not isinstance(choices, list):
+        return False
+    saw_length = False
+    for choice in choices:
+        if _choice_yields_output(choice):
+            return False
+        finish = choice.get("finish_reason") if isinstance(choice, dict) else None
+        if finish in ("length", "max_tokens"):
+            saw_length = True
+    return saw_length
+
+
+def _bumped_budget(payload: dict) -> dict | None:
+    """Return a copy of *payload* with its token budget multiplied, or ``None``.
+
+    Recognizes the OpenAI ``max_completion_tokens`` and legacy ``max_tokens``
+    fields. Returns ``None`` when neither is set to a positive int (nothing to
+    bump — an uncapped request would never truncate) or the budget is already at
+    the ``_BUDGET_BUMP_CEILING`` (further bumps refused so cost stays bounded).
+    """
+    for field in ("max_completion_tokens", "max_tokens"):
+        current = payload.get(field)
+        if isinstance(current, int) and not isinstance(current, bool) and current > 0:
+            if current >= _BUDGET_BUMP_CEILING:
+                return None
+            bumped = min(current * _BUDGET_BUMP_FACTOR, _BUDGET_BUMP_CEILING)
+            if bumped <= current:
+                return None
+            return {**payload, field: bumped}
+    return None
+
+
 def _response_unusable(body_bytes: bytes) -> bool:
     """True when a non-streaming HTTP 200 isn't actually a usable completion.
 
@@ -3131,6 +3191,43 @@ def _bind_freshest_account(provider_name: str, provider_cfg: dict, upstream_mode
     return account_bound_cfg(provider_cfg, chosen), chosen.id
 
 
+def _escalate_budget_if_starved(
+    endpoint: str,
+    provider_name: str,
+    provider_cfg: dict,
+    upstream_payload: dict,
+    resp: "Response",
+    timeout: int,
+    label: str,
+) -> "Response":
+    """Retry a budget-starved 200 on the *same* candidate with a larger budget.
+
+    When *resp* is an empty completion truncated on ``max_tokens`` (see
+    ``_is_budget_truncated_empty``), the model spent its whole budget thinking and
+    had nothing left to say. Rather than failing over — the strongest model is
+    usually the one that reasons this hard — give it more room: multiply the
+    budget and retry, up to ``_BUDGET_BUMP_MAX_RETRIES`` times or until the budget
+    hits ``_BUDGET_BUMP_CEILING``. Returns the first usable response, or the last
+    attempt (which the caller's normal failover path then handles).
+    """
+    payload = upstream_payload
+    for _ in range(_BUDGET_BUMP_MAX_RETRIES):
+        if resp.status_code >= 400 or not _is_budget_truncated_empty(resp.get_data()):
+            return resp
+        bumped = _bumped_budget(payload)
+        if bumped is None:
+            return resp
+        new_budget = bumped.get("max_completion_tokens") or bumped.get("max_tokens")
+        logger.warning(
+            "  [%s] %s/%s returned an empty, budget-truncated body; "
+            "retrying with a larger token budget (%s)",
+            label, provider_name, upstream_payload.get("model"), new_budget,
+        )
+        payload = bumped
+        resp = _proxy_request(endpoint, provider_name, provider_cfg, payload, timeout)
+    return resp
+
+
 def _proxy_cycling_non_streaming(
     endpoint: str,
     label: str,
@@ -3152,6 +3249,12 @@ def _proxy_cycling_non_streaming(
     ``_candidate_max_attempts``.  When every candidate is exhausted the last
     response is returned so the client still receives the real upstream body
     rather than a synthesized error.
+
+    Before failing over a 200, a candidate that answered with an empty completion
+    truncated on ``max_tokens`` (a reasoning model that spent the whole budget
+    thinking) is retried on the *same* candidate with a larger token budget — see
+    ``_escalate_budget_if_starved`` — so the strongest model still answers instead
+    of being skipped for an avoidable empty body.
 
     ``on_success`` is invoked as ``on_success(provider, model, body)`` with the
     successful response bytes so the caller can record token + cost usage.
@@ -3175,6 +3278,13 @@ def _proxy_cycling_non_streaming(
                     attempt + 1, max_attempts - 1,
                 )
                 time.sleep(_VIRTUAL_RETRY_BACKOFF)
+        # A 200 that emitted no visible content only because it ran out of token
+        # budget gets a larger budget on this same candidate before we fail over.
+        if resp.status_code < 400:
+            resp = _escalate_budget_if_starved(
+                endpoint, provider_name, provider_cfg, upstream_payload,
+                resp, candidate_timeout, label,
+            )
         if resp.status_code < 400:
             body = resp.get_data()
             if _capability_failed(payload, body):
