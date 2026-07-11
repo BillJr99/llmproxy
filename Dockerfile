@@ -60,6 +60,20 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# ── Network debugging tools ────────────────────────────────────────────────
+# The slim base ships without DNS/ping utilities, so `docker exec` debugging of
+# upstream connectivity (e.g. a provider domain failing to resolve) is awkward.
+# Add a minimal, well-known set: ping (iputils-ping), nslookup/dig (dnsutils),
+# curl, and ip/ss (iproute2). ca-certificates keeps HTTPS verification working.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        dnsutils \
+        iproute2 \
+        iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
+
 # ── Install dependencies in a separate layer for cache efficiency ──────────
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
