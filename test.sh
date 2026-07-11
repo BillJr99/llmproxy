@@ -190,9 +190,12 @@ hdr "OpenAI /v1/completions (legacy)"
 if [ -z "$CHAT_MODEL" ]; then
   skip "no usable model for /v1/completions"
 else
+  # The proxy forwards to the provider's own /completions and, when that 404s,
+  # transparently falls back to chat/completions — so a 2xx is expected even for
+  # providers that dropped the legacy endpoint.
   code=$(req POST /v1/completions "{\"model\":\"${CHAT_MODEL}\",\"prompt\":\"Reply with exactly: pong\",\"max_tokens\":16}")
-  if ok2xx "$code"; then pass "completions → $code"
-  else warn "completions → $code (not all providers support the legacy endpoint)"; fi
+  if ok2xx "$code"; then pass "completions → $code (native or chat fallback)"
+  else warn "completions → $code (legacy passthrough and chat fallback both failed)"; fi
 fi
 
 # ── Anthropic Messages family ───────────────────────────────────────────────

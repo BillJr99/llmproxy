@@ -342,3 +342,115 @@ def test_count_tokens(monkeypatch, server):
                     json={"model": "oai/gpt-x", "messages": [{"role": "user", "content": "x" * 40}]})
     assert r.status_code == 200
     assert r.get_json()["input_tokens"] >= 1
+
+
+# --------------------------------------------------------------------------- #
+# legacy /v1/completions — native passthrough, then chat/completions fallback
+# --------------------------------------------------------------------------- #
+
+_LEGACY_RESP = json.dumps({
+    "id": "cmpl-1", "object": "text_completion", "model": "gpt-x",
+    "choices": [{"text": "native legacy text", "index": 0, "logprobs": None,
+                 "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7},
+}).encode()
+
+
+def test_legacy_completions_native_passthrough(monkeypatch, server):
+    """When the upstream implements /completions, forward verbatim (no fallback)."""
+    calls = []
+
+    def responder(url, body, stream):
+        calls.append(url)
+        return _FakeResp(body=_LEGACY_RESP)
+
+    _set_post(monkeypatch, server, responder)
+    client = server.app.test_client()
+    r = client.post("/v1/completions",
+                    json={"model": "oai/gpt-x", "prompt": "hi", "max_tokens": 8})
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["object"] == "text_completion"
+    assert data["choices"][0]["text"] == "native legacy text"
+    # Hit the real legacy endpoint once; never fell back to chat.
+    assert calls == ["http://oai.example/v1/completions"]
+
+
+def test_legacy_completions_falls_back_to_chat(monkeypatch, server):
+    """A 404 from /completions retries against /chat/completions, rendered legacy."""
+    captured = {}
+
+    def responder(url, body, stream):
+        if url.endswith("/completions") and not url.endswith("/chat/completions"):
+            return _FakeResp(status=404, body=b'{"error":{"message":"no such endpoint"}}')
+        captured["url"] = url
+        captured["body"] = body
+        return _FakeResp(body=_OPENAI_RESP)
+
+    _set_post(monkeypatch, server, responder)
+    client = server.app.test_client()
+    r = client.post("/v1/completions",
+                    json={"model": "oai/gpt-x", "prompt": "hi", "max_tokens": 8,
+                          "temperature": 0.5})
+    assert r.status_code == 200
+    data = r.get_json()
+    # Rendered back into the legacy text_completion shape.
+    assert data["object"] == "text_completion"
+    assert data["choices"][0]["text"] == "hello world"
+    assert data["choices"][0]["finish_reason"] == "stop"
+    assert data["usage"]["prompt_tokens"] == 5
+    # Fallback hit the chat endpoint with the prompt wrapped as a user message,
+    # sampling params carried over, and the legacy-only prompt key dropped.
+    assert captured["url"] == "http://oai.example/v1/chat/completions"
+    assert captured["body"]["messages"] == [{"role": "user", "content": "hi"}]
+    assert captured["body"]["temperature"] == 0.5
+    assert "prompt" not in captured["body"]
+
+
+def test_legacy_completions_stream_translates_to_chat(monkeypatch, server):
+    """Streaming legacy requests translate to chat up front and render legacy SSE."""
+    captured = {}
+
+    def responder(url, body, stream):
+        captured["url"] = url
+        return _FakeResp(chunks=_OPENAI_STREAM, content_type="text/event-stream")
+
+    _set_post(monkeypatch, server, responder)
+    client = server.app.test_client()
+    r = client.post("/v1/completions",
+                    json={"model": "oai/gpt-x", "prompt": "hi", "stream": True})
+    body = r.get_data().decode()
+    # Went straight to chat (no legacy probe), rendered as text_completion frames.
+    assert captured["url"] == "http://oai.example/v1/chat/completions"
+    assert '"object":"text_completion"' in body
+    assert '"text":"Hel"' in body and '"text":"lo"' in body
+    assert '"finish_reason":"stop"' in body
+    assert "data: [DONE]" in body
+
+
+# --------------------------------------------------------------------------- #
+# legacy completions adapter — direct round-trip checks
+# --------------------------------------------------------------------------- #
+
+def test_legacy_adapter_prompt_and_response_roundtrip():
+    from llmproxy.dialects.base import get_inbound
+
+    adapter = get_inbound("openai-completions")
+    # Array prompt flattens to one user message; legacy-only keys are dropped.
+    canonical = adapter.to_canonical_request(
+        {"model": "m", "prompt": ["line one", "line two"], "suffix": "x",
+         "best_of": 2, "logprobs": 5, "top_p": 0.9}
+    )
+    assert canonical["messages"] == [{"role": "user", "content": "line one\nline two"}]
+    assert canonical["top_p"] == 0.9
+    assert "suffix" not in canonical and "best_of" not in canonical and "logprobs" not in canonical
+
+    rendered = json.loads(adapter.render_response(_OPENAI_RESP))
+    assert rendered["object"] == "text_completion"
+    assert rendered["choices"][0]["text"] == "hello world"
+    assert rendered["choices"][0]["finish_reason"] == "stop"
+    assert rendered["usage"]["total_tokens"] == 7
+
+    # Upstream error bodies pass through untouched.
+    err = b'{"error":{"message":"boom"}}'
+    assert adapter.render_response(err) == err
