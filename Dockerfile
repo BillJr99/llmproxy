@@ -19,6 +19,11 @@
 #     --name llmproxy \
 #     llmproxy
 #
+# If upstream provider domains fail to resolve (a common symptom after a Docker
+# update that resets the daemon's DNS/iptables), pin public resolvers with
+# --dns (the compose file already sets these for you):
+#     docker run -d --dns 1.1.1.1 --dns 8.8.8.8  ...  llmproxy
+#
 # First-time setup (interactive — requires -it):
 #   mkdir -p ~/.config/llmproxy
 #   docker run -it --rm \
