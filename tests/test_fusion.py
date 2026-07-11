@@ -421,3 +421,99 @@ def test_fusion_models_advertised(server):
                    "pc__paid": ("pc", "paid"), "pd__paid2": ("pd", "paid2")})
     assert len(server._get_all_model_candidates()) >= fusion.MIN_PANEL
     assert len(server._get_free_model_candidates()) >= fusion.MIN_PANEL
+
+
+# ── quota-driven rotation (accounts / models) ────────────────────────────────
+
+def test_rank_aux_models_orders_and_excludes(server):
+    pool = [("pa", {}, "ma"), ("pb", {}, "mb"), ("pc", {}, "mc")]
+    with server.app.test_request_context():
+        ranked = server._rank_aux_models(pool, None, server.load_config(),
+                                         exclude_first=("pb", {}, "mb"))
+        # Excluded model is pushed last; the rest keep pool order.
+        assert [c[2] for c in ranked] == ["ma", "mc", "mb"]
+        # An unresolved explicit model is skipped and the pool order is used.
+        ranked2 = server._rank_aux_models(pool, "nope/unresolved", server.load_config())
+        assert [c[2] for c in ranked2] == ["ma", "mb", "mc"]
+
+
+def test_fusion_panel_quota_error_cools_model(server, monkeypatch):
+    server._reset_usage()
+    # Four distinct providers == panel_size, so every one is selected & attempted.
+    pool = [(f"p{x}", {"base_url": f"http://p{x}/v1", "api_key": "k"}, f"m{x}")
+            for x in ("a", "b", "c", "d")]
+    monkeypatch.setattr(server, "_fusion_pool", lambda *a, **k: pool)
+
+    def fake(endpoint, pn, cfg, payload, timeout, **kw):
+        msgs = payload.get("messages", [])
+        sysc = msgs[0]["content"] if msgs and msgs[0].get("role") == "system" else ""
+        if "impartial judge" in sysc:
+            return _chat('{"consensus": ["x"]}')
+        if "synthesizer" in sysc:
+            return _chat("FINAL")
+        if payload["model"] == "ma":               # pa/ma is rate-limited
+            return _chat('{"error": {"type": "rate_limit_exceeded"}}', status=429)
+        return _chat(f"answer from {payload['model']}")
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    resp = _run(server, "llmproxy__fusion", {"messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 200
+    # The rate-limited panel model is cooled so future requests rotate off it.
+    assert server._is_candidate_saturated("pa", "ma", None) is True
+
+
+def test_fusion_judge_rotates_on_quota(server, monkeypatch):
+    server._reset_usage()
+    pool = [("pa", {"base_url": "http://pa/v1", "api_key": "k"}, "ma"),
+            ("pb", {"base_url": "http://pb/v1", "api_key": "k"}, "mb")]
+    monkeypatch.setattr(server, "_fusion_pool", lambda *a, **k: pool)
+    judge_calls: list = []
+
+    def fake(endpoint, pn, cfg, payload, timeout, **kw):
+        msgs = payload.get("messages", [])
+        sysc = msgs[0]["content"] if msgs and msgs[0].get("role") == "system" else ""
+        if "impartial judge" in sysc:
+            judge_calls.append(payload["model"])
+            if len(judge_calls) == 1:              # first judge model rate-limited
+                return _chat('{"error": {"type": "rate_limit_exceeded"}}', status=429)
+            return _chat('{"consensus": ["x"]}')
+        if "synthesizer" in sysc:
+            return _chat("FINAL")
+        return _chat(f"answer from {payload['model']}")
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    resp = _run(server, "llmproxy__fusion", {"messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 200
+    data = json.loads(resp.get_data())
+    # Judge rotated to a second, distinct model and analysis survived.
+    assert len(judge_calls) == 2 and judge_calls[0] != judge_calls[1]
+    assert data["llmproxy_fusion"]["analysis"] == {"consensus": ["x"]}
+
+
+def test_fusion_synth_rotates_on_quota(server, monkeypatch):
+    server._reset_usage()
+    pool = [("pa", {"base_url": "http://pa/v1", "api_key": "k"}, "ma"),
+            ("pb", {"base_url": "http://pb/v1", "api_key": "k"}, "mb")]
+    monkeypatch.setattr(server, "_fusion_pool", lambda *a, **k: pool)
+    synth_calls: list = []
+
+    def fake(endpoint, pn, cfg, payload, timeout, **kw):
+        msgs = payload.get("messages", [])
+        sysc = msgs[0]["content"] if msgs and msgs[0].get("role") == "system" else ""
+        if "impartial judge" in sysc:
+            return _chat('{"consensus": ["x"]}')
+        if "synthesizer" in sysc:
+            synth_calls.append(payload["model"])
+            if len(synth_calls) == 1:              # first synth model rate-limited
+                return _chat('{"error": {"type": "insufficient_quota"}}', status=429)
+            return _chat("FINAL")
+        return _chat(f"answer from {payload['model']}")
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    resp = _run(server, "llmproxy__fusion", {"messages": [{"role": "user", "content": "hi"}]})
+    assert resp.status_code == 200
+    data = json.loads(resp.get_data())
+    # Synth rotated to a second model rather than degrading to a panel answer.
+    assert len(synth_calls) == 2
+    assert data["choices"][0]["message"]["content"] == "FINAL"
+    assert data["llmproxy_fusion"]["fell_back"] is False

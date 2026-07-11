@@ -3030,6 +3030,65 @@ def _record_quota_saturation(provider_name: str, provider_cfg: dict, upstream_mo
         _mark_provider_circuit(provider_name, account_id, retry_after)
 
 
+def _call_with_account_failover(
+    endpoint: str,
+    provider_name: str,
+    provider_cfg: dict,
+    payload: dict,
+    timeout: int,
+    *,
+    forwarded_headers: dict | None = None,
+) -> tuple["Response | None", str | None]:
+    """Call one model, rotating across the provider's accounts on quota errors.
+
+    Tries the provider's accounts fresh-first (cooling ones last), cooling any
+    that return a 402/429 or quota-shaped body so the rotation is sticky. Returns
+    early on the first usable response or on a non-quota hard error (which another
+    account would hit the same way). Returns ``(resp, account_id)`` of the winning
+    — or last — attempt. Usage is NOT recorded here; the caller records it under
+    the returned account_id. This is fusion's per-model equivalent of the plain
+    cycling engine's account rotation, used by the panel, judge, and synthesizer.
+    """
+    upstream_model = payload.get("model")
+    accounts = provider_accounts(provider_cfg)
+    fresh = [a for a in accounts if not _is_candidate_saturated(provider_name, upstream_model, a.id)]
+    cooling = [a for a in accounts if _is_candidate_saturated(provider_name, upstream_model, a.id)]
+    last_resp: Response | None = None
+    last_acct: str | None = None
+    for acct in fresh + cooling:
+        bound = account_bound_cfg(provider_cfg, acct)
+        resp = _proxy_request(endpoint, provider_name, bound, payload, timeout,
+                              forwarded_headers=forwarded_headers)
+        last_resp, last_acct = resp, acct.id
+        if resp.status_code < 400:
+            if not _response_unusable(resp.get_data()):
+                return resp, acct.id
+            if _is_quota_error(200, resp.get_data()):
+                _record_quota_saturation(provider_name, bound, upstream_model, None)
+                continue
+            return resp, acct.id  # unusable but not quota — let the caller decide
+        if _is_quota_error(resp.status_code, resp.get_data()):
+            _record_quota_saturation(provider_name, bound, upstream_model, resp.headers.get("Retry-After"))
+            continue
+        return resp, acct.id  # non-quota hard error — another account won't help
+    return last_resp, last_acct
+
+
+def _bind_freshest_account(provider_name: str, provider_cfg: dict, upstream_model: str) -> tuple[dict, str | None]:
+    """Return ``(cfg, account_id)`` bound to the freshest non-cooling account.
+
+    A single-credential provider returns its cfg unchanged. Used by the streaming
+    synthesizer, which cannot rotate mid-stream, to at least avoid a credential
+    already known to be rate-limited.
+    """
+    accounts = provider_accounts(provider_cfg)
+    if len(accounts) <= 1:
+        return provider_cfg, provider_account_id(provider_cfg)
+    fresh = [a for a in accounts if not _is_candidate_saturated(provider_name, upstream_model, a.id)]
+    chosen = (fresh or accounts)[0]
+    return account_bound_cfg(provider_cfg, chosen), chosen.id
+
+
 def _proxy_cycling_non_streaming(
     endpoint: str,
     label: str,
@@ -4402,6 +4461,57 @@ def _fusion_pool(model_full: str, config: dict, fcfg: dict, payload: dict, free:
     return pool
 
 
+def _rank_aux_models(
+    pool: list[tuple[str, dict, str]],
+    explicit: str | None,
+    config: dict,
+    prefer_caps: frozenset[str] = frozenset(),
+    exclude_first: tuple[str, dict, str] | None = None,
+) -> list[tuple[str, dict, str]]:
+    """Rank judge/synthesizer candidate models in preference order.
+
+    An explicit configured model leads when it resolves. Otherwise *pool* models
+    tagged with any of *prefer_caps* (e.g. reasoning) come first, then the rest,
+    with *exclude_first* (the model already chosen for the other stage) pushed
+    last so the judge and synthesizer differ where possible. Callers try each in
+    order — with per-account failover — until one answers, so a rate-limited
+    judge/synth rotates to the next model instead of collapsing the pipeline.
+    """
+    ordered: list[tuple[str, dict, str]] = []
+    seen: set[str] = set()
+
+    def _add(c: tuple[str, dict, str]) -> None:
+        key = f"{c[0]}/{c[2]}".lower()
+        if key not in seen:
+            seen.add(key)
+            ordered.append(c)
+
+    if explicit:
+        pn, pc, uid, err = _resolve_provider(explicit)
+        if err is None and pc is not None:
+            _add((pn, pc, uid))
+        else:
+            logger.warning("[fusion] configured model %r unresolved; auto-picking.", explicit)
+
+    if pool:
+        cap_map = _model_capabilities(config)
+        exclude_key = f"{exclude_first[0]}/{exclude_first[2]}".lower() if exclude_first else None
+
+        def _has(c: tuple[str, dict, str]) -> bool:
+            return (any(_model_has_capability(c[0], c[2], cap, cap_map) for cap in prefer_caps)
+                    if prefer_caps else False)
+
+        def _key(c: tuple[str, dict, str]) -> str:
+            return f"{c[0]}/{c[2]}".lower()
+
+        preferred = [c for c in pool if _has(c) and _key(c) != exclude_key]
+        others = [c for c in pool if not _has(c) and _key(c) != exclude_key]
+        excluded = [c for c in pool if _key(c) == exclude_key]
+        for c in preferred + others + excluded:
+            _add(c)
+    return ordered
+
+
 def _pick_aux_model(
     pool: list[tuple[str, dict, str]],
     explicit: str | None,
@@ -4409,35 +4519,9 @@ def _pick_aux_model(
     prefer_caps: frozenset[str] = frozenset(),
     exclude_first: tuple[str, dict, str] | None = None,
 ) -> tuple[str, dict, str] | None:
-    """Choose a judge or synthesizer model.
-
-    An explicit configured model id wins when it resolves; otherwise a model is
-    auto-picked from *pool*, preferring one tagged with any of *prefer_caps*
-    (e.g. reasoning) and, where possible, not the same model already chosen for
-    the other stage (*exclude_first*) so the judge and synthesizer differ.
-    """
-    if explicit:
-        pn, pc, uid, err = _resolve_provider(explicit)
-        if err is None and pc is not None:
-            return (pn, pc, uid)
-        logger.warning("[fusion] configured model %r unresolved; auto-picking.", explicit)
-
-    if not pool:
-        return None
-    cap_map = _model_capabilities(config)
-    exclude_key = f"{exclude_first[0]}/{exclude_first[2]}" if exclude_first else None
-    ranked = [
-        (c, f"{c[0]}/{c[2]}",
-         any(_model_has_capability(c[0], c[2], cap, cap_map) for cap in prefer_caps) if prefer_caps else False)
-        for c in pool
-    ]
-    for c, key, has in ranked:
-        if has and key != exclude_key:
-            return c
-    for c, key, _has in ranked:
-        if key != exclude_key:
-            return c
-    return pool[0]
+    """Return the single best judge/synthesizer model (see _rank_aux_models)."""
+    ranked = _rank_aux_models(pool, explicit, config, prefer_caps, exclude_first)
+    return ranked[0] if ranked else None
 
 
 def _proxy_fusion(
@@ -4495,15 +4579,15 @@ def _proxy_fusion(
     def _call_panel(cand: tuple[str, dict, str]):
         pn, pc, uid = cand
         try:
-            resp = _proxy_request(
+            resp, acct = _call_with_account_failover(
                 endpoint, pn, pc, {**stripped, "model": uid}, candidate_timeout,
                 forwarded_headers=forwarded_headers,
             )
-            return cand, resp
+            return cand, resp, acct
         except Exception as e:  # noqa: BLE001
             print(f"[server:_proxy_fusion:panel] {pn}/{uid}: {e}")
             traceback.print_exc()
-            return cand, None
+            return cand, None, None
 
     # One panel fan-out, with reserve backfill so a few transient upstream
     # failures (rate limits, blips) on the chosen members don't collapse the whole
@@ -4522,14 +4606,14 @@ def _proxy_fusion(
             with ThreadPoolExecutor(max_workers=min(len(pending), 8)) as ex:
                 results = list(ex.map(_call_panel, pending))
             failures = 0
-            for cand, resp in results:
+            for cand, resp, acct in results:
                 pn, _pc, uid = cand
                 key = f"{pn}/{uid}"
                 if resp is not None and resp.status_code < 400:
                     body = resp.get_data()
                     text = _fusion.extract_message_text(body)
                     if text.strip():
-                        _record_usage(pn, uid, usage=extract_usage(body), config=config)
+                        _record_usage(pn, uid, usage=extract_usage(body), config=config, account_id=acct)
                         entries.append({"label": key, "content": text})
                         used.append(key)
                         success.append((cand, body))
@@ -4576,34 +4660,48 @@ def _proxy_fusion(
             status=503,
         )
 
-    # 3. Judge compares the panel responses and emits structured analysis.
-    judge_tuple = _pick_aux_model(pool, fcfg.get("judge_model"), config, prefer_caps=frozenset({"reasoning"}))
+    # 3. Judge compares the panel responses and emits structured analysis. Try
+    # judge candidates in ranked order, each with per-account failover, so a
+    # rate-limited judge rotates to the next model instead of dropping analysis.
+    judge_ranked = _rank_aux_models(pool, fcfg.get("judge_model"), config,
+                                    prefer_caps=frozenset({"reasoning"}))
+    judge_tuple = judge_ranked[0] if judge_ranked else None  # for synth exclusion
     analysis: dict | None = None
     judge_id: str | None = None
-    if judge_tuple is not None:
-        jpn, jpc, juid = judge_tuple
-        judge_id = f"{jpn}/{juid}"
-        jmsgs = _fusion.build_judge_messages(original_messages, panel_entries)
+    jmsgs = _fusion.build_judge_messages(original_messages, panel_entries)
+    for cand in judge_ranked:
+        jpn, jpc, juid = cand
         try:
-            jresp = _proxy_request(endpoint, jpn, jpc, {"model": juid, "messages": jmsgs}, candidate_timeout)
-            if jresp.status_code < 400:
-                _record_usage(jpn, juid, usage=extract_usage(jresp.get_data()), config=config)
-                analysis = _fusion.parse_analysis(_fusion.extract_message_text(jresp.get_data()))
-            else:
-                logger.warning("  [fusion] judge %s returned %d", judge_id, jresp.status_code)
+            jresp, jacct = _call_with_account_failover(
+                endpoint, jpn, jpc, {"model": juid, "messages": jmsgs}, candidate_timeout,
+                forwarded_headers=forwarded_headers,
+            )
         except Exception as e:  # noqa: BLE001
-            print(f"[server:_proxy_fusion:judge] {judge_id}: {e}")
+            print(f"[server:_proxy_fusion:judge] {jpn}/{juid}: {e}")
             traceback.print_exc()
+            continue
+        if jresp is not None and jresp.status_code < 400 and not _response_unusable(jresp.get_data()):
+            _record_usage(jpn, juid, usage=extract_usage(jresp.get_data()), config=config, account_id=jacct)
+            analysis = _fusion.parse_analysis(_fusion.extract_message_text(jresp.get_data()))
+            judge_id = f"{jpn}/{juid}"
+            judge_tuple = cand
+            break
+        status = jresp.status_code if jresp is not None else "error"
+        logger.warning("  [fusion] judge %s/%s -> %s, trying next", jpn, juid, status)
 
-    # 4. Synthesizer writes the final answer grounded in the analysis.
-    synth_tuple = _pick_aux_model(
+    # 4. Synthesizer writes the final answer grounded in the analysis. Rank synth
+    # candidates (excluding the judge where possible); a panel member is the
+    # last-resort synth model so there is always at least one.
+    synth_ranked = _rank_aux_models(
         pool, fcfg.get("synthesizer_model"), config,
         prefer_caps=frozenset({"reasoning"}), exclude_first=judge_tuple,
-    ) or panel_success[0][0]
-    spn, spc, suid = synth_tuple
-    synth_id = f"{spn}/{suid}"
+    ) or [panel_success[0][0]]
     smsgs = _fusion.build_synthesizer_messages(original_messages, panel_entries, analysis)
-    synth_payload = {**stripped, "model": suid, "messages": smsgs}
+
+    # Provenance names the synth model actually used; default to the first ranked
+    # (updated below when a later candidate wins after rotation).
+    spn, spc, suid = synth_ranked[0]
+    synth_id = f"{spn}/{suid}"
 
     def _report(fell_back: bool, with_analysis: bool) -> dict:
         return _fusion.build_report(
@@ -4612,13 +4710,16 @@ def _proxy_fusion(
             fell_back=fell_back, free=free,
         )
 
-    header_report = json.dumps(_report(False, with_analysis=False), ensure_ascii=True)
-
     # Streaming: stream only the synthesis stage; provenance rides the header.
+    # Can't rotate mid-stream, so bind the freshest account of the first synth
+    # model and degrade to a panel answer if it fails to start.
     if is_streaming:
+        stream_cfg, _sacct = _bind_freshest_account(spn, spc, suid)
+        header_report = json.dumps(_report(False, with_analysis=False), ensure_ascii=True)
         stream_timeout = server_cfg.get("stream_timeout", 300)
         resp = _proxy_streaming(
-            endpoint, spn, spc, {**synth_payload, "stream": True},
+            endpoint, spn, stream_cfg,
+            {**stripped, "model": suid, "messages": smsgs, "stream": True},
             stream_timeout, config=config, inbound=inbound_adapter,
         )
         if getattr(resp, "status_code", 200) < 400:
@@ -4636,22 +4737,38 @@ def _proxy_fusion(
             resp.headers["X-LLMProxy-Fusion"] = header_report
         return resp
 
-    # Non-streaming synthesis.
-    try:
-        sresp = _proxy_request(endpoint, spn, spc, synth_payload, timeout)
-    except Exception as e:  # noqa: BLE001
-        print(f"[server:_proxy_fusion:synth] {synth_id}: {e}")
-        traceback.print_exc()
-        sresp = None
+    # Non-streaming synthesis: rotate across synth candidates (each with
+    # per-account failover) until one returns a usable answer.
+    sresp = None
+    sacct = None
+    for cand in synth_ranked:
+        cpn, cpc, cuid = cand
+        try:
+            r, a = _call_with_account_failover(
+                endpoint, cpn, cpc, {**stripped, "model": cuid, "messages": smsgs}, timeout,
+                forwarded_headers=forwarded_headers,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[server:_proxy_fusion:synth] {cpn}/{cuid}: {e}")
+            traceback.print_exc()
+            continue
+        if r is not None and r.status_code < 400 and not _response_unusable(r.get_data()):
+            sresp, sacct = r, a
+            spn, spc, suid = cand
+            synth_id = f"{spn}/{suid}"
+            break
+        status = r.status_code if r is not None else "error"
+        logger.warning("  [fusion] synth %s/%s -> %s, trying next", cpn, cuid, status)
 
-    if sresp is None or sresp.status_code >= 400:
+    if sresp is None:
         # Graceful fallback: return the first successful panel response, flagged.
-        logger.warning("  [fusion] synth %s failed; falling back to panel answer", synth_id)
+        logger.warning("  [fusion] all synth candidates failed; falling back to panel answer")
         out = _fusion.inject_report(panel_success[0][1], _report(True, with_analysis=True))
     else:
-        _record_usage(spn, suid, usage=extract_usage(sresp.get_data()), config=config)
+        _record_usage(spn, suid, usage=extract_usage(sresp.get_data()), config=config, account_id=sacct)
         out = _fusion.inject_report(sresp.get_data(), _report(False, with_analysis=True))
 
+    header_report = json.dumps(_report(False, with_analysis=False), ensure_ascii=True)
     if not inbound_adapter.is_identity:
         out = inbound_adapter.render_response(out)
     resp = Response(out, status=200, content_type="application/json")
