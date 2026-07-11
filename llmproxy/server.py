@@ -5,7 +5,7 @@ Implements the following OpenAI API endpoints:
   GET  /v1/models                  Aggregate models from all providers
   GET  /v1/models/<model_id>       Single model metadata lookup
   POST /v1/chat/completions        Proxy chat completions (streaming + non-streaming)
-  POST /v1/completions             Proxy legacy completions
+  POST /v1/completions             Proxy legacy completions (chat/completions fallback)
   POST /v1/embeddings              Proxy embeddings
   GET  /v1/usage                   Token + cost accounting report
   POST /v1/usage/reset             Clear usage counters (admin-gated)
@@ -5121,8 +5121,34 @@ def chat_completions() -> Response:
 
 @app.route("/v1/completions", methods=["POST"])
 def completions() -> Response:
-    """Proxy legacy text completions."""
-    return _proxy_endpoint("completions")
+    """Proxy legacy text completions, with a chat/completions fallback.
+
+    The request is first forwarded verbatim to the provider's own
+    ``/completions`` endpoint. If the upstream doesn't implement the legacy
+    endpoint (HTTP 404), the same prompt is transparently retried against
+    ``/chat/completions`` — wrapped as a single user message — and the chat
+    response is rendered back into the legacy ``text_completion`` shape. Clients
+    thus keep the legacy surface even against providers that only speak chat.
+
+    Two cases translate to chat up front rather than probing ``/completions``:
+
+    * **Virtual models** (``llmproxy/free``, ``loadbalanced``, fusion, …) are an
+      llmproxy abstraction with no real legacy endpoint to forward to.
+    * **Streaming** requests — a streamed passthrough can't surface a pre-stream
+      404 without buffering the whole response, so the fallback couldn't be
+      applied once bytes are already flowing to the client.
+    """
+    body = request.get_json(force=True, silent=True)
+    if isinstance(body, dict):
+        model = _canonicalize_model_id(body.get("model", ""), load_config())
+        if body.get("stream") or _is_virtual_model(model):
+            return _proxy_endpoint("chat/completions", inbound="openai-completions")
+
+    resp = _proxy_endpoint("completions")
+    if resp.status_code == 404:
+        logger.info("  [legacy-completions] upstream has no /completions — falling back to chat/completions")
+        return _proxy_endpoint("chat/completions", inbound="openai-completions")
+    return resp
 
 
 @app.route("/v1/messages", methods=["POST"])

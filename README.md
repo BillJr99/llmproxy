@@ -598,7 +598,7 @@ which dialect a client or upstream uses.
 
 | Surface | Endpoints | Notes |
 | --- | --- | --- |
-| **OpenAI** | `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/embeddings` | The original surface. Streaming via SSE. |
+| **OpenAI** | `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/embeddings` | The original surface. Streaming via SSE. `/v1/completions` forwards to the provider's own legacy endpoint and, when the upstream returns 404 (or the model is virtual/streamed), transparently falls back to `chat/completions` — the `prompt` is wrapped as a user message and the reply is rendered back as `text_completion`. |
 | **Anthropic** | `POST /v1/messages`, `POST /v1/messages/count_tokens` | Point an Anthropic SDK at llmproxy. Streaming emits the Anthropic event format (`message_start`, `content_block_delta`, …). |
 | **Gemini** | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens` | Point the Google GenAI SDK at llmproxy. The model id rides in the URL path; streaming emits Gemini `GenerateContentResponse` SSE chunks. |
 
@@ -1939,7 +1939,7 @@ All endpoints mirror the OpenAI API.
 | GET    | `/v1/models`            | Aggregate model list from all providers   |
 | GET    | `/v1/models/<model_id>` | Single model lookup                       |
 | POST   | `/v1/chat/completions`  | Chat completions (streaming supported)    |
-| POST   | `/v1/completions`       | Legacy text completions                   |
+| POST   | `/v1/completions`       | Legacy text completions (chat fallback)   |
 | POST   | `/v1/embeddings`        | Embeddings                                |
 | *      | `/v1/<anything>`        | Pass-through to upstream (see note below) |
 
