@@ -5062,8 +5062,26 @@ def embeddings() -> Response:
 # /v1/usage — token + cost accounting report
 # ---------------------------------------------------------------------------
 
+def _split_usage_key(key: str) -> tuple[str, str | None, str]:
+    """Parse a usage/saturation key into (provider_name, account_id, model).
+
+    Handles both the anonymous ``provider/model`` form (account_id ``None``) and
+    the per-account ``provider#account/model`` form written when a provider has
+    multiple credentials.
+    """
+    provider_part, _, upstream_model = key.partition("/")
+    provider_name, sep, account_id = provider_part.partition("#")
+    return provider_name, (account_id if sep else None), upstream_model
+
+
 def _build_usage_report() -> dict:
-    """Snapshot the in-memory usage registry into a JSON-serializable report."""
+    """Snapshot the in-memory usage registry into a JSON-serializable report.
+
+    Each metered credential is one entry; a provider with several accounts yields
+    one row per account (with an ``account`` field), so per-account free-tier
+    consumption is visible. Single-credential providers omit ``account`` and read
+    exactly as before. Account labels are surfaced, never the key material.
+    """
     config = load_config()
     with _usage_registry_lock:
         items = list(_usage_registry.items())
@@ -5076,10 +5094,10 @@ def _build_usage_report() -> dict:
     for key, tracker in items:
         snap = tracker.cost_snapshot()
         tok_min, tok_day = tracker.token_snapshot()
-        provider_name, _, upstream_model = key.partition("/")
+        provider_name, account_id, upstream_model = _split_usage_key(key)
         believed_free = bool(upstream_model) and _is_model_free(provider_name, upstream_model, config)
-        models.append({
-            "model": key,
+        entry = {
+            "model": f"{provider_name}/{upstream_model}" if upstream_model else key,
             "requests": snap["requests"],
             "prompt_tokens": snap["prompt_tokens"],
             "completion_tokens": snap["completion_tokens"],
@@ -5091,11 +5109,14 @@ def _build_usage_report() -> dict:
             "cost_sources": snap["cost_sources"],
             "believed_free": believed_free,
             "unexpected_cost": believed_free and snap["cost"] > 0,
-        })
+        }
+        if account_id is not None:
+            entry["account"] = account_id  # label/id only — never the key
+        models.append(entry)
         for field in ("requests", "prompt_tokens", "completion_tokens", "total_tokens", "cost"):
             totals[field] += snap[field]
     totals["cost"] = round(totals["cost"], 8)
-    models.sort(key=lambda m: m["model"])
+    models.sort(key=lambda m: (m["model"], m.get("account") or ""))
 
     with _paid_free_lock:
         flagged = [

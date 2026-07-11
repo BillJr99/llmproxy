@@ -115,6 +115,34 @@ def test_per_account_cost_flag_is_model_level(usage_server):
     assert flagged[0]["model"] == "groq/free-model"
 
 
+def test_usage_report_breaks_down_by_account(usage_server):
+    cfg = usage_server.load_config()
+    common = {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}
+    usage_server._record_usage("groq", "free-model", usage=common, config=cfg, account_id="team-a")
+    usage_server._record_usage("groq", "free-model", usage=common, config=cfg, account_id="team-b")
+    usage_server._record_usage("groq", "free-model", usage=common, config=cfg, account_id="team-b")
+    body = usage_server.app.test_client().get("/v1/usage").get_json()
+    by_acct = {m["account"]: m for m in body["models"] if "account" in m}
+    assert set(by_acct) == {"team-a", "team-b"}
+    # Same clean model id on each row, distinct per-account request counts.
+    assert all(m["model"] == "groq/free-model" for m in by_acct.values())
+    assert by_acct["team-a"]["requests"] == 1
+    assert by_acct["team-b"]["requests"] == 2
+    # Totals aggregate across accounts.
+    assert body["totals"]["requests"] == 3
+
+
+def test_usage_report_anonymous_has_no_account_field(usage_server):
+    usage_server._record_usage(
+        "groq", "free-model",
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        config=usage_server.load_config(),
+    )
+    m = usage_server.app.test_client().get("/v1/usage").get_json()["models"][0]
+    assert m["model"] == "groq/free-model"
+    assert "account" not in m
+
+
 def test_believed_free_cost_is_flagged(usage_server):
     # A believed_free model whose response reports a provider cost gets flagged.
     usage_server._record_usage(
