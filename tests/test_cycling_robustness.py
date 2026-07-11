@@ -232,7 +232,7 @@ def test_streaming_failover_on_first_chunk_error(server, monkeypatch):
     with server.app.test_request_context():
         resp = server._proxy_cycling_streaming(
             "chat/completions", "t", candidates, {"messages": []}, 5,
-            on_success=lambda pn, um: recorded.append((pn, um)),
+            on_success=lambda pn, um, *a: recorded.append((pn, um)),
         )
     assert recorded == [("p2", "m2")]  # committed only the healthy candidate
     assert resp.status_code == 200
@@ -260,7 +260,7 @@ def test_streaming_connect_timeout_causes_failover(server, monkeypatch):
     with server.app.test_request_context():
         resp = server._proxy_cycling_streaming(
             "chat/completions", "t", candidates, {"messages": []}, 5,
-            on_success=lambda pn, um: recorded.append((pn, um)),
+            on_success=lambda pn, um, *a: recorded.append((pn, um)),
         )
     assert calls == ["p1", "p2"]
     assert recorded == [("p2", "m2")]
@@ -291,7 +291,7 @@ def test_streaming_connect_error_as_connectionerror_causes_failover(server, monk
     with server.app.test_request_context():
         resp = server._proxy_cycling_streaming(
             "chat/completions", "t", candidates, {"messages": []}, 5,
-            on_success=lambda pn, um: recorded.append((pn, um)),
+            on_success=lambda pn, um, *a: recorded.append((pn, um)),
         )
     assert calls == ["p1", "p2"]
     assert recorded == [("p2", "m2")]
@@ -334,8 +334,78 @@ def test_streaming_all_first_chunk_errors_returns_last(server, monkeypatch):
     ]
     resp = server._proxy_cycling_streaming(
         "chat/completions", "t", candidates, {"messages": []}, 5,
-        on_success=lambda pn, um: recorded.append((pn, um)),
+        on_success=lambda pn, um, *a: recorded.append((pn, um)),
     )
     assert recorded == []  # nothing ever committed
     assert resp.status_code == 502
     assert b"b" in resp.get_data()
+
+
+# ── multiple accounts per provider ───────────────────────────────────────────
+
+def _multi_acct_cfg():
+    # priority strategy keeps account order deterministic (a before b).
+    return {
+        "base_url": "http://p1/v1",
+        "account_strategy": "priority",
+        "accounts": [
+            {"key": "k1", "label": "a", "priority": 1},
+            {"key": "k2", "label": "b", "priority": 2},
+        ],
+    }
+
+
+def test_expand_accounts_single_is_noop(server):
+    cands = [("p1", {"base_url": "http://p1/v1", "api_key": "k"}, "m1")]
+    out = server._expand_accounts(cands)
+    assert out == cands  # lone credential — cfg untouched, no _account_id
+
+
+def test_expand_accounts_fans_out_adjacent(server):
+    out = server._expand_accounts([("p1", _multi_acct_cfg(), "m1")])
+    assert [(pn, c["_account_id"], um) for pn, c, um in out] == [
+        ("p1", "a", "m1"), ("p1", "b", "m1"),
+    ]
+    # Each bound cfg resolves its own key through the existing accessor.
+    assert server.provider_api_key(out[0][1]) == "k1"
+    assert server.provider_api_key(out[1][1]) == "k2"
+
+
+def test_quota_rotates_to_next_account_then_is_sticky(server, monkeypatch):
+    server._reset_usage()
+    pc = _multi_acct_cfg()
+    seen: list = []
+
+    def fake(endpoint, pn, cfg, payload, timeout):
+        seen.append(cfg.get("_account_id"))
+        if cfg.get("_account_id") == "a":   # account a is rate-limited
+            return _json_resp({"error": {"type": "rate_limit_exceeded"}}, status=429)
+        return _json_resp(_OK)
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    recs: list = []
+
+    order1 = server._expand_accounts([("p1", pc, "m1")])
+    assert [c["_account_id"] for _pn, c, _um in order1] == ["a", "b"]
+    resp = server._proxy_cycling_non_streaming(
+        "chat/completions", "t", order1, {}, 5,
+        on_success=lambda pn, um, body=None, acct=None: recs.append((pn, um, acct)),
+    )
+    assert resp.status_code == 200
+    assert seen == ["a", "b"]                 # rotated account a -> b, same model
+    assert recs == [("p1", "m1", "b")]        # usage recorded under account b
+    # Account a is cooled; the next request deprioritizes it (sticky rotation).
+    assert server._is_candidate_saturated("p1", "m1", "a") is True
+    assert server._is_candidate_saturated("p1", "m1", "b") is False
+    order2 = server._expand_accounts([("p1", pc, "m1")])
+    assert [c["_account_id"] for _pn, c, _um in order2] == ["b", "a"]
+
+
+def test_all_accounts_saturated_still_reachable(server, monkeypatch):
+    server._reset_usage()
+    pc = _multi_acct_cfg()
+    server._mark_saturated(server._usage_key("p1", "m1", "a"), retry_after="60")
+    server._mark_saturated(server._usage_key("p1", "m1", "b"), retry_after="60")
+    out = server._expand_accounts([("p1", pc, "m1")])
+    # Both cooling — order is stable (priority) and neither is dropped.
+    assert {c["_account_id"] for _pn, c, _um in out} == {"a", "b"}

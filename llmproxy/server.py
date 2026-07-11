@@ -82,12 +82,15 @@ from . import __version__
 from . import fusion as _fusion
 from .config import (
     RESERVED_PROVIDER_NAMES,
+    account_bound_cfg,
     get_config_path,
     get_provider,
     load_config,
     model_is_allowed,
     parse_model_string,
     provider_account_id,
+    provider_account_strategy,
+    provider_accounts,
     provider_api_key,
     provider_base_url,
     resolve_env_refs,
@@ -2429,7 +2432,14 @@ def _proxy_request(
                 if 200 <= resp.status_code < 300 else resp.content
             )
             content_type = "application/json"
-        return Response(content, status=resp.status_code, content_type=content_type)
+        out = Response(content, status=resp.status_code, content_type=content_type)
+        # Preserve Retry-After on quota/rate-limit responses so the cycling loop
+        # can cool the candidate for exactly as long as the upstream asks.
+        if resp.status_code in _QUOTA_STATUSES:
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after:
+                out.headers["Retry-After"] = retry_after
+        return out
     except requests.exceptions.Timeout:
         return _error(
             f"Upstream provider '{provider_name}' timed out after {timeout}s.",
@@ -2452,6 +2462,7 @@ def _translated_stream_response(
     upstream_model: str,
     config: dict | None,
     prefix: bytes = b"",
+    account_id: str | None = None,
 ) -> Response:
     """Pipe a *non-identity* upstream SSE stream through the dialect adapters.
 
@@ -2493,7 +2504,8 @@ def _translated_stream_response(
             yield f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
         finally:
             if config is not None and upstream_model and captured:
-                _record_usage(provider_name, upstream_model, usage=captured, config=config)
+                _record_usage(provider_name, upstream_model, usage=captured,
+                              config=config, account_id=account_id)
 
     return Response(generate(), content_type="text/event-stream")
 
@@ -3004,6 +3016,20 @@ def _candidate_max_attempts(idx: int, total: int) -> int:
     return (_VIRTUAL_MAX_RETRIES + 1) if idx == total - 1 else 1
 
 
+def _record_quota_saturation(provider_name: str, provider_cfg: dict, upstream_model: str, retry_after) -> None:
+    """Cool a candidate (and, for allowance-backed providers, its circuit) on a quota error.
+
+    Marks the specific account/model saturated so it drops to the back of the
+    pool until its reset. When the provider carries a shared ``free_allowance``
+    the whole provider/account circuit is opened too, so concurrent in-flight
+    requests stop hammering an allowance that's already depleted.
+    """
+    account_id = provider_account_id(provider_cfg)
+    _mark_saturated(_usage_key(provider_name, upstream_model, account_id), retry_after)
+    if _provider_free_allowance(provider_cfg):
+        _mark_provider_circuit(provider_name, account_id, retry_after)
+
+
 def _proxy_cycling_non_streaming(
     endpoint: str,
     label: str,
@@ -3033,6 +3059,7 @@ def _proxy_cycling_non_streaming(
     total = len(candidates)
     last: Response | None = None
     for idx, (provider_name, provider_cfg, upstream_model) in enumerate(candidates):
+        account_id = provider_account_id(provider_cfg)
         upstream_payload = {**payload, "model": upstream_model}
         max_attempts = _candidate_max_attempts(idx, total)
         for attempt in range(max_attempts):
@@ -3057,6 +3084,10 @@ def _proxy_cycling_non_streaming(
                 last = resp
                 continue
             if _response_unusable(body):
+                # Some providers report quota exhaustion as a 200 with an error
+                # body — cool it so the rotation is sticky across requests.
+                if _is_quota_error(200, body):
+                    _record_quota_saturation(provider_name, provider_cfg, upstream_model, None)
                 logger.warning(
                     "  [%s] %s/%s returned 200 with an unusable body (error/empty), trying next",
                     label, provider_name, upstream_model,
@@ -3064,8 +3095,12 @@ def _proxy_cycling_non_streaming(
                 last = resp
                 continue
             if on_success is not None:
-                on_success(provider_name, upstream_model, body)
+                on_success(provider_name, upstream_model, body, account_id)
             return resp
+        if _is_quota_error(resp.status_code, resp.get_data()):
+            _record_quota_saturation(
+                provider_name, provider_cfg, upstream_model, resp.headers.get("Retry-After")
+            )
         logger.warning(
             "  [%s] %s/%s returned %d, trying next", label, provider_name, upstream_model, resp.status_code
         )
@@ -3110,6 +3145,7 @@ def _proxy_cycling_streaming(
     last_error: tuple[bytes, int, str] | None = None
 
     for idx, (provider_name, provider_cfg, upstream_model) in enumerate(candidates):
+        account_id = provider_account_id(provider_cfg)
         upstream_payload = {**payload, "model": upstream_model}
         max_attempts = _candidate_max_attempts(idx, total)
         base_url = provider_base_url(provider_cfg)
@@ -3151,6 +3187,10 @@ def _proxy_cycling_streaming(
         if resp is None:
             continue
         if resp.status_code >= 400:
+            if _is_quota_error(resp.status_code, resp.content):
+                _record_quota_saturation(
+                    provider_name, provider_cfg, upstream_model, resp.headers.get("Retry-After")
+                )
             last_error = (
                 resp.content,
                 resp.status_code,
@@ -3169,6 +3209,9 @@ def _proxy_cycling_streaming(
             # the first token is never dropped.
             error_body, prefix, rest = _peek_stream(resp)
             if error_body is not None:
+                # A stream that opens with a quota error cools the candidate too.
+                if _is_quota_error(None, error_body):
+                    _record_quota_saturation(provider_name, provider_cfg, upstream_model, None)
                 last_error = (error_body, 502, "text/event-stream")
                 resp.close()
                 logger.warning(
@@ -3187,12 +3230,13 @@ def _proxy_cycling_streaming(
         # committing.  Proactive capability ordering still steers streaming
         # requests to capable models.
         if on_success is not None:
-            on_success(provider_name, upstream_model)
+            on_success(provider_name, upstream_model, None, account_id)
 
         # Translation path: pipe the native stream through the adapters.
         if not (outbound.is_identity and inbound.is_identity):
             return _translated_stream_response(
-                resp, outbound, inbound, provider_name, upstream_model, config, prefix=prefix
+                resp, outbound, inbound, provider_name, upstream_model, config,
+                prefix=prefix, account_id=account_id,
             )
 
         captured_resp = resp
@@ -3203,7 +3247,7 @@ def _proxy_cycling_streaming(
 
         @stream_with_context
         def generate(r=captured_resp, pn=captured_provider, um=captured_model,
-                     pfx=captured_prefix, rst=captured_rest):
+                     pfx=captured_prefix, rst=captured_rest, acct=account_id):
             tail = bytearray()
             try:
                 with r:
@@ -3225,7 +3269,7 @@ def _proxy_cycling_streaming(
                 msg = str(e).replace('"', "'")
                 yield f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
             finally:
-                _record_stream_usage(pn, um, bytes(tail), config)
+                _record_stream_usage(pn, um, bytes(tail), config, account_id=acct)
 
         return Response(generate(), content_type="text/event-stream")
 
@@ -3238,11 +3282,57 @@ def _proxy_cycling_streaming(
 def _cycling_candidates(
     candidates: list[tuple[str, dict, str]],
 ) -> list[tuple[str, dict, str]]:
-    """Rotate candidates to a random starting position for load spreading."""
+    """Rotate candidates to a random starting position for load spreading.
+
+    Also demotes any candidate currently cooling in the saturation registry to
+    the back so non-free/non-loadbalanced virtuals (per-provider, reasoning,
+    capability families) still rotate off a recently rate-limited model/account
+    on the next request, while keeping it reachable as a last resort.
+    """
     if not candidates:
         return candidates
     start = random.randrange(len(candidates))
-    return candidates[start:] + candidates[:start]
+    rotated = candidates[start:] + candidates[:start]
+    fresh = [c for c in rotated if not _is_candidate_saturated(c[0], c[2], provider_account_id(c[1]))]
+    cooling = [c for c in rotated if _is_candidate_saturated(c[0], c[2], provider_account_id(c[1]))]
+    return fresh + cooling if cooling else rotated
+
+
+def _expand_accounts(
+    candidates: list[tuple[str, dict, str]],
+) -> list[tuple[str, dict, str]]:
+    """Fan each candidate out into one per configured account, expanded LAST.
+
+    Ordering upstream runs at model granularity; this final pass replaces each
+    ``(provider, cfg, model)`` with one candidate per credential, bound to that
+    account's key via :func:`account_bound_cfg`. A model's accounts stay
+    **adjacent, in the model's ranked slot**, so the cycling walk tries every
+    credential of a model (accounts-first) before moving to the next model —
+    same model, fresh quota is always the cheapest way to keep serving.
+
+    Within a model, accounts that are not currently cooling come first (rotated
+    to a random start for ``round_robin``, kept in priority order otherwise);
+    accounts cooling after a recent 402/429 are appended last but still
+    reachable. A single-account provider (the common case) expands to exactly
+    one candidate with the original cfg untouched, so keys/headers/behavior are
+    byte-identical to before.
+    """
+    if not candidates:
+        return candidates
+    expanded: list[tuple[str, dict, str]] = []
+    for pn, pc, um in candidates:
+        accounts = provider_accounts(pc)
+        if len(accounts) <= 1:
+            expanded.append((pn, pc, um))  # lone credential — leave cfg as-is
+            continue
+        fresh = [a for a in accounts if not _is_candidate_saturated(pn, um, a.id)]
+        cooling = [a for a in accounts if _is_candidate_saturated(pn, um, a.id)]
+        if provider_account_strategy(pc) == "round_robin" and len(fresh) > 1:
+            start = random.randrange(len(fresh))
+            fresh = fresh[start:] + fresh[:start]
+        for acct in fresh + cooling:
+            expanded.append((pn, account_bound_cfg(pc, acct), um))
+    return expanded
 
 
 def _capacity_ordered_candidates(
@@ -4674,12 +4764,15 @@ def _proxy_endpoint(
         else:
             ordered = _cycling_candidates(candidates)
 
-        # Record token/cost (and request count) for every cycled candidate.
-        def on_success(pn: str, um: str, body=None) -> None:
+        # Record token/cost (and request count) for every cycled candidate,
+        # scoped to the account that actually served it so per-account free-tier
+        # quota is metered independently.
+        def on_success(pn: str, um: str, body=None, account_id=None) -> None:
             _record_usage(
                 pn, um,
                 usage=extract_usage(body) if body is not None else None,
                 config=config,
+                account_id=account_id,
             )
         # Proactively prefer candidates that support the capabilities this
         # request needs (tools/vision/reasoning/json).  Stable, never drops
@@ -4699,6 +4792,10 @@ def _proxy_endpoint(
             ordered = _order_by_capability(ordered, needed, _model_capabilities(config))
         if is_free_virtual:
             ordered = _apply_favorite_free_ordering(ordered, config)
+        # Expand accounts LAST: each model's credentials become adjacent
+        # candidates in its ranked slot, so cycling rotates accounts-first then
+        # models. A no-op for single-credential providers.
+        ordered = _expand_accounts(ordered)
         logger.info("  [%s] cycling through %d candidate(s)", model_full, len(ordered))
         if is_streaming:
             timeout = server_cfg.get("stream_timeout", 300)
