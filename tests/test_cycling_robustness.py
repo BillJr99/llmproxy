@@ -96,6 +96,25 @@ def test_response_unusable(server):
     assert f(json.dumps(
         {"choices": [{"message": {"content": "", "tool_calls": [{"id": "1"}]}}]}
     ).encode()) is False
+    # empty / whitespace-only content with no tool call is unusable — a reasoning
+    # model that burned a tight max_tokens budget on thinking must fail over.
+    assert f(json.dumps({"choices": [{"message": {"content": ""}}]}).encode()) is True
+    assert f(json.dumps({"choices": [{"message": {"content": "   "}}]}).encode()) is True
+    assert f(json.dumps({"choices": [{"message": {"content": None}}]}).encode()) is True
+    assert f(json.dumps({"choices": [{"message": {}}]}).encode()) is True
+    # a refusal is a usable answer
+    assert f(json.dumps({"choices": [{"message": {"content": "", "refusal": "no"}}]}).encode()) is False
+    # multimodal content parts count when any part has text
+    assert f(json.dumps(
+        {"choices": [{"message": {"content": [{"type": "text", "text": "hi"}]}}]}
+    ).encode()) is False
+    assert f(json.dumps(
+        {"choices": [{"message": {"content": [{"type": "text", "text": ""}]}}]}
+    ).encode()) is True
+    # a second choice with real output keeps the body usable
+    assert f(json.dumps(
+        {"choices": [{"message": {"content": ""}}, {"message": {"content": "hi"}}]}
+    ).encode()) is False
 
 
 def test_sse_prefix_is_error(server):
@@ -150,6 +169,25 @@ def test_failover_on_empty_choices(server, monkeypatch):
     def fake(endpoint, pn, cfg, payload, timeout):
         calls.append(payload["model"])
         return _json_resp({"choices": []}) if payload["model"] == "m1" else _json_resp(_OK)
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    candidates = [("p1", {}, "m1"), ("p2", {}, "m2")]
+    resp = server._proxy_cycling_non_streaming("chat/completions", "t", candidates, {}, 5)
+    assert calls == ["m1", "m2"]
+    assert b"ok" in resp.get_data()
+
+
+def test_failover_on_empty_content(server, monkeypatch):
+    # A 200 whose only choice has empty content and no tool call (a reasoning
+    # model that spent a tight max_tokens budget on thinking) must fail over to a
+    # candidate that returns a real answer, not hand the client a blank reply.
+    calls: list[str] = []
+
+    def fake(endpoint, pn, cfg, payload, timeout):
+        calls.append(payload["model"])
+        if payload["model"] == "m1":
+            return _json_resp({"choices": [{"message": {"content": ""}}]})
+        return _json_resp(_OK)
 
     monkeypatch.setattr(server, "_proxy_request", fake)
     candidates = [("p1", {}, "m1"), ("p2", {}, "m2")]

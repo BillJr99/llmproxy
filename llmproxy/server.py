@@ -2931,18 +2931,58 @@ def _is_transient_status(status: int) -> bool:
     return status == 429 or status >= 500
 
 
+def _choice_yields_output(choice: dict) -> bool:
+    """True when a completion choice carries something usable for the client.
+
+    "Usable" means visible text content, a tool/function call, or a refusal —
+    anything the caller can act on.  A choice whose only signal is reasoning
+    ("thinking") tokens with empty content is *not* usable: the caller asked for
+    an answer, not the model's scratch work.  This is what lets the waterfall
+    fail over a model that spends a small ``max_tokens`` budget entirely on
+    reasoning and returns an empty final message, so a lighter model that can
+    answer inside the budget serves the request instead.
+    """
+    if not isinstance(choice, dict):
+        return False
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        # A non-dict, non-null message is an unexpected shape; treat it as usable
+        # rather than risk dropping a real answer we simply don't recognize.
+        return message is not None
+    if message.get("tool_calls") or message.get("function_call"):
+        return True
+    if message.get("refusal"):
+        return True
+    content = message.get("content")
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        # Multimodal content parts: usable if any part has non-empty text.
+        for part in content:
+            if isinstance(part, str) and part.strip():
+                return True
+            if isinstance(part, dict) and (part.get("text") or "").strip():
+                return True
+        return False
+    # content is None or an unexpected type — no visible text.
+    return False
+
+
 def _response_unusable(body_bytes: bytes) -> bool:
     """True when a non-streaming HTTP 200 isn't actually a usable completion.
 
-    Some upstreams answer ``200 OK`` while the body carries an error object or
-    an empty result (no ``choices``).  Treating these as failures lets the
-    cycling loop fail over instead of handing the client a dead response.
+    Some upstreams answer ``200 OK`` while the body carries an error object, an
+    empty result (no ``choices``), or a choice with no visible output.  Treating
+    these as failures lets the cycling loop fail over instead of handing the
+    client a dead response.
 
-    Deliberately conservative to avoid false failover: a body with at least one
-    ``choices`` entry is accepted even when its ``content`` is empty (a model
-    may legitimately answer with tool calls or an empty string).  A body that
-    isn't JSON at all is treated as unusable, since every cycled endpoint speaks
-    JSON chat/completions.
+    A body is usable when at least one choice yields output — visible text, a
+    tool/function call, or a refusal (see ``_choice_yields_output``).  An empty
+    ``content`` string alone is *not* usable unless it is paired with a tool
+    call; this is what a reasoning model returns when a tight ``max_tokens``
+    budget is consumed entirely by thinking, and failing over lets a lighter
+    candidate answer.  A body that isn't JSON at all is treated as unusable,
+    since every cycled endpoint speaks JSON chat/completions.
     """
     try:
         data = json.loads(body_bytes)
@@ -2954,6 +2994,8 @@ def _response_unusable(body_bytes: bytes) -> bool:
         return True
     choices = data.get("choices")
     if not choices or not isinstance(choices, list):
+        return True
+    if not any(_choice_yields_output(c) for c in choices):
         return True
     return False
 
