@@ -19,7 +19,8 @@ llmproxy/
 │   ├── __main__.py
 │   ├── config.py
 │   ├── server.py
-│   ├── usage.py             ← token/cost accounting primitives (GET /v1/usage)
+│   ├── usage.py             ← token/cost accounting + health windows (GET /v1/usage)
+│   ├── signals.py           ← tool-result signals that size agentic requests by progress
 │   ├── setup_wizard.py
 │   ├── admin.py             ← web admin UI + config API (/admin, /admin/api/*)
 │   ├── static/admin/        ← self-contained single-page admin frontend
@@ -37,6 +38,8 @@ llmproxy/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── config.example.json      ← auto-generated from llmproxy/providers.json
+├── LICENSE                  ← Apache License 2.0
+├── THIRD_PARTY_NOTICES.md   ← attribution + licences for adapted third-party work
 └── .github/workflows/
     ├── ci.yml               ← pytest, ruff, config-example-up-to-date guard
     └── docker-publish.yml   ← GHCR image publish
@@ -311,6 +314,37 @@ This is a *stable reordering* layered below the capability ordering (forced
 tools/JSON still win) that never drops a candidate, so failover behavior is
 unchanged. It needs no configuration — thresholds live in `server.py`
 (`_TIER_SMALL_MAX_TOKENS`, `_TIER_MEDIUM_MAX_TOKENS`).
+
+#### Tool-result signals — sizing agentic requests by how they're *going*
+
+Prompt size is a good proxy for difficulty in one-shot chat and a poor one for
+coding agents: a two-line request can carry a task that has been failing for
+twelve turns. So when a request's message list contains tool results, llmproxy
+reads them and nudges the size-derived tier one step.
+
+It looks at what the agent *did* (assistant `tool_calls`, with shell commands
+classified as read/write/edit by their command string) and *how it went*
+(`role: "tool"` content, matched against an error table tiered soft/hard/
+critical). Those become four axes — error severity, spinning, exploring, and
+production intensity — scored into a single number:
+
+- **Escalate** when the agent is erroring or stuck (no writes or edits deep into
+  a conversation). Hard overrides escalate immediately on a critical error
+  (OOM, connection refused) or on a **context-compaction summary** — compaction
+  erases the very evidence this pass reads, so without the override a hard task
+  would snap back to the weakest tier at the worst moment.
+- **De-escalate** on a clean finish: tests passing, recent writes, no errors.
+
+The scoring is deliberately calibrated so **no single signal can flip the tier
+on its own** — one maxed axis scores ~0.46 against a 0.5 threshold, so a switch
+needs corroboration. The adjustment is bounded to one step in either direction,
+which keeps it a correction to the size heuristic rather than a replacement for
+it, and it costs nothing: no extra model call, no network, no configuration.
+Explicit `reasoning_effort` still wins outright.
+
+Set `server.tool_signal_routing` to `false` for strictly size-based triage. The
+logic lives in `llmproxy/signals.py`, is free of Flask and config, and is tested
+against canned agent transcripts in `tests/test_signals.py`.
 
 > **Tier containment.** A `*/free` virtual *only ever* serves models from the
 > free list, and a `*/local` virtual *only ever* serves localhost-backed models.
@@ -734,7 +768,8 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "response_cache_ttl": 120,
     "stream_include_usage": true,
     "allow_implicit_paid": false,
-    "saturation_cooldown_seconds": 60
+    "saturation_cooldown_seconds": 60,
+    "tool_signal_routing": true
   }
 }
 ```
@@ -938,6 +973,81 @@ instead of re-picking it every time. The cooldown honors an upstream
 quota error also opens a short provider-wide circuit so concurrent requests stop
 draining an already-depleted allowance. All of this is in-memory and per worker
 process, and requires no configuration.
+
+### Health-aware ordering — a broken provider sinks in the rotation
+
+Quota cooling above handles a provider that says *"stop asking"*. It does not
+handle one that simply doesn't work: before this, a provider returning 500s or
+timing out kept its place at the front of the ordering and was retried first on
+every request, forever, because only 402/429 earned a cooldown.
+
+llmproxy now tracks the outcome and latency of the last 20 attempts per
+model/account and folds a health multiplier into the same score that quota
+headroom feeds. Quota says what a provider will still *accept*; health says
+whether it currently *works*.
+
+It is a **multiplier, not a filter** — consistent with every other ordering pass
+here, an unhealthy candidate sinks to the back but is never dropped, because a
+degraded provider that answers still beats a 503. A candidate with fewer than 5
+observed attempts scores neutral, so cold models and newly added providers are
+never demoted on noise, and a proven-healthy candidate scores exactly 1.0 rather
+than being penalised against an untried one. Slowness is folded in
+logarithmically and only above 2s, so "slow" nudges the order while "broken" can
+cost an order of magnitude.
+
+**What does not count as a provider failure:** client disconnects, llmproxy's own
+stream-lifecycle errors, and plain 4xx (a malformed request fails identically
+everywhere). llmproxy streams by default, so counting a cancelled stream against
+the upstream would let one user pressing Ctrl-C cascade into provider cooldowns —
+and on a pool whose last candidate is the only one left, dead-end the rotation.
+A forced-capability miss is likewise not ill health: the model answered, it just
+lacks the capability, which is what capability ordering is for.
+
+Per-model health is reported in [`GET /v1/usage`](#token--cost-accounting--getv1usage)
+as `success_rate`, `avg_latency_ms`, `health_samples` and `health_score`. Read
+`health_samples` alongside the rate — a `success_rate` of 1.0 over 0 samples
+means untried, not proven good. Like all other counters this is in-memory and
+per worker process.
+
+### Prompt-cache affinity — keeping a conversation on one upstream
+
+Providers that cache prompt prefixes (Anthropic, OpenAI, DeepSeek) only pay out
+when successive requests in a conversation reach the same upstream **and** the
+same credential. Spreading load defeats that.
+
+So affinity is applied narrowly — to credential choice within a provider, and to
+the **paid** tier of the `loadbalanced` waterfall. It is deliberately *not*
+applied to free-tier capacity ordering, where spreading is the entire point.
+
+The key is a client-supplied `prompt_cache_key` (top-level or under `metadata`)
+when present, since only the client knows what it considers one conversation.
+Otherwise it is derived: a continuation keys on the transcript *before* the
+trailing user turn — exactly the prefix the upstream will have cached — and a
+first turn carrying a system prompt of 200+ characters keys on that, since agents
+resend it verbatim every request. A bare first user turn gets **no** key: there
+is no reusable prefix there, so pinning would cost load spreading and buy nothing.
+
+Selection uses rendezvous (highest-random-weight) hashing rather than a modulo
+ring, so adding or losing an account reshuffles only that account's share instead
+of remapping every conversation — measured at ~10% churn when growing a pool from
+8 to 9, against a theoretical floor of 11%. As with every ordering pass, it only
+reorders: a pinned upstream that goes down fails over normally.
+
+### Explaining a routing decision — `X-LLMProxy-Route-Reason`
+
+Five successive passes decide which candidate is tried first. Every response
+served through a virtual model now carries which ones fired:
+
+```
+X-LLMProxy-Route-Reason: capacity,request_fit=standard(tool_signals:dimensions),capability=tools
+X-LLMProxy-Selected-Model: groq/llama-3.3-70b-versatile
+```
+
+A `failover#N` suffix means the ranked pick failed and this is the Nth fallback,
+so the header alone distinguishes *chosen* from *settled for*. When a tier was
+adjusted by tool signals, the log line also records the evidence behind it —
+severity, turn depth, recent read/write/edit counts and the resulting score —
+rather than just the verdict.
 
 <a name="allow_implicit_paid"></a>
 ### `server.allow_implicit_paid` — keep cost-avoiding routes free
@@ -2056,3 +2166,33 @@ usage: run.py [--setup] [--config PATH] [--host HOST] [--port PORT]
   changes require one.
 - Streaming responses are relayed as raw SSE byte streams via
   `stream_with_context`, preserving upstream chunk boundaries.
+
+---
+
+## Acknowledgements
+
+Parts of llmproxy's routing draw on prior work. Full attribution, licence texts,
+and a statement of what was changed live in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+- **[NVIDIA-NeMo/Switchyard](https://github.com/NVIDIA-NeMo/Switchyard)**
+  (Apache-2.0) — `llmproxy/signals.py` adapts Switchyard's tool-signal
+  extraction and stage scoring, including its severity tiering and the
+  calibrated constants that make one signal insufficient to switch tiers on its
+  own. The practice of stamping every routing decision with its source, and of
+  reporting the scorer's *inputs* rather than only its verdict, comes from the
+  same project.
+- **[diegosouzapw/OmniRoute](https://github.com/diegosouzapw/OmniRoute)** (MIT) —
+  two ideas, implemented here independently: excluding client aborts and the
+  proxy's own stream-lifecycle errors from provider failure accounting, and
+  applying rendezvous hashing to prompt-cache affinity (with the correctness
+  note that a bare first turn has no reusable prefix to key on).
+- **Rendezvous (highest-random-weight) hashing** — Thaler & Ravishankar, 1996.
+- **The power of two random choices** — Mitzenmacher, 1996.
+
+---
+
+## Licence
+
+llmproxy is licensed under the **Apache License, Version 2.0**. See
+[`LICENSE`](LICENSE) for the full text.

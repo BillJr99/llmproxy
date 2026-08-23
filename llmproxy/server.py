@@ -57,6 +57,7 @@ import io
 import itertools
 import json
 import logging
+import math
 import random
 import re
 import threading
@@ -97,6 +98,12 @@ from .config import (
     save_config,
 )
 from .dialects import get_inbound, get_outbound
+from .signals import (
+    SOURCE_NEUTRAL,
+    extract_tool_signals,
+    score_signals,
+    tier_adjustment,
+)
 from .usage import (
     ModelUsage,
     compute_cost,
@@ -612,6 +619,123 @@ def _get_token_snapshot(key: str) -> tuple[int, int]:
     with _usage_registry_lock:
         tracker = _usage_registry.get(key)
     return tracker.token_snapshot() if tracker else (0, 0)
+
+
+def _get_health_snapshot(key: str) -> tuple[float, float, int]:
+    """Return (success_rate, avg_latency_ms, samples) for a provider/model key."""
+    with _usage_registry_lock:
+        tracker = _usage_registry.get(key)
+    return tracker.health_snapshot() if tracker else (1.0, 0.0, 0)
+
+
+def _record_outcome(
+    provider_name: str,
+    upstream_model: str,
+    ok: bool,
+    *,
+    latency_ms: float | None = None,
+    account_id: str | None = None,
+) -> None:
+    """Record whether one upstream attempt worked, for health-aware ordering."""
+    tracker = _get_or_create_tracker(_usage_key(provider_name, upstream_model, account_id))
+    tracker.record_outcome(ok, latency_ms)
+
+
+# Exception types and message fragments that mean *the client went away* or that
+# llmproxy's own stream plumbing closed, rather than that the upstream failed.
+#
+# Counting these against a provider is the classic circuit-breaker mistake: one
+# user pressing Ctrl-C mid-stream would demote a healthy provider, and on a pool
+# whose last candidate is the only one left it can dead-end the rotation
+# entirely. The distinction matters here more than in most proxies because
+# llmproxy streams by default.
+_CLIENT_ABORT_MARKERS: tuple[str, ...] = (
+    "client disconnected",
+    "connection reset by peer",
+    "broken pipe",
+    "response closed",
+    "controller is already closed",
+    "request aborted",
+    "aborted by the client",
+    "generatorexit",
+)
+
+
+def _is_upstream_failure(exc: BaseException | None = None, status: int | None = None) -> bool:
+    """True when a failed attempt should count against the provider's health.
+
+    Returns False for client aborts and llmproxy's own stream-lifecycle errors —
+    see ``_CLIENT_ABORT_MARKERS``. A 4xx that is not a quota error is the
+    caller's fault (a malformed request will fail identically everywhere), so it
+    is not counted either; 402/429 already have their own cooldown path and are
+    counted so a chronically exhausted candidate also sinks in the ordering.
+    """
+    if exc is not None:
+        if isinstance(exc, GeneratorExit):
+            return False
+        text = f"{type(exc).__name__}: {exc}".lower()
+        if any(marker in text for marker in _CLIENT_ABORT_MARKERS):
+            return False
+        return True
+    if status is None:
+        return False
+    if status >= 500:
+        return True
+    if status in _QUOTA_STATUSES:
+        return True
+    return False
+
+
+# Health scoring. Below this many observed attempts a candidate is treated as
+# healthy: demoting on one or two samples punishes cold models and newly added
+# providers for noise, which is exactly backwards.
+_HEALTH_MIN_SAMPLES = 5
+# Success rate under which a candidate is considered degraded. Sits well below
+# 1.0 so ordinary transient failure does not demote, and above 0.5 so a coin-flip
+# provider always does.
+_HEALTH_DEGRADED_RATE = 0.75
+# Floor on the multiplier, so even a fully broken candidate keeps a non-zero
+# score and stays in the pool as a last resort rather than being excluded.
+_HEALTH_MIN_MULTIPLIER = 0.05
+# Latency at or below which a candidate is considered simply "normal speed".
+# Below this the latency term must be exactly 1.0, otherwise a candidate with a
+# proven-good record would score *below* an untried one — an inversion that
+# would quietly punish every model the proxy has actually used.
+_HEALTH_FAST_MS = 2000.0
+
+
+def _health_score(provider_name: str, upstream_model: str, account_id: str | None = None) -> float:
+    """Return a health multiplier in [_HEALTH_MIN_MULTIPLIER, 1.0].
+
+    1.0 means "no reason to avoid this"; lower means recent attempts have been
+    failing or slow. Applied as a *multiplier* on an existing ordering score
+    rather than as a filter, so an unhealthy candidate sinks to the back of the
+    rotation but is still tried when nothing better is left — llmproxy never
+    drops a candidate, and a degraded provider answering is better than a 503.
+
+    Latency is folded in logarithmically and only above ``_HEALTH_FAST_MS``, so
+    that "slow" nudges the ordering without ever dominating "broken": the whole
+    latency term spans a factor of two, while a failing provider can lose an
+    order of magnitude.
+    """
+    rate, avg_latency, samples = _get_health_snapshot(
+        _usage_key(provider_name, upstream_model, account_id)
+    )
+    if samples < _HEALTH_MIN_SAMPLES:
+        return 1.0
+
+    score = rate
+    if rate < _HEALTH_DEGRADED_RATE:
+        # Degraded band: penalise beyond the raw rate so a candidate that is
+        # failing a quarter of the time ranks clearly below one that is not.
+        score *= rate
+    if avg_latency > _HEALTH_FAST_MS:
+        # Neutral up to _HEALTH_FAST_MS, then decays by a quarter per decade and
+        # bottoms out at 0.5: ~0.75 at 20s, 0.5 at 200s. Bounded so a wild
+        # latency reading can nudge but never invert the ordering.
+        decades = math.log10(avg_latency / _HEALTH_FAST_MS)
+        score *= max(0.5, 1.0 - 0.25 * decades)
+    return max(_HEALTH_MIN_MULTIPLIER, min(1.0, score))
 
 
 def _reset_usage() -> None:
@@ -2840,23 +2964,88 @@ def _wants_thinking(payload: dict) -> bool:
     return bool(payload.get("reasoning"))
 
 
-def _target_reasoning_tier(payload: dict) -> str:
-    """Choose the reasoning tier that best fits a request's size and type.
+# Routing decision sources. The tier sources explain *which reasoning tier* a
+# request was aimed at; the route sources explain *which ordering passes* moved
+# the pool before a candidate was picked. Both are reported on the response so a
+# pick can be explained after the fact instead of reverse-engineered from logs.
+ROUTE_SOURCE_CAPACITY = "capacity"
+ROUTE_SOURCE_LOADBALANCED = "loadbalanced"
+ROUTE_SOURCE_CYCLING = "cycling"
+ROUTE_SOURCE_REQUEST_FIT = "request_fit"
+ROUTE_SOURCE_CAPABILITY = "capability"
+ROUTE_SOURCE_FAVORITE = "favorite"
+ROUTE_SOURCE_AFFINITY = "cache_affinity"
+ROUTE_SOURCE_FAILOVER = "failover"
+
+TIER_SOURCE_EXPLICIT = "explicit_reasoning_effort"
+TIER_SOURCE_PROMPT_SIZE = "prompt_size"
+TIER_SOURCE_TOOL_SIGNALS = "tool_signals"
+
+
+def _tool_signal_routing_enabled(config: dict | None = None) -> bool:
+    """Whether tool-result signals may adjust the prompt-size tier.
+
+    Operators who want strictly size-based triage can set
+    ``server.tool_signal_routing`` to false; the default is on.
+    """
+    try:
+        cfg = config if config is not None else load_config()
+        return bool(cfg.get("server", {}).get("tool_signal_routing", True))
+    except Exception:  # noqa: BLE001 — routing must never fail on config shape
+        return True
+
+
+def _target_reasoning_tier_explained(payload: dict) -> tuple[str, str]:
+    """Choose the reasoning tier for a request and say why.
 
     Explicit thinking requests go to ``deep``; otherwise the estimated input
     size buckets the request into ``exploratory`` (small/fast), ``standard``, or
-    ``deep`` (large). This drives the first-pick order for the general virtuals;
-    failover still walks the rest of the candidates, so the choice is only a
-    preference, never a restriction.
+    ``deep`` (large).
+
+    Prompt size alone misreads agentic traffic, where a short request can carry
+    a long, failing task. So when the message list contains tool results, the
+    size-derived tier is nudged one step by ``signals.tier_adjustment`` — up when
+    the agent is erroring or spinning, down when it has just finished cleanly.
+    The adjustment is bounded to a single step in either direction, which keeps
+    it a correction to the size heuristic rather than a replacement for it.
+
+    This drives the first-pick order for the general virtuals; failover still
+    walks the rest of the candidates, so the choice is only a preference, never
+    a restriction.
     """
     if _wants_thinking(payload):
-        return "deep"
+        return "deep", TIER_SOURCE_EXPLICIT
+
     tokens = _estimate_payload_tokens(payload)
     if tokens <= _TIER_SMALL_MAX_TOKENS:
-        return "exploratory"
-    if tokens <= _TIER_MEDIUM_MAX_TOKENS:
-        return "standard"
-    return "deep"
+        base = "exploratory"
+    elif tokens <= _TIER_MEDIUM_MAX_TOKENS:
+        base = "standard"
+    else:
+        base = "deep"
+
+    if not _tool_signal_routing_enabled():
+        return base, TIER_SOURCE_PROMPT_SIZE
+
+    try:
+        delta, signal_source = tier_adjustment(payload)
+    except Exception:  # noqa: BLE001 — a heuristic must never fail a request
+        logger.debug("tool-signal tiering failed; falling back to prompt size", exc_info=True)
+        return base, TIER_SOURCE_PROMPT_SIZE
+
+    if not delta or signal_source == SOURCE_NEUTRAL:
+        return base, TIER_SOURCE_PROMPT_SIZE
+
+    idx = _REASONING_LEVELS.index(base)
+    shifted = min(len(_REASONING_LEVELS) - 1, max(0, idx + delta))
+    if shifted == idx:
+        return base, TIER_SOURCE_PROMPT_SIZE
+    return _REASONING_LEVELS[shifted], f"{TIER_SOURCE_TOOL_SIGNALS}:{signal_source}"
+
+
+def _target_reasoning_tier(payload: dict) -> str:
+    """Reasoning tier for *payload* — see ``_target_reasoning_tier_explained``."""
+    return _target_reasoning_tier_explained(payload)[0]
 
 
 def _order_by_request_fit(
@@ -3228,6 +3417,32 @@ def _escalate_budget_if_starved(
     return resp
 
 
+def _stamp_route_headers(
+    resp: "Response",
+    route_reason: str | None,
+    provider_name: str,
+    upstream_model: str,
+    attempt_index: int,
+) -> "Response":
+    """Record on *resp* which candidate served it and why it was ranked first.
+
+    ``attempt_index`` is 0 for the first-ranked candidate; anything higher means
+    the ranked pick failed and this is a failover, which is appended to the
+    reason so a header alone distinguishes "chosen" from "settled for".
+    """
+    if route_reason is None:
+        return resp
+    reason = route_reason
+    if attempt_index > 0:
+        reason = f"{reason},{ROUTE_SOURCE_FAILOVER}#{attempt_index}"
+    try:
+        resp.headers["X-LLMProxy-Route-Reason"] = reason
+        resp.headers["X-LLMProxy-Selected-Model"] = f"{provider_name}/{upstream_model}"
+    except Exception:  # noqa: BLE001 — never fail a served response over a header
+        logger.debug("could not stamp route headers", exc_info=True)
+    return resp
+
+
 def _proxy_cycling_non_streaming(
     endpoint: str,
     label: str,
@@ -3235,6 +3450,7 @@ def _proxy_cycling_non_streaming(
     payload: dict,
     timeout: int,
     on_success: Callable[..., None] | None = None,
+    route_reason: str | None = None,
 ) -> Response:
     """Try each candidate in order, returning the first success.
 
@@ -3268,7 +3484,9 @@ def _proxy_cycling_non_streaming(
         max_attempts = _candidate_max_attempts(idx, total)
         for attempt in range(max_attempts):
             logger.info("  [%s] trying %s/%s", label, provider_name, upstream_model)
+            _started = time.monotonic()
             resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, candidate_timeout)
+            _elapsed_ms = (time.monotonic() - _started) * 1000.0
             if resp.status_code < 400 or not _is_transient_status(resp.status_code):
                 break
             if attempt < max_attempts - 1:
@@ -3288,6 +3506,11 @@ def _proxy_cycling_non_streaming(
         if resp.status_code < 400:
             body = resp.get_data()
             if _capability_failed(payload, body):
+                # Not a provider fault: the model answered, it just lacks the
+                # capability this request forced. Ordering by capability is what
+                # fixes that, not demoting the provider's health.
+                _record_outcome(provider_name, upstream_model, True,
+                                latency_ms=_elapsed_ms, account_id=account_id)
                 logger.warning(
                     "  [%s] %s/%s returned 200 but did not honor a forced capability, trying next",
                     label, provider_name, upstream_model,
@@ -3299,19 +3522,26 @@ def _proxy_cycling_non_streaming(
                 # body — cool it so the rotation is sticky across requests.
                 if _is_quota_error(200, body):
                     _record_quota_saturation(provider_name, provider_cfg, upstream_model, None)
+                _record_outcome(provider_name, upstream_model, False,
+                                latency_ms=_elapsed_ms, account_id=account_id)
                 logger.warning(
                     "  [%s] %s/%s returned 200 with an unusable body (error/empty), trying next",
                     label, provider_name, upstream_model,
                 )
                 last = resp
                 continue
+            _record_outcome(provider_name, upstream_model, True,
+                            latency_ms=_elapsed_ms, account_id=account_id)
             if on_success is not None:
                 on_success(provider_name, upstream_model, body, account_id)
-            return resp
+            return _stamp_route_headers(resp, route_reason, provider_name, upstream_model, idx)
         if _is_quota_error(resp.status_code, resp.get_data()):
             _record_quota_saturation(
                 provider_name, provider_cfg, upstream_model, resp.headers.get("Retry-After")
             )
+        if _is_upstream_failure(status=resp.status_code):
+            _record_outcome(provider_name, upstream_model, False,
+                            latency_ms=_elapsed_ms, account_id=account_id)
         logger.warning(
             "  [%s] %s/%s returned %d, trying next", label, provider_name, upstream_model, resp.status_code
         )
@@ -3329,6 +3559,7 @@ def _proxy_cycling_streaming(
     config: dict | None = None,
     *,
     inbound=None,
+    route_reason: str | None = None,
 ) -> Response:
     """
     Try each candidate in order.  Checks the HTTP status code — and peeks at the
@@ -3381,9 +3612,12 @@ def _proxy_cycling_streaming(
                     time.sleep(_VIRTUAL_RETRY_BACKOFF)
                     continue
                 logger.warning("  [%s] %s/%s error: %s, trying next", label, provider_name, upstream_model, e)
+                _record_outcome(provider_name, upstream_model, False, account_id=account_id)
                 resp = None
                 break
             except Exception as e:
+                if _is_upstream_failure(e):
+                    _record_outcome(provider_name, upstream_model, False, account_id=account_id)
                 logger.warning("  [%s] %s/%s error: %s, trying next", label, provider_name, upstream_model, e)
                 resp = None
                 break
@@ -3407,6 +3641,8 @@ def _proxy_cycling_streaming(
                 resp.status_code,
                 resp.headers.get("Content-Type", "application/json"),
             )
+            if _is_upstream_failure(status=resp.status_code):
+                _record_outcome(provider_name, upstream_model, False, account_id=account_id)
             resp.close()
             logger.warning(
                 "  [%s] %s/%s -> %d, trying next", label, provider_name, upstream_model, resp.status_code
@@ -3424,6 +3660,7 @@ def _proxy_cycling_streaming(
                 if _is_quota_error(None, error_body):
                     _record_quota_saturation(provider_name, provider_cfg, upstream_model, None)
                 last_error = (error_body, 502, "text/event-stream")
+                _record_outcome(provider_name, upstream_model, False, account_id=account_id)
                 resp.close()
                 logger.warning(
                     "  [%s] %s/%s -> 200 then stream error, trying next",
@@ -3431,6 +3668,7 @@ def _proxy_cycling_streaming(
                 )
                 continue
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            _record_outcome(provider_name, upstream_model, False, account_id=account_id)
             logger.warning("  [%s] %s/%s error mid-peek: %s, trying next", label, provider_name, upstream_model, e)
             resp.close()
             continue
@@ -3440,14 +3678,23 @@ def _proxy_cycling_streaming(
         # delta.tool_calls would require buffering the whole SSE stream before
         # committing.  Proactive capability ordering still steers streaming
         # requests to capable models.
+        # The stream opened cleanly and survived the peek. That is the last
+        # moment this path can attribute anything to the upstream: from here the
+        # bytes belong to the client, and a failure downstream (a disconnect, a
+        # closed generator) says nothing about the provider — see
+        # ``_is_upstream_failure``.
+        _record_outcome(provider_name, upstream_model, True, account_id=account_id)
         if on_success is not None:
             on_success(provider_name, upstream_model, None, account_id)
 
         # Translation path: pipe the native stream through the adapters.
         if not (outbound.is_identity and inbound.is_identity):
-            return _translated_stream_response(
-                resp, outbound, inbound, provider_name, upstream_model, config,
-                prefix=prefix, account_id=account_id,
+            return _stamp_route_headers(
+                _translated_stream_response(
+                    resp, outbound, inbound, provider_name, upstream_model, config,
+                    prefix=prefix, account_id=account_id,
+                ),
+                route_reason, provider_name, upstream_model, idx,
             )
 
         captured_resp = resp
@@ -3482,7 +3729,10 @@ def _proxy_cycling_streaming(
             finally:
                 _record_stream_usage(pn, um, bytes(tail), config, account_id=acct)
 
-        return Response(generate(), content_type="text/event-stream")
+        return _stamp_route_headers(
+            Response(generate(), content_type="text/event-stream"),
+            route_reason, provider_name, upstream_model, idx,
+        )
 
     if last_error:
         body, status, ct = last_error
@@ -3509,8 +3759,143 @@ def _cycling_candidates(
     return fresh + cooling if cooling else rotated
 
 
+# — prompt-cache affinity —
+#
+# Providers that cache prompt prefixes (Anthropic, OpenAI, DeepSeek) only pay off
+# if successive requests in a conversation land on the same upstream *and* the
+# same credential. Spreading load defeats that. So affinity is applied narrowly:
+# to credential choice within a provider, and to the paid tier of the cost
+# waterfall — never to free-tier capacity ordering, where spreading is the point.
+#
+# Selection is rendezvous (highest-random-weight) hashing rather than a modulo
+# ring, so adding or losing an account reshuffles only that account's share
+# instead of remapping everything. HRW is Thaler & Ravishankar (1996); see
+# THIRD_PARTY_NOTICES.md.
+
+# Cap on a client-supplied cache key, matching the largest value providers accept.
+_AFFINITY_KEY_MAX_CHARS = 4096
+# A system prompt shorter than this is not worth pinning a conversation for.
+_AFFINITY_MIN_SYSTEM_CHARS = 200
+
+
+def _affinity_key(payload: dict) -> str | None:
+    """Return a stable key identifying this request's cacheable prefix, or None.
+
+    Prefers a client-supplied ``prompt_cache_key`` (top-level or under
+    ``metadata``), which is the only source that knows what the client considers
+    one conversation. Otherwise the key is derived from the parts of the message
+    list that will recur:
+
+    * a continuation (the transcript already contains assistant or tool turns)
+      keys on everything *before* the trailing user turn, which is exactly the
+      prefix the upstream will have cached;
+    * a first turn carrying a substantial system prompt keys on that system
+      prompt, since agents resend it verbatim on every request.
+
+    Returns None for a bare first user turn. There is no reusable prefix there,
+    so pinning would cost load spreading and buy no cache hit.
+    """
+    if not isinstance(payload, dict):
+        return None
+
+    explicit = payload.get("prompt_cache_key")
+    if not isinstance(explicit, str) or not explicit.strip():
+        meta = payload.get("metadata")
+        explicit = meta.get("prompt_cache_key") if isinstance(meta, dict) else None
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()[:_AFFINITY_KEY_MAX_CHARS]
+
+    messages = payload.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return None
+
+    def _content(msg) -> str:
+        if not isinstance(msg, dict):
+            return ""
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(
+                part.get("text", "") for part in content if isinstance(part, dict)
+            )
+        return ""
+
+    roles = [m.get("role") for m in messages if isinstance(m, dict)]
+    if any(r in ("assistant", "tool") for r in roles):
+        # Continuation: hash the stable prefix, excluding the trailing user turn
+        # that differs on every request.
+        prefix = messages[:-1] if roles and roles[-1] == "user" else messages
+        digest = hashlib.sha256()
+        for msg in prefix:
+            digest.update(f"{msg.get('role') if isinstance(msg, dict) else ''}\x00".encode())
+            digest.update(_content(msg).encode("utf-8", "ignore"))
+            digest.update(b"\x01")
+        return f"prefix:{digest.hexdigest()}"
+
+    system_text = "".join(_content(m) for m in messages if isinstance(m, dict) and m.get("role") == "system")
+    if len(system_text) >= _AFFINITY_MIN_SYSTEM_CHARS:
+        return "system:" + hashlib.sha256(system_text.encode("utf-8", "ignore")).hexdigest()
+    return None
+
+
+def _rendezvous_rank(key: str, identity: str) -> int:
+    """Score one candidate identity for *key*; the highest score wins.
+
+    The NUL separator keeps ``("ab", "c")`` from colliding with ``("a", "bc")``.
+    """
+    digest = hashlib.sha256(f"{key}\x00{identity}".encode("utf-8", "ignore")).hexdigest()
+    return int(digest[:32], 16)
+
+
+def _order_by_cache_affinity(
+    candidates: list[tuple[str, dict, str]],
+    affinity_key: str | None,
+) -> list[tuple[str, dict, str]]:
+    """Stable-sort *candidates* so the HRW winner for *affinity_key* comes first.
+
+    A no-op without a key or with fewer than two candidates. Never drops a
+    candidate — like every other ordering pass here, it only reorders, so a
+    pinned upstream that is down still fails over normally.
+    """
+    if not affinity_key or len(candidates) < 2:
+        return candidates
+    ranked = sorted(
+        enumerate(candidates),
+        key=lambda item: (
+            -_rendezvous_rank(affinity_key, f"{item[1][0]}/{item[1][2]}"),
+            item[0],
+        ),
+    )
+    return [c for _, c in ranked]
+
+
+def _cache_affinity_applies(
+    candidates: list[tuple[str, dict, str]],
+    config: dict,
+    is_loadbalanced: bool,
+) -> bool:
+    """True when affinity could actually reorder *candidates*.
+
+    Affinity only has somewhere to bite in two places: choosing between a
+    provider's several credentials, and the paid tier of the cost waterfall.
+    Everywhere else — a single-credential provider, a free-tier route — the pass
+    runs and changes nothing, and reporting it as a reason would overstate what
+    happened. The route header is only worth having if it is accurate.
+    """
+    for _pn, pc, _um in candidates:
+        if len(provider_accounts(pc)) > 1 and provider_account_strategy(pc) == "round_robin":
+            return True
+    if is_loadbalanced and _allow_implicit_paid(config):
+        paid = sum(1 for pn, pc, um in candidates if _cost_tier(pn, um, pc, config) == _TIER_PAID)
+        if paid > 1:
+            return True
+    return False
+
+
 def _expand_accounts(
     candidates: list[tuple[str, dict, str]],
+    payload: dict | None = None,
 ) -> list[tuple[str, dict, str]]:
     """Fan each candidate out into one per configured account, expanded LAST.
 
@@ -3527,9 +3912,16 @@ def _expand_accounts(
     reachable. A single-account provider (the common case) expands to exactly
     one candidate with the original cfg untouched, so keys/headers/behavior are
     byte-identical to before.
+
+    When *payload* carries a cacheable prefix (see :func:`_affinity_key`), the
+    ``round_robin`` rotation is replaced by a rendezvous-hash ordering keyed on
+    that prefix, so successive requests in one conversation keep landing on the
+    same credential and the upstream's prompt cache actually hits. Priority
+    strategies are left alone — an operator who ranked their accounts meant it.
     """
     if not candidates:
         return candidates
+    affinity_key = _affinity_key(payload) if payload else None
     expanded: list[tuple[str, dict, str]] = []
     for pn, pc, um in candidates:
         accounts = provider_accounts(pc)
@@ -3539,8 +3931,16 @@ def _expand_accounts(
         fresh = [a for a in accounts if not _is_candidate_saturated(pn, um, a.id)]
         cooling = [a for a in accounts if _is_candidate_saturated(pn, um, a.id)]
         if provider_account_strategy(pc) == "round_robin" and len(fresh) > 1:
-            start = random.randrange(len(fresh))
-            fresh = fresh[start:] + fresh[:start]
+            if affinity_key:
+                # Deterministic per conversation, so the prompt cache survives
+                # the next request; still spread across conversations.
+                fresh = sorted(
+                    fresh,
+                    key=lambda a: -_rendezvous_rank(affinity_key, f"{pn}#{a.id}/{um}"),
+                )
+            else:
+                start = random.randrange(len(fresh))
+                fresh = fresh[start:] + fresh[:start]
         for acct in fresh + cooling:
             expanded.append((pn, account_bound_cfg(pc, acct), um))
     return expanded
@@ -3565,6 +3965,11 @@ def _capacity_ordered_candidates(
     - Candidates with score == 0 (at limit or cooling) are appended as
       last-resort fallbacks; they still get tried so a saturated model doesn't
       cause an avoidable 503.
+    - Every non-zero score is scaled by ``_health_score``, so a candidate whose
+      recent attempts have been failing or crawling sinks in the rotation. It is
+      a multiplier rather than a filter: quota says what a provider will still
+      *accept*, health says whether it currently *works*, and a degraded provider
+      that answers still beats a 503.
     - Falls back to random rotation when no candidate has any configured limits
       and none is currently cooling.
 
@@ -3602,6 +4007,7 @@ def _capacity_ordered_candidates(
             used_min, used_day = _get_usage_snapshot(key)
             used_tok_min, used_tok_day = _get_token_snapshot(key)
             score = _capacity_score(used_min, used_day, limits, used_tok_min, used_tok_day)
+            score *= _health_score(pn, um, account_id)
         logger.debug("[capacity] %s  score=%.3f", key, score)
         scored.append(((pn, pc, um), score))
 
@@ -3737,6 +4143,7 @@ def _quality_ordered_candidates(
             used_min, used_day = _get_usage_snapshot(key)
             used_tok_min, used_tok_day = _get_token_snapshot(key)
             score = _capacity_score(used_min, used_day, limits, used_tok_min, used_tok_day)
+            score *= _health_score(pn, um, account_id)
         scored.append(((pn, pc, um), score))
 
     def _key(item: tuple[tuple[str, dict, str], float]):
@@ -4195,6 +4602,11 @@ def _loadbalanced_ordered_candidates(
                 bucket,
                 key=lambda c: (_price(c), tuple(-x for x in _quality_key(c[0], c[2], reasoning_map))),
             )
+            # Paid providers are the ones that actually bill prompt caching, so
+            # this is where affinity pays for itself: keep a conversation on the
+            # upstream that already holds its prefix. Applied only within the
+            # paid bucket — the free tier wants spreading, not stickiness.
+            bucket = _order_by_cache_affinity(bucket, _affinity_key(payload))
         if needed:
             bucket = _order_by_capability(bucket, needed, cap_map)
         ordered.extend(bucket)
@@ -5022,16 +5434,22 @@ def _proxy_endpoint(
         # virtual stays in the local list.
         is_free_virtual = _is_free_virtual_model(model_full)
         is_local_virtual = _is_local_virtual_model(model_full)
+        # Every pass that reorders the pool records itself here, so the pick can
+        # be explained afterwards instead of reconstructed from log archaeology.
+        decisions: list[str] = []
         if _is_loadbalanced_model(model_full):
             # Cost waterfall (free → local → paid), optimized per-prompt within
             # each tier. Owns its full ordering, so the capability/reasoning
             # passes below are stable no-ops over it.
             ordered = _loadbalanced_ordered_candidates(candidates, payload, config)
+            decisions.append(ROUTE_SOURCE_LOADBALANCED)
         elif is_free_virtual:
             free_limits = _get_normalized_free_limits(config)
             ordered = _capacity_ordered_candidates(candidates, free_limits)
+            decisions.append(ROUTE_SOURCE_CAPACITY)
         else:
             ordered = _cycling_candidates(candidates)
+            decisions.append(ROUTE_SOURCE_CYCLING)
 
         # Record token/cost (and request count) for every cycled candidate,
         # scoped to the account that actually served it so per-account free-tier
@@ -5056,24 +5474,54 @@ def _proxy_endpoint(
         # picks the right-sized model from what's available. Never crosses tiers.
         if is_free_virtual or is_local_virtual:
             ordered = _order_by_request_fit(ordered, payload, _get_model_reasoning(config))
-            logger.info("  [%s] request-fit first-pick tier=%s", model_full, _target_reasoning_tier(payload))
+            tier, tier_source = _target_reasoning_tier_explained(payload)
+            decisions.append(f"{ROUTE_SOURCE_REQUEST_FIT}={tier}({tier_source})")
+            # Log the scorer's inputs, not just its verdict — a tier that looks
+            # wrong is only debuggable if the evidence behind it is visible.
+            logger.info(
+                "  [%s] request-fit first-pick tier=%s via=%s", model_full, tier, tier_source
+            )
+            if tier_source.startswith(TIER_SOURCE_TOOL_SIGNALS):
+                sig = extract_tool_signals(payload)
+                logger.info(
+                    "  [%s] tool signals: severity=%.2f depth=%d compacted=%s "
+                    "recent(edit=%d write=%d read=%d plan=%d) tests_passed=%s score=%.3f",
+                    model_full, sig.severity, sig.turn_depth, sig.compacted,
+                    sig.recent_edit_count, sig.recent_write_count,
+                    sig.recent_read_count, sig.recent_plan_count,
+                    sig.tests_passed, score_signals(sig)[0],
+                )
         if needed:
             ordered = _order_by_capability(ordered, needed, _model_capabilities(config))
+            decisions.append(f"{ROUTE_SOURCE_CAPABILITY}={'+'.join(sorted(needed))}")
         if is_free_virtual:
+            before = ordered[0] if ordered else None
             ordered = _apply_favorite_free_ordering(ordered, config)
+            if ordered and ordered[0] is not before:
+                decisions.append(ROUTE_SOURCE_FAVORITE)
         # Expand accounts LAST: each model's credentials become adjacent
         # candidates in its ranked slot, so cycling rotates accounts-first then
         # models. A no-op for single-credential providers.
-        ordered = _expand_accounts(ordered)
-        logger.info("  [%s] cycling through %d candidate(s)", model_full, len(ordered))
+        affinity_applied = bool(_affinity_key(payload)) and _cache_affinity_applies(
+            ordered, config, _is_loadbalanced_model(model_full)
+        )
+        ordered = _expand_accounts(ordered, payload)
+        if affinity_applied:
+            decisions.append(ROUTE_SOURCE_AFFINITY)
+        route_reason = ",".join(decisions)
+        logger.info("  [%s] cycling through %d candidate(s) [%s]", model_full, len(ordered), route_reason)
         if is_streaming:
             timeout = server_cfg.get("stream_timeout", 300)
             return _proxy_cycling_streaming(
                 endpoint, model_full, ordered, payload, timeout,
                 on_success=on_success, config=config, inbound=inbound_adapter,
+                route_reason=route_reason,
             )
         timeout = server_cfg.get("request_timeout", 120)
-        resp = _proxy_cycling_non_streaming(endpoint, model_full, ordered, payload, timeout, on_success=on_success)
+        resp = _proxy_cycling_non_streaming(
+            endpoint, model_full, ordered, payload, timeout,
+            on_success=on_success, route_reason=route_reason,
+        )
     else:
         provider_name, provider_cfg, upstream_model, err = _resolve_provider(model_full)
         if err is not None:
@@ -5272,6 +5720,7 @@ def _build_usage_report() -> dict:
     for key, tracker in items:
         snap = tracker.cost_snapshot()
         tok_min, tok_day = tracker.token_snapshot()
+        success_rate, avg_latency_ms, health_samples = tracker.health_snapshot()
         provider_name, account_id, upstream_model = _split_usage_key(key)
         believed_free = bool(upstream_model) and _is_model_free(provider_name, upstream_model, config)
         entry = {
@@ -5287,6 +5736,13 @@ def _build_usage_report() -> dict:
             "cost_sources": snap["cost_sources"],
             "believed_free": believed_free,
             "unexpected_cost": believed_free and snap["cost"] > 0,
+            # Health over the recent attempt window (see usage.HEALTH_WINDOW).
+            # "health_samples" is what makes the rate readable: a success_rate of
+            # 1.0 over zero samples means untried, not proven good.
+            "success_rate": round(success_rate, 4),
+            "avg_latency_ms": round(avg_latency_ms, 1),
+            "health_samples": health_samples,
+            "health_score": round(_health_score(provider_name, upstream_model, account_id), 4),
         }
         if account_id is not None:
             entry["account"] = account_id  # label/id only — never the key
