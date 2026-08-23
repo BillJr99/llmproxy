@@ -209,7 +209,7 @@ def test_provider_free_is_capacity_aware(server, monkeypatch):
     _seed_route_cache(server, {"visible__free-model": ("visible", "free-model")})
     captured = {}
 
-    def _fake_cycle(endpoint, model_full, ordered, payload, timeout, on_success=None):
+    def _fake_cycle(endpoint, model_full, ordered, payload, timeout, on_success=None, **kwargs):
         captured["ordered"] = ordered
         captured["on_success"] = on_success
         return Response(b'{"ok": true}', status=200, content_type="application/json")

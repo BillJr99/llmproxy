@@ -31,6 +31,11 @@ from . import providers as _providers
 # Per-model usage counter
 # ---------------------------------------------------------------------------
 
+# How many recent attempts the health window keeps per model/account. Small
+# enough that a provider which has recovered stops being punished quickly, large
+# enough that a single failure cannot swing the success rate on its own.
+HEALTH_WINDOW = 20
+
 
 def today_start_ts() -> float:
     """Unix timestamp for the start of today (local midnight)."""
@@ -54,6 +59,7 @@ class ModelUsage:
         "_lifetime_requests", "_lifetime_prompt",
         "_lifetime_completion", "_lifetime_total",
         "_lifetime_cost", "_cost_sources",
+        "_outcomes", "_latencies",                          # health windows
     )
 
     def __init__(self) -> None:
@@ -69,6 +75,12 @@ class ModelUsage:
         self._lifetime_total: int = 0
         self._lifetime_cost: float = 0.0
         self._cost_sources: dict[str, int] = {}
+        # Rolling health windows, bounded so a long-lived process cannot grow
+        # them without limit. Deliberately separate from the quota windows: quota
+        # is time-based (what a provider will still let me send), health is
+        # attempt-based (whether the last N attempts actually worked).
+        self._outcomes: collections.deque = collections.deque(maxlen=HEALTH_WINDOW)
+        self._latencies: collections.deque = collections.deque(maxlen=HEALTH_WINDOW)
 
     def record(
         self,
@@ -108,6 +120,40 @@ class ModelUsage:
                 self._lifetime_cost += cost
             if cost_source:
                 self._cost_sources[cost_source] = self._cost_sources.get(cost_source, 0) + 1
+
+    def record_outcome(self, ok: bool, latency_ms: float | None = None) -> None:
+        """Record whether one upstream attempt succeeded, and how long it took.
+
+        Kept separate from ``record`` because the two answer different questions
+        and are called at different times: ``record`` meters quota against a
+        provider's published limits, while this meters whether the provider is
+        actually working. A streaming request counts its outcome when the stream
+        is committed, long before its token totals are known.
+
+        Only failures *the upstream is responsible for* should reach here — see
+        ``server._is_upstream_failure``. Counting a client disconnect would let
+        one cancelled stream cascade into a provider-wide demotion.
+        """
+        with self._lock:
+            self._outcomes.append(bool(ok))
+            if latency_ms is not None and latency_ms >= 0:
+                self._latencies.append(float(latency_ms))
+
+    def health_snapshot(self) -> tuple[float, float, int]:
+        """Return (success_rate, avg_latency_ms, samples) over the health window.
+
+        ``success_rate`` is 1.0 and ``avg_latency_ms`` 0.0 when nothing has been
+        recorded, so an unused candidate reads as healthy rather than as failing.
+        Callers must still gate on ``samples`` before trusting the rate — see
+        ``server._health_score``.
+        """
+        with self._lock:
+            samples = len(self._outcomes)
+            if not samples:
+                return 1.0, 0.0, 0
+            rate = sum(1 for ok in self._outcomes if ok) / samples
+            avg_latency = (sum(self._latencies) / len(self._latencies)) if self._latencies else 0.0
+            return rate, avg_latency, samples
 
     def snapshot(self) -> tuple[int, int]:
         """Return (requests_last_60s, requests_today), pruning stale entries."""

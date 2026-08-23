@@ -82,6 +82,67 @@ def test_target_reasoning_tier_by_size_and_type(server):
                                           "reasoning_effort": "high"}) == "deep"
 
 
+def _agent_spiral(turns=10):
+    """A short-prompt request that is nonetheless going badly."""
+    msgs = [{"role": "user", "content": "fix it"}]
+    for _ in range(turns):
+        msgs += [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "c", "type": "function",
+                 "function": {"name": "bash", "arguments": '{"command": "cargo build"}'}}]},
+            {"role": "tool", "tool_call_id": "c", "content": "error: compilation failed"},
+        ]
+    return {"messages": msgs}
+
+
+def test_tool_signals_escalate_a_short_but_failing_request(server):
+    """The defect this fixes: prompt size alone reads an error spiral as trivial."""
+    payload = _agent_spiral()
+    assert server._estimate_payload_tokens(payload) <= server._TIER_SMALL_MAX_TOKENS
+    tier, source = server._target_reasoning_tier_explained(payload)
+    assert tier == "standard"  # bumped one step up from exploratory, not straight to deep
+    assert source.startswith(server.TIER_SOURCE_TOOL_SIGNALS)
+
+
+def test_tier_adjustment_is_bounded_to_one_step(server):
+    """A correction to the size heuristic, never a replacement for it."""
+    payload = _agent_spiral()
+    payload["messages"][0]["content"] = "x" * (4 * 4000)  # standard by size
+    assert server._target_reasoning_tier(payload) == "deep"
+    # Already deep by size: escalation cannot overshoot the top tier.
+    payload["messages"][0]["content"] = "x" * (4 * 20000)
+    assert server._target_reasoning_tier(payload) == "deep"
+
+
+def test_plain_chat_tier_is_unchanged_by_the_signal_pass(server):
+    small = {"messages": [{"role": "user", "content": "hi"}]}
+    tier, source = server._target_reasoning_tier_explained(small)
+    assert (tier, source) == ("exploratory", server.TIER_SOURCE_PROMPT_SIZE)
+
+
+def test_tool_signal_routing_can_be_disabled(server, monkeypatch):
+    monkeypatch.setattr(server, "_tool_signal_routing_enabled", lambda *a, **k: False)
+    tier, source = server._target_reasoning_tier_explained(_agent_spiral())
+    assert (tier, source) == ("exploratory", server.TIER_SOURCE_PROMPT_SIZE)
+
+
+def test_a_broken_signal_pass_falls_back_to_prompt_size(server, monkeypatch):
+    """A routing heuristic must never be able to fail a request."""
+    def _boom(*a, **k):
+        raise RuntimeError("signal extraction blew up")
+    monkeypatch.setattr(server, "tier_adjustment", _boom)
+    tier, source = server._target_reasoning_tier_explained(_agent_spiral())
+    assert (tier, source) == ("exploratory", server.TIER_SOURCE_PROMPT_SIZE)
+
+
+def test_explicit_reasoning_effort_still_wins(server):
+    payload = _agent_spiral()
+    payload["reasoning_effort"] = "high"
+    assert server._target_reasoning_tier_explained(payload) == (
+        "deep", server.TIER_SOURCE_EXPLICIT
+    )
+
+
 def test_order_by_request_fit_exact_tier_first_and_stable(server):
     cands = [("pf", {}, "big"), ("pf", {}, "fast"), ("pf", {}, "mid"), ("pf", {}, "untagged")]
     rmap = {"pf/fast": "exploratory", "pf/mid": "standard", "pf/big": "deep"}

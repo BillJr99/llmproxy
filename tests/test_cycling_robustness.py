@@ -554,3 +554,72 @@ def test_all_accounts_saturated_still_reachable(server, monkeypatch):
     out = server._expand_accounts([("p1", pc, "m1")])
     # Both cooling — order is stable (priority) and neither is dropped.
     assert {c["_account_id"] for _pn, c, _um in out} == {"a", "b"}
+
+
+# ── route explainability ────────────────────────────────────────────────────
+
+def test_route_headers_identify_the_served_candidate(server, monkeypatch):
+    monkeypatch.setattr(server, "_proxy_request",
+                        lambda endpoint, pn, cfg, payload, timeout: _json_resp(_OK))
+    resp = server._proxy_cycling_non_streaming(
+        "chat/completions", "t", [("p1", {}, "m1")], {}, 5, route_reason="capacity",
+    )
+    assert resp.headers["X-LLMProxy-Route-Reason"] == "capacity"
+    assert resp.headers["X-LLMProxy-Selected-Model"] == "p1/m1"
+
+
+def test_route_headers_mark_a_failover(server, monkeypatch):
+    """A header alone should distinguish "chosen" from "settled for"."""
+    def fake(endpoint, pn, cfg, payload, timeout):
+        return _json_resp({"error": {"message": "down"}}) if payload["model"] == "m1" else _json_resp(_OK)
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    resp = server._proxy_cycling_non_streaming(
+        "chat/completions", "t", [("p1", {}, "m1"), ("p2", {}, "m2")], {}, 5,
+        route_reason="capacity",
+    )
+    assert resp.headers["X-LLMProxy-Route-Reason"] == "capacity,failover#1"
+    assert resp.headers["X-LLMProxy-Selected-Model"] == "p2/m2"
+
+
+def test_route_headers_are_omitted_when_no_reason_is_supplied(server, monkeypatch):
+    monkeypatch.setattr(server, "_proxy_request",
+                        lambda endpoint, pn, cfg, payload, timeout: _json_resp(_OK))
+    resp = server._proxy_cycling_non_streaming("chat/completions", "t", [("p1", {}, "m1")], {}, 5)
+    assert "X-LLMProxy-Route-Reason" not in resp.headers
+
+
+# ── health accounting on the cycling paths ──────────────────────────────────
+
+def test_a_failing_candidate_is_recorded_unhealthy(server, monkeypatch):
+    server._reset_usage()
+
+    def fake(endpoint, pn, cfg, payload, timeout):
+        return _json_resp({"error": {"message": "boom"}}) if payload["model"] == "m1" else _json_resp(_OK)
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    for _ in range(server._HEALTH_MIN_SAMPLES + 2):
+        server._proxy_cycling_non_streaming(
+            "chat/completions", "t", [("p1", {}, "m1"), ("p2", {}, "m2")], {}, 5,
+        )
+    assert server._health_score("p1", "m1") < server._health_score("p2", "m2")
+    server._reset_usage()
+
+
+def test_a_forced_capability_miss_does_not_count_against_health(server, monkeypatch):
+    """The model answered; it just lacks the capability. That is not ill health."""
+    server._reset_usage()
+    payload = {"tools": [{"type": "function", "function": {"name": "f"}}],
+               "tool_choice": "required"}
+
+    def fake(endpoint, pn, cfg, p, timeout):
+        return _json_resp(_OK) if p["model"] == "m1" else _json_resp(
+            {"choices": [{"message": {"content": "x", "tool_calls": [{"id": "1"}]}}]})
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    for _ in range(server._HEALTH_MIN_SAMPLES + 2):
+        server._proxy_cycling_non_streaming(
+            "chat/completions", "t", [("p1", {}, "m1"), ("p2", {}, "m2")], payload, 5,
+        )
+    assert server._health_score("p1", "m1") == 1.0
+    server._reset_usage()
