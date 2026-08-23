@@ -224,28 +224,42 @@
     }
   },
   "believed_free": [
-    "nous/stepfun/step-3.7-flash:free",
+    "nous/meituan/longcat-2.0:free",
+    "nous/poolside/laguna-s-2.1:free",
+    "nous/poolside/laguna-xs-2.1:free",
+    "nous/tencent/hy3:free",
+    "nous/upstage/solar-pro4:free",
     "nvidia/meta/llama-3.1-70b-instruct",
     "google/gemini-2.0-flash",
     "google/gemini-2.0-flash-lite",
     "google/gemini-2.5-computer-use-preview-10-2025",
+    "google/gemini-2.5-flash",
     "google/gemini-2.5-flash-image",
+    "google/gemini-2.5-flash-lite",
     "google/gemini-2.5-flash-lite-preview-09-2025",
     "google/gemini-2.5-flash-native-audio-preview-12-2025",
     "google/gemini-2.5-flash-preview-09-2025",
     "google/gemini-2.5-pro",
+    "google/gemini-3-flash-preview",
     "google/gemini-3-pro-image",
     "google/gemini-3-pro-preview",
     "google/gemini-3.1-flash-image",
+    "google/gemini-3.1-flash-lite",
     "google/gemini-3.1-flash-lite-image",
+    "google/gemini-3.1-flash-lite-preview",
     "google/gemini-3.1-flash-tts-preview",
     "google/gemini-3.1-pro-preview",
+    "google/gemini-3.5-flash",
+    "google/gemini-3.5-flash-lite",
     "google/gemini-3.5-live-translate-preview",
+    "google/gemini-3.6-flash",
+    "google/gemini-3.7-flash",
     "google/gemma-3-12b-it",
     "google/gemma-3-1b-it",
     "google/gemma-3-27b-it",
     "google/gemma-3-4b-it",
     "cerebras/gemma-4-31b1",
+    "cerebras/gpt-oss-120b",
     "cerebras/llama3.1-8b",
     "cerebras/qwen-3-235b-a22b-instruct-2507",
     "github/ai21-labs/AI21-Jamba-1.5-Large",
@@ -295,10 +309,14 @@
     "groq/meta-llama/llama-prompt-guard-2-22m",
     "groq/meta-llama/llama-prompt-guard-2-86m",
     "groq/mixtral-8x7b-32768",
+    "groq/openai/gpt-oss-120b",
+    "groq/openai/gpt-oss-20b",
+    "groq/openai/gpt-oss-safeguard-20b",
     "groq/qwen/qwen3.6-27b",
     "groq/whisper-large-v3",
     "groq/whisper-large-v3-turbo",
     "cloudflare-workers/@cf/ai4bharat/indictrans2-en-indic-1B",
+    "cloudflare-workers/@cf/ai4bharat/indictrans2-en-indic-1b",
     "cloudflare-workers/@cf/aisingapore/gemma-sea-lion-v4-27b-it",
     "cloudflare-workers/@cf/baai/bge-base-en-v1.5",
     "cloudflare-workers/@cf/baai/bge-large-en-v1.5",
@@ -316,6 +334,8 @@
     "cloudflare-workers/@cf/deepgram/flux",
     "cloudflare-workers/@cf/deepgram/nova-3",
     "cloudflare-workers/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+    "cloudflare-workers/@cf/deepseek-ai/deepseek-v4-flash-0731",
+    "cloudflare-workers/@cf/deepseek-ai/deepseek-v4-pro-0813",
     "cloudflare-workers/@cf/defog/sqlcoder-7b-2",
     "cloudflare-workers/@cf/facebook/bart-large-cnn",
     "cloudflare-workers/@cf/facebook/detr-resnet-50",
@@ -352,6 +372,7 @@
     "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1",
     "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.2-lora",
     "cloudflare-workers/@cf/mistralai/mistral-small-3.1-24b-instruct",
+    "cloudflare-workers/@cf/moondream/moondream3.1-9b-a2b",
     "cloudflare-workers/@cf/moonshotai/kimi-k2.5",
     "cloudflare-workers/@cf/moonshotai/kimi-k2.6",
     "cloudflare-workers/@cf/moonshotai/kimi-k2.7-code",
@@ -367,6 +388,7 @@
     "cloudflare-workers/@cf/qwen/qwen2.5-coder-32b-instruct",
     "cloudflare-workers/@cf/qwen/qwen3-30b-a3b-fp8",
     "cloudflare-workers/@cf/qwen/qwen3-embedding-0.6b",
+    "cloudflare-workers/@cf/qwen/qwen3.8-27b",
     "cloudflare-workers/@cf/qwen/qwq-32b",
     "cloudflare-workers/@cf/runwayml/stable-diffusion-v1-5-img2img",
     "cloudflare-workers/@cf/runwayml/stable-diffusion-v1-5-inpainting",
@@ -389,33 +411,29 @@
     "cohere/command-r",
     "cohere/command-r-plus",
     "cohere/command-r7b",
-    "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
     "openrouter/cohere/north-mini-code:free",
+    "openrouter/dots-studio/dots-3-note-preview:free",
     "openrouter/google/gemma-4-26b-a4b-it:free",
     "openrouter/google/gemma-4-31b-it:free",
     "openrouter/google/lyria-3-clip-preview",
     "openrouter/google/lyria-3-pro-preview",
-    "openrouter/liquid/lfm-2.5-1.2b-instruct:free",
-    "openrouter/liquid/lfm-2.5-1.2b-thinking:free",
-    "openrouter/meta-llama/llama-3.2-3b-instruct:free",
-    "openrouter/meta-llama/llama-3.3-70b-instruct:free",
-    "openrouter/nousresearch/hermes-3-llama-3.1-405b:free",
+    "openrouter/liquid/lfm-2.5-2.6b:free",
     "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
     "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
     "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
     "openrouter/nvidia/nemotron-3.5-content-safety:free",
+    "openrouter/nvidia/nemotron-3.5-lightning:free",
     "openrouter/nvidia/nemotron-nano-12b-v2-vl:free",
     "openrouter/nvidia/nemotron-nano-9b-v2:free",
-    "openrouter/openai/gpt-oss-120b:free",
-    "openrouter/openai/gpt-oss-20b:free",
     "openrouter/openrouter/free",
     "openrouter/openrouter/owl-alpha",
-    "openrouter/poolside/laguna-m.1:free",
+    "openrouter/poolside/laguna-s-2.1:free",
     "openrouter/poolside/laguna-xs-2.1:free",
-    "openrouter/poolside/laguna-xs.2:free",
-    "openrouter/qwen/qwen3-coder:free",
-    "openrouter/qwen/qwen3-next-80b-a3b-instruct:free",
+    "openrouter/stealth/ox-alpha",
+    "openrouter/thinkingmachines/inkling-small:free",
+    "openrouter/thinkingmachines/inkling:free",
+    "openrouter/z-ai/glm-5.2:free",
     "moonshot/kimi-latest",
     "minimax/MiniMax-M1",
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct",
@@ -429,7 +447,12 @@
   ],
   "cost_observed_free_tier": [],
   "model_reasoning": {
+    "nous/meituan/longcat-2.0:free": "exploratory",
+    "nous/poolside/laguna-s-2.1:free": "exploratory",
+    "nous/poolside/laguna-xs-2.1:free": "exploratory",
     "nous/stepfun/step-3.7-flash:free": "exploratory",
+    "nous/tencent/hy3:free": "exploratory",
+    "nous/upstage/solar-pro4:free": "exploratory",
     "nvidia/meta/llama-3.1-70b-instruct": "standard",
     "google/gemini-2.0-flash": "exploratory",
     "google/gemini-2.0-flash-lite": "exploratory",
@@ -451,7 +474,10 @@
     "google/gemini-3.1-flash-tts-preview": "exploratory",
     "google/gemini-3.1-pro-preview": "exploratory",
     "google/gemini-3.5-flash": "exploratory",
+    "google/gemini-3.5-flash-lite": "exploratory",
     "google/gemini-3.5-live-translate-preview": "exploratory",
+    "google/gemini-3.6-flash": "exploratory",
+    "google/gemini-3.7-flash": "exploratory",
     "google/gemma-3-12b-it": "exploratory",
     "google/gemma-3-1b-it": "exploratory",
     "google/gemma-3-27b-it": "standard",
@@ -524,6 +550,7 @@
     "groq/whisper-large-v3": "standard",
     "groq/whisper-large-v3-turbo": "standard",
     "cloudflare-workers/@cf/ai4bharat/indictrans2-en-indic-1B": "exploratory",
+    "cloudflare-workers/@cf/ai4bharat/indictrans2-en-indic-1b": "exploratory",
     "cloudflare-workers/@cf/aisingapore/gemma-sea-lion-v4-27b-it": "standard",
     "cloudflare-workers/@cf/baai/bge-base-en-v1.5": "exploratory",
     "cloudflare-workers/@cf/baai/bge-large-en-v1.5": "standard",
@@ -541,6 +568,8 @@
     "cloudflare-workers/@cf/deepgram/flux": "exploratory",
     "cloudflare-workers/@cf/deepgram/nova-3": "exploratory",
     "cloudflare-workers/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b": "deep",
+    "cloudflare-workers/@cf/deepseek-ai/deepseek-v4-flash-0731": "exploratory",
+    "cloudflare-workers/@cf/deepseek-ai/deepseek-v4-pro-0813": "exploratory",
     "cloudflare-workers/@cf/defog/sqlcoder-7b-2": "exploratory",
     "cloudflare-workers/@cf/facebook/bart-large-cnn": "standard",
     "cloudflare-workers/@cf/facebook/detr-resnet-50": "exploratory",
@@ -577,6 +606,7 @@
     "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1": "exploratory",
     "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.2-lora": "exploratory",
     "cloudflare-workers/@cf/mistralai/mistral-small-3.1-24b-instruct": "standard",
+    "cloudflare-workers/@cf/moondream/moondream3.1-9b-a2b": "exploratory",
     "cloudflare-workers/@cf/moonshotai/kimi-k2.5": "exploratory",
     "cloudflare-workers/@cf/moonshotai/kimi-k2.6": "exploratory",
     "cloudflare-workers/@cf/moonshotai/kimi-k2.7-code": "exploratory",
@@ -592,6 +622,7 @@
     "cloudflare-workers/@cf/qwen/qwen2.5-coder-32b-instruct": "standard",
     "cloudflare-workers/@cf/qwen/qwen3-30b-a3b-fp8": "standard",
     "cloudflare-workers/@cf/qwen/qwen3-embedding-0.6b": "exploratory",
+    "cloudflare-workers/@cf/qwen/qwen3.8-27b": "standard",
     "cloudflare-workers/@cf/qwen/qwq-32b": "deep",
     "cloudflare-workers/@cf/runwayml/stable-diffusion-v1-5-img2img": "exploratory",
     "cloudflare-workers/@cf/runwayml/stable-diffusion-v1-5-inpainting": "exploratory",
@@ -619,6 +650,7 @@
     "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "standard",
     "openrouter/cohere/north-mini-code:free": "exploratory",
     "openrouter/deepseek/deepseek-v3.1:free": "deep",
+    "openrouter/dots-studio/dots-3-note-preview:free": "exploratory",
     "openrouter/google/gemma-2-9b-it:free": "exploratory",
     "openrouter/google/gemma-4-26b-a4b-it:free": "standard",
     "openrouter/google/gemma-4-31b-it:free": "standard",
@@ -626,6 +658,7 @@
     "openrouter/google/lyria-3-pro-preview": "exploratory",
     "openrouter/liquid/lfm-2.5-1.2b-instruct:free": "exploratory",
     "openrouter/liquid/lfm-2.5-1.2b-thinking:free": "exploratory",
+    "openrouter/liquid/lfm-2.5-2.6b:free": "exploratory",
     "openrouter/meta-llama/llama-3.1-8b-instruct:free": "exploratory",
     "openrouter/meta-llama/llama-3.2-3b-instruct:free": "exploratory",
     "openrouter/meta-llama/llama-3.3-70b-instruct:free": "standard",
@@ -638,6 +671,7 @@
     "openrouter/nvidia/nemotron-3-super-120b-a12b:free": "deep",
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free": "deep",
     "openrouter/nvidia/nemotron-3.5-content-safety:free": "exploratory",
+    "openrouter/nvidia/nemotron-3.5-lightning:free": "exploratory",
     "openrouter/nvidia/nemotron-nano-12b-v2-vl:free": "exploratory",
     "openrouter/nvidia/nemotron-nano-9b-v2:free": "exploratory",
     "openrouter/openai/gpt-oss-120b:free": "deep",
@@ -645,13 +679,18 @@
     "openrouter/openrouter/free": "exploratory",
     "openrouter/openrouter/owl-alpha": "exploratory",
     "openrouter/poolside/laguna-m.1:free": "exploratory",
+    "openrouter/poolside/laguna-s-2.1:free": "exploratory",
     "openrouter/poolside/laguna-xs-2.1:free": "exploratory",
     "openrouter/poolside/laguna-xs.2:free": "exploratory",
     "openrouter/qwen/qwen-2.5-7b-instruct:free": "exploratory",
     "openrouter/qwen/qwen3-coder:free": "deep",
     "openrouter/qwen/qwen3-next-80b-a3b-instruct:free": "standard",
+    "openrouter/stealth/ox-alpha": "exploratory",
+    "openrouter/thinkingmachines/inkling-small:free": "exploratory",
+    "openrouter/thinkingmachines/inkling:free": "exploratory",
     "openrouter/xiaomi/mimo-v2.5-pro": "exploratory",
     "openrouter/z-ai/glm-4.5-air:free": "standard",
+    "openrouter/z-ai/glm-5.2:free": "exploratory",
     "moonshot/kimi-latest": "standard",
     "minimax/MiniMax-M1": "standard",
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": "standard",
@@ -897,12 +936,15 @@
       "reasoning",
       "json"
     ],
-    "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": [
-      "json"
-    ],
     "openrouter/cohere/north-mini-code:free": [
       "tools",
       "reasoning"
+    ],
+    "openrouter/dots-studio/dots-3-note-preview:free": [
+      "tools",
+      "vision",
+      "reasoning",
+      "json"
     ],
     "openrouter/google/gemma-4-26b-a4b-it:free": [
       "tools",
@@ -924,16 +966,10 @@
       "vision",
       "json"
     ],
-    "openrouter/liquid/lfm-2.5-1.2b-instruct:free": [
-      "json"
-    ],
-    "openrouter/liquid/lfm-2.5-1.2b-thinking:free": [
+    "openrouter/liquid/lfm-2.5-2.6b:free": [
       "tools",
       "reasoning",
       "json"
-    ],
-    "openrouter/meta-llama/llama-3.3-70b-instruct:free": [
-      "tools"
     ],
     "openrouter/nvidia/nemotron-3-nano-30b-a3b:free": [
       "tools",
@@ -957,21 +993,16 @@
       "vision",
       "reasoning"
     ],
+    "openrouter/nvidia/nemotron-3.5-lightning:free": [
+      "tools",
+      "reasoning"
+    ],
     "openrouter/nvidia/nemotron-nano-12b-v2-vl:free": [
       "tools",
       "vision",
       "reasoning"
     ],
     "openrouter/nvidia/nemotron-nano-9b-v2:free": [
-      "tools",
-      "reasoning",
-      "json"
-    ],
-    "openrouter/openai/gpt-oss-120b:free": [
-      "tools",
-      "reasoning"
-    ],
-    "openrouter/openai/gpt-oss-20b:free": [
       "tools",
       "reasoning",
       "json"
@@ -986,7 +1017,7 @@
       "tools",
       "json"
     ],
-    "openrouter/poolside/laguna-m.1:free": [
+    "openrouter/poolside/laguna-s-2.1:free": [
       "tools",
       "reasoning"
     ],
@@ -994,15 +1025,25 @@
       "tools",
       "reasoning"
     ],
-    "openrouter/poolside/laguna-xs.2:free": [
+    "openrouter/stealth/ox-alpha": [
       "tools",
+      "vision",
+      "reasoning",
+      "json"
+    ],
+    "openrouter/thinkingmachines/inkling-small:free": [
+      "tools",
+      "vision",
       "reasoning"
     ],
-    "openrouter/qwen/qwen3-coder:free": [
-      "tools"
-    ],
-    "openrouter/qwen/qwen3-next-80b-a3b-instruct:free": [
+    "openrouter/thinkingmachines/inkling:free": [
       "tools",
+      "vision",
+      "reasoning"
+    ],
+    "openrouter/z-ai/glm-5.2:free": [
+      "tools",
+      "reasoning",
       "json"
     ],
     "moonshot/kimi-latest": [
@@ -1144,6 +1185,24 @@
       "tokens_per_minute": null,
       "tokens_per_day": null
     },
+    "groq/openai/gpt-oss-120b": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 8000,
+      "tokens_per_day": 200000
+    },
+    "groq/openai/gpt-oss-20b": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 8000,
+      "tokens_per_day": 200000
+    },
+    "groq/openai/gpt-oss-safeguard-20b": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 8000,
+      "tokens_per_day": 200000
+    },
     "groq/qwen/qwen3.6-27b": {
       "requests_per_minute": 30,
       "requests_per_day": 1000,
@@ -1187,12 +1246,6 @@
       "tokens_per_day": null
     },
     "openrouter/moonshotai/kimi-k2:free": {
-      "requests_per_minute": 20,
-      "requests_per_day": 200,
-      "tokens_per_minute": null,
-      "tokens_per_day": null
-    },
-    "openrouter/qwen/qwen3-coder:free": {
       "requests_per_minute": 20,
       "requests_per_day": 200,
       "tokens_per_minute": null,
