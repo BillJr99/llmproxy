@@ -95,6 +95,11 @@
       "api_key": "...",
       "model_filter": null
     },
+    "bai": {
+      "base_url": "https://api.b.ai/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
     "ollama-cloud": {
       "base_url": "https://ollama.com/v1",
       "api_key": "...",

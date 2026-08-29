@@ -26,6 +26,7 @@
     "cohere",
     "openrouter",
     "requesty",
+    "bai",
     "ollama-cloud",
     "moonshot",
     "minimax",
@@ -1408,6 +1409,16 @@
       "believed_free": [],
       "model_reasoning": {},
       "model_capabilities": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "bai": {
+      "display": "B.AI (unified LLM API)",
+      "base_url": "https://api.b.ai/v1",
+      "key_required": true,
+      "key_hint": "Create an API key in the B.AI console at b.ai (docs: docs.b.ai/llmservice/api/)",
+      "believed_free": [],
+      "model_reasoning": {},
       "free_limits": {},
       "fallback_models": []
     },
