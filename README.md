@@ -1331,35 +1331,58 @@ is regenerated from the same file. To add or update a provider, edit
 
 The wizard currently offers ready-made templates for these providers:
 
-| Provider                          | Default key      | Base URL                                                   |
-|-----------------------------------|------------------|-----------------------------------------------------------|
-| Nous Research (Hermes)            | `nous`           | `https://inference-api.nousresearch.com/v1`                |
-| Nvidia NIM                        | `nvidia`         | `https://integrate.api.nvidia.com/v1`                      |
-| Google Gemini (OpenAI-compat)     | `google`         | `https://generativelanguage.googleapis.com/v1beta/openai`  |
-| Cerebras                          | `cerebras`       | `https://api.cerebras.ai/v1`                               |
-| GitHub Models                     | `github`         | `https://models.github.ai/inference`                       |
-| SambaNova Cloud                   | `sambanova`      | `https://api.sambanova.ai/v1`                              |
-| Mistral AI                        | `mistral`        | `https://api.mistral.ai/v1`                                |
-| Groq                              | `groq`           | `https://api.groq.com/openai/v1`                           |
-| Together AI                       | `together`       | `https://api.together.xyz/v1`                              |
-| Fireworks AI                      | `fireworks`      | `https://api.fireworks.ai/inference/v1`                    |
-| Cloudflare Workers AI             | `cloudflare-workers` | `https://api.cloudflare.com/client/v4/accounts/.../ai/v1`  |
-| Zhipu AI (BigModel)               | `zhipu`          | `https://open.bigmodel.cn/api/paas/v4`                     |
-| Z.AI                              | `z-ai`           | `https://api.z.ai/api/paas/v4`                             |
-| Cohere                            | `cohere`         | `https://api.cohere.com/compatibility/v1`                  |
-| DeepSeek                          | `deepseek`       | `https://api.deepseek.com/v1`                              |
-| OpenRouter                        | `openrouter`     | `https://openrouter.ai/api/v1`                             |
-| Ollama Cloud                      | `ollama-cloud`   | `https://ollama.com/v1`                                    |
-| Moonshot AI (Kimi)                | `moonshot`       | `https://api.moonshot.ai/v1`                               |
-| MiniMax                           | `minimax`        | `https://api.minimax.io/v1`                                |
-| Hugging Face Inference            | `huggingface`    | `https://router.huggingface.co/v1`                         |
-| xAI (Grok)                        | `xai`            | `https://api.x.ai/v1`                                      |
-| Cloudflare AI Gateway             | `cloudflare-ai-gateway` | `https://gateway.ai.cloudflare.com/v1/{account}/{gw}/workers-ai/v1` |
-| Vercel AI Gateway                 | `vercel`         | `https://ai-gateway.vercel.sh/v1`                          |
-| Venice AI                         | `venice`         | `https://api.venice.ai/api/v1`                             |
-| OpenCode Zen (free gateway)       | `opencode-zen`   | `https://opencode.ai/zen/v1`                               |
+| Provider                                   | Default key             | Base URL                                                                       |
+|--------------------------------------------|-------------------------|--------------------------------------------------------------------------------|
+| OpenAI                                     | `openai`                | `https://api.openai.com/v1`                                                    |
+| Nous Research (Hermes)                     | `nous`                  | `https://inference-api.nousresearch.com/v1`                                    |
+| Nvidia NIM                                 | `nvidia`                | `https://integrate.api.nvidia.com/v1`                                          |
+| Google Gemini (via OpenAI-compat endpoint) | `google`                | `https://generativelanguage.googleapis.com/v1beta/openai`                      |
+| Cerebras                                   | `cerebras`              | `https://api.cerebras.ai/v1`                                                   |
+| GitHub Models                              | `github`                | `https://models.github.ai/inference`                                           |
+| SambaNova Cloud                            | `sambanova`             | `https://api.sambanova.ai/v1`                                                  |
+| Mistral AI                                 | `mistral`               | `https://api.mistral.ai/v1`                                                    |
+| Groq                                       | `groq`                  | `https://api.groq.com/openai/v1`                                               |
+| Together AI                                | `together`              | `https://api.together.xyz/v1`                                                  |
+| Fireworks AI                               | `fireworks`             | `https://api.fireworks.ai/inference/v1`                                        |
+| Cloudflare Workers AI                      | `cloudflare-workers`    | `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1`             |
+| Zhipu AI (BigModel)                        | `zhipu`                 | `https://open.bigmodel.cn/api/paas/v4`                                         |
+| Z.AI                                       | `z-ai`                  | `https://api.z.ai/api/paas/v4`                                                 |
+| DeepSeek                                   | `deepseek`              | `https://api.deepseek.com/v1`                                                  |
+| Cohere                                     | `cohere`                | `https://api.cohere.com/compatibility/v1`                                      |
+| OpenRouter                                 | `openrouter`            | `https://openrouter.ai/api/v1`                                                 |
+| Requesty (LLM router)                      | `requesty`              | `https://router.requesty.ai/v1`                                                |
+| B.AI (unified LLM API)                     | `bai`                   | `https://api.b.ai/v1`                                                          |
+| Ollama Cloud                               | `ollama-cloud`          | `https://ollama.com/v1`                                                        |
+| Moonshot AI (Kimi)                         | `moonshot`              | `https://api.moonshot.ai/v1`                                                   |
+| MiniMax                                    | `minimax`               | `https://api.minimax.io/v1`                                                    |
+| Hugging Face Inference                     | `huggingface`           | `https://router.huggingface.co/v1`                                             |
+| xAI (Grok)                                 | `xai`                   | `https://api.x.ai/v1`                                                          |
+| Cloudflare AI Gateway                      | `cloudflare-ai-gateway` | `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai/v1` |
+| Vercel AI Gateway                          | `vercel`                | `https://ai-gateway.vercel.sh/v1`                                              |
+| Venice AI                                  | `venice`                | `https://api.venice.ai/api/v1`                                                 |
+| OpenCode Zen (free gateway)                | `opencode-zen`          | `https://opencode.ai/zen/v1`                                                   |
+| Scaleway Generative APIs                   | `scaleway`              | `https://api.scaleway.ai/v1`                                                   |
+| OVHcloud AI Endpoints                      | `ovhcloud`              | `https://oai.endpoints.kepler.ai.cloud.ovh.net/v1`                             |
+| Pollinations (free, no key)                | `pollinations`          | `https://text.pollinations.ai/openai`                                          |
+| Nebius AI Studio                           | `nebius`                | `https://api.studio.nebius.com/v1`                                             |
+| Novita AI                                  | `novita`                | `https://api.novita.ai/v3/openai`                                              |
+| Hyperbolic                                 | `hyperbolic`            | `https://api.hyperbolic.xyz/v1`                                                |
+| DeepInfra                                  | `deepinfra`             | `https://api.deepinfra.com/v1/openai`                                          |
+| LLM7 (free, no key)                        | `llm7`                  | `https://api.llm7.io/v1`                                                       |
+| Chutes AI                                  | `chutes`                | `https://llm.chutes.ai/v1`                                                     |
+| Meta Llama API                             | `meta-llama`            | `https://api.llama.com/compat/v1`                                              |
+| Anthropic (Claude, native Messages API)    | `anthropic`             | `https://api.anthropic.com/v1`                                                 |
+| Google Gemini (native generateContent)     | `gemini`                | `https://generativelanguage.googleapis.com/v1beta`                             |
 
-> **API key required.** Every provider in this table requires an API key. The setup wizard displays a hint showing where to obtain each key. For keyless local access (e.g. a local Ollama instance), use the manual "Add / edit a provider" option in the wizard.
+> **API keys.** Most providers in this table require an API key, and the setup
+> wizard displays a hint showing where to obtain each one. The exceptions are
+> **Pollinations**, **LLM7**, and **OVHcloud AI Endpoints**, which serve an
+> anonymous tier — leave the key blank (OVHcloud accepts an optional key for
+> higher limits). **Anthropic** and **Google Gemini (native)** are not
+> OpenAI-compatible; their templates set `protocol` so llmproxy translates to
+> the upstream Messages / generateContent API. For keyless local access (e.g. a
+> local Ollama instance), use the manual "Add / edit a provider" option in the
+> wizard.
 
 Any OpenAI-compatible provider can also be added manually via the "Add / edit a
 provider (manual)" menu option.
