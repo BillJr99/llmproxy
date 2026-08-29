@@ -100,6 +100,16 @@
       "api_key": "...",
       "model_filter": null
     },
+    "xkiro": {
+      "base_url": "https://api.xkiro.com/v1",
+      "api_key": "sk-xt-...",
+      "model_filter": null
+    },
+    "teamorouter": {
+      "base_url": "https://api.teamorouter.com/v1",
+      "api_key": "sk-teamo-...",
+      "model_filter": null
+    },
     "ollama-cloud": {
       "base_url": "https://ollama.com/v1",
       "api_key": "...",
@@ -182,6 +192,11 @@
     },
     "deepinfra": {
       "base_url": "https://api.deepinfra.com/v1/openai",
+      "api_key": "...",
+      "model_filter": null
+    },
+    "gmi": {
+      "base_url": "https://api.gmi-serving.com/v1",
       "api_key": "...",
       "model_filter": null
     },

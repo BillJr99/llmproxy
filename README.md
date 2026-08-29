@@ -1352,6 +1352,8 @@ The wizard currently offers ready-made templates for these providers:
 | OpenRouter                                 | `openrouter`            | `https://openrouter.ai/api/v1`                                                 |
 | Requesty (LLM router)                      | `requesty`              | `https://router.requesty.ai/v1`                                                |
 | B.AI (unified LLM API)                     | `bai`                   | `https://api.b.ai/v1`                                                          |
+| xKiro (multi-vendor gateway)               | `xkiro`                 | `https://api.xkiro.com/v1`                                                     |
+| TeamoRouter (LLM routing gateway)          | `teamorouter`           | `https://api.teamorouter.com/v1`                                               |
 | Ollama Cloud                               | `ollama-cloud`          | `https://ollama.com/v1`                                                        |
 | Moonshot AI (Kimi)                         | `moonshot`              | `https://api.moonshot.ai/v1`                                                   |
 | MiniMax                                    | `minimax`               | `https://api.minimax.io/v1`                                                    |
@@ -1368,6 +1370,7 @@ The wizard currently offers ready-made templates for these providers:
 | Novita AI                                  | `novita`                | `https://api.novita.ai/v3/openai`                                              |
 | Hyperbolic                                 | `hyperbolic`            | `https://api.hyperbolic.xyz/v1`                                                |
 | DeepInfra                                  | `deepinfra`             | `https://api.deepinfra.com/v1/openai`                                          |
+| GMI Cloud                                  | `gmi`                   | `https://api.gmi-serving.com/v1`                                               |
 | LLM7 (free, no key)                        | `llm7`                  | `https://api.llm7.io/v1`                                                       |
 | Chutes AI                                  | `chutes`                | `https://llm.chutes.ai/v1`                                                     |
 | Meta Llama API                             | `meta-llama`            | `https://api.llama.com/compat/v1`                                              |
@@ -1386,6 +1389,32 @@ The wizard currently offers ready-made templates for these providers:
 
 Any OpenAI-compatible provider can also be added manually via the "Add / edit a
 provider (manual)" menu option.
+
+#### Adding a provider from a shell — `scripts/add_provider.sh`
+
+For scripted or headless setups, `scripts/add_provider.sh` writes the same config
+entry the wizard would, without launching the TUI:
+
+```
+scripts/add_provider.sh
+```
+
+It lists every template from `llmproxy/providers.json`, then prompts for the
+provider name (the model-ID prefix), the base URL, any `{account_id}` /
+`{gateway_id}` substitutions, the API key, and the config file path — defaulting
+to `$LLMPROXY_CONFIG` or `~/.config/llmproxy/config.json`, and offering to create
+it if missing.  It carries `protocol`, `models_url`, `models_id_field`,
+`models_keep_task`, `_note` and `example_model_filter` across from the template,
+backs the old config up to `config.json.bak`, writes atomically, and leaves the
+result `chmod 600`.  Other providers and every other top-level key are preserved,
+and re-running it updates just the one entry.  A `${VAR}` reference typed at the
+key prompt is stored verbatim and resolved from the environment at request time.
+
+It finishes by calling `<base_url>/models` to report how many models the provider
+advertises — a non-200 is reported but does not block the write.  If the provider
+you pick is missing from this checkout's `providers.json` (the script carries its
+own copy of the newest templates), it offers to add it there and to
+`provider_order`, then regenerates `config.example.json`.
 
 > **Providers that do not support a standard `GET <base_url>/models` (as of June 2026)**
 > Some providers return an error or non-JSON response for the default `/models`
