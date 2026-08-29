@@ -27,6 +27,8 @@
     "openrouter",
     "requesty",
     "bai",
+    "xkiro",
+    "teamorouter",
     "ollama-cloud",
     "moonshot",
     "minimax",
@@ -43,6 +45,7 @@
     "novita",
     "hyperbolic",
     "deepinfra",
+    "gmi",
     "llm7",
     "chutes",
     "meta-llama",
@@ -1422,6 +1425,26 @@
       "free_limits": {},
       "fallback_models": []
     },
+    "xkiro": {
+      "display": "xKiro (multi-vendor gateway)",
+      "base_url": "https://api.xkiro.com/v1",
+      "key_required": true,
+      "key_hint": "Create an API key at xkiro.com — keys look like sk-xt-... (docs: docs.xkiro.com)",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "teamorouter": {
+      "display": "TeamoRouter (LLM routing gateway)",
+      "base_url": "https://api.teamorouter.com/v1",
+      "key_required": true,
+      "key_hint": "Create an API key at teamorouter.com — keys look like sk-teamo-... (docs: teamorouter.com/docs/api-integration)",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
     "opencode-zen": {
       "display": "OpenCode Zen (free gateway)",
       "base_url": "https://opencode.ai/zen/v1",
@@ -1552,6 +1575,16 @@
       "base_url": "https://api.deepinfra.com/v1/openai",
       "key_required": true,
       "key_hint": "Get your API key at deepinfra.com/dash/api_keys",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "gmi": {
+      "display": "GMI Cloud",
+      "base_url": "https://api.gmi-serving.com/v1",
+      "key_required": true,
+      "key_hint": "Create an API key at console.gmicloud.ai → Organization Settings → API Keys (docs: docs.gmicloud.ai/inference-engine). Inference is served from api.gmi-serving.com; the console host is GMI's control plane and serves no /chat/completions.",
       "believed_free": [],
       "model_reasoning": {},
       "free_limits": {},

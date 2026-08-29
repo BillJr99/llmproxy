@@ -87,6 +87,8 @@ _PLACEHOLDER_KEYS: dict[str, str] = {
     "opencode-zen": "opencode-...",
     "together": "tgp_...",
     "fireworks": "fw_...",
+    "xkiro": "sk-xt-...",
+    "teamorouter": "sk-teamo-...",
 }
 
 
