@@ -69,13 +69,16 @@
       "key_required": true,
       "key_hint": "Get your API key at nousresearch.com",
       "believed_free": [
+        "nous/inclusionai/ling-3.0-flash-fin:free",
         "nous/meituan/longcat-2.0:free",
         "nous/poolside/laguna-s-2.1:free",
         "nous/poolside/laguna-xs-2.1:free",
+        "nous/stepfun/step-3.7-flash:free",
         "nous/tencent/hy3:free",
         "nous/upstage/solar-pro4:free"
       ],
       "model_reasoning": {
+        "nous/inclusionai/ling-3.0-flash-fin:free": "exploratory",
         "nous/meituan/longcat-2.0:free": "exploratory",
         "nous/poolside/laguna-s-2.1:free": "exploratory",
         "nous/poolside/laguna-xs-2.1:free": "exploratory",
@@ -122,26 +125,20 @@
         "google/gemini-2.0-flash",
         "google/gemini-2.0-flash-lite",
         "google/gemini-2.5-computer-use-preview-10-2025",
-        "google/gemini-2.5-flash",
         "google/gemini-2.5-flash-image",
-        "google/gemini-2.5-flash-lite",
         "google/gemini-2.5-flash-lite-preview-09-2025",
         "google/gemini-2.5-flash-native-audio-preview-12-2025",
         "google/gemini-2.5-flash-preview-09-2025",
         "google/gemini-2.5-pro",
-        "google/gemini-3-flash-preview",
         "google/gemini-3-pro-image",
         "google/gemini-3-pro-preview",
         "google/gemini-3.1-flash-image",
-        "google/gemini-3.1-flash-lite",
         "google/gemini-3.1-flash-lite-image",
-        "google/gemini-3.1-flash-lite-preview",
         "google/gemini-3.1-flash-tts-preview",
         "google/gemini-3.1-pro-preview",
         "google/gemini-3.5-flash",
-        "google/gemini-3.5-flash-lite",
         "google/gemini-3.5-live-translate-preview",
-        "google/gemini-3.6-flash",
+        "google/gemini-3.5-transcribe",
         "google/gemini-3.7-flash",
         "google/gemma-3-12b-it",
         "google/gemma-3-1b-it",
@@ -171,6 +168,7 @@
         "google/gemini-3.5-flash": "exploratory",
         "google/gemini-3.5-flash-lite": "exploratory",
         "google/gemini-3.5-live-translate-preview": "exploratory",
+        "google/gemini-3.5-transcribe": "exploratory",
         "google/gemini-3.6-flash": "exploratory",
         "google/gemini-3.7-flash": "exploratory",
         "google/gemma-3-12b-it": "exploratory",
@@ -586,10 +584,8 @@
         "groq/meta-llama/llama-prompt-guard-2-22m",
         "groq/meta-llama/llama-prompt-guard-2-86m",
         "groq/mixtral-8x7b-32768",
-        "groq/openai/gpt-oss-120b",
-        "groq/openai/gpt-oss-20b",
-        "groq/openai/gpt-oss-safeguard-20b",
         "groq/qwen/qwen3.6-27b",
+        "groq/qwen/qwen3.8-27b",
         "groq/whisper-large-v3",
         "groq/whisper-large-v3-turbo"
       ],
@@ -612,6 +608,7 @@
         "groq/openai/gpt-oss-safeguard-20b": "standard",
         "groq/qwen/qwen3-32b": "standard",
         "groq/qwen/qwen3.6-27b": "standard",
+        "groq/qwen/qwen3.8-27b": "standard",
         "groq/whisper-large-v3": "standard",
         "groq/whisper-large-v3-turbo": "standard"
       },
@@ -687,25 +684,13 @@
           "tokens_per_minute": null,
           "tokens_per_day": null
         },
-        "groq/openai/gpt-oss-120b": {
-          "requests_per_minute": 30,
-          "requests_per_day": 1000,
-          "tokens_per_minute": 8000,
-          "tokens_per_day": 200000
-        },
-        "groq/openai/gpt-oss-20b": {
-          "requests_per_minute": 30,
-          "requests_per_day": 1000,
-          "tokens_per_minute": 8000,
-          "tokens_per_day": 200000
-        },
-        "groq/openai/gpt-oss-safeguard-20b": {
-          "requests_per_minute": 30,
-          "requests_per_day": 1000,
-          "tokens_per_minute": 8000,
-          "tokens_per_day": 200000
-        },
         "groq/qwen/qwen3.6-27b": {
+          "requests_per_minute": 30,
+          "requests_per_day": 1000,
+          "tokens_per_minute": 8000,
+          "tokens_per_day": 200000
+        },
+        "groq/qwen/qwen3.8-27b": {
           "requests_per_minute": 30,
           "requests_per_day": 1000,
           "tokens_per_minute": 8000,
@@ -819,6 +804,8 @@
         "cloudflare-workers/@cf/unum/uform-gen2-qwen-500m",
         "cloudflare-workers/@cf/zai-org/glm-4.7-flash",
         "cloudflare-workers/@cf/zai-org/glm-5.2",
+        "cloudflare-workers/@cf/zai-org/glm-5.3",
+        "cloudflare-workers/@cf/zai-org/glm-5.3-flash",
         "cloudflare-workers/@hf/google/gemma-7b-it",
         "cloudflare-workers/@hf/meta-llama/meta-llama-3-8b-instruct",
         "cloudflare-workers/@hf/mistral/mistral-7b-instruct-v0.2",
@@ -906,6 +893,8 @@
         "cloudflare-workers/@cf/unum/uform-gen2-qwen-500m": "exploratory",
         "cloudflare-workers/@cf/zai-org/glm-4.7-flash": "exploratory",
         "cloudflare-workers/@cf/zai-org/glm-5.2": "exploratory",
+        "cloudflare-workers/@cf/zai-org/glm-5.3": "exploratory",
+        "cloudflare-workers/@cf/zai-org/glm-5.3-flash": "exploratory",
         "cloudflare-workers/@hf/google/gemma-7b-it": "exploratory",
         "cloudflare-workers/@hf/meta-llama/meta-llama-3-8b-instruct": "exploratory",
         "cloudflare-workers/@hf/mistral/mistral-7b-instruct-v0.2": "exploratory",
@@ -1046,15 +1035,15 @@
         "openrouter/google/gemma-4-31b-it:free",
         "openrouter/google/lyria-3-clip-preview",
         "openrouter/google/lyria-3-pro-preview",
+        "openrouter/inclusionai/ling-3.0-flash-fin:free",
         "openrouter/liquid/lfm-2.5-2.6b:free",
-        "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
+        "openrouter/minimax/minimax-m2.7:free",
+        "openrouter/minimax/minimax-m3:free",
         "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
         "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
         "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
         "openrouter/nvidia/nemotron-3.5-content-safety:free",
         "openrouter/nvidia/nemotron-3.5-lightning:free",
-        "openrouter/nvidia/nemotron-nano-12b-v2-vl:free",
-        "openrouter/nvidia/nemotron-nano-9b-v2:free",
         "openrouter/openrouter/free",
         "openrouter/openrouter/owl-alpha",
         "openrouter/poolside/laguna-s-2.1:free",
@@ -1074,12 +1063,15 @@
         "openrouter/google/gemma-4-31b-it:free": "standard",
         "openrouter/google/lyria-3-clip-preview": "exploratory",
         "openrouter/google/lyria-3-pro-preview": "exploratory",
+        "openrouter/inclusionai/ling-3.0-flash-fin:free": "exploratory",
         "openrouter/liquid/lfm-2.5-1.2b-instruct:free": "exploratory",
         "openrouter/liquid/lfm-2.5-1.2b-thinking:free": "exploratory",
         "openrouter/liquid/lfm-2.5-2.6b:free": "exploratory",
         "openrouter/meta-llama/llama-3.1-8b-instruct:free": "exploratory",
         "openrouter/meta-llama/llama-3.2-3b-instruct:free": "exploratory",
         "openrouter/meta-llama/llama-3.3-70b-instruct:free": "standard",
+        "openrouter/minimax/minimax-m2.7:free": "exploratory",
+        "openrouter/minimax/minimax-m3:free": "exploratory",
         "openrouter/mistralai/mistral-7b-instruct:free": "exploratory",
         "openrouter/moonshotai/kimi-k2:free": "deep",
         "openrouter/nex-agi/nex-n2-pro:free": "exploratory",
@@ -1162,14 +1154,25 @@
           "vision",
           "json"
         ],
+        "openrouter/inclusionai/ling-3.0-flash-fin:free": [
+          "tools",
+          "reasoning"
+        ],
         "openrouter/liquid/lfm-2.5-2.6b:free": [
           "tools",
           "reasoning",
           "json"
         ],
-        "openrouter/nvidia/nemotron-3-nano-30b-a3b:free": [
+        "openrouter/minimax/minimax-m2.7:free": [
           "tools",
-          "reasoning"
+          "reasoning",
+          "json"
+        ],
+        "openrouter/minimax/minimax-m3:free": [
+          "tools",
+          "vision",
+          "reasoning",
+          "json"
         ],
         "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": [
           "tools",
@@ -1192,16 +1195,6 @@
         "openrouter/nvidia/nemotron-3.5-lightning:free": [
           "tools",
           "reasoning"
-        ],
-        "openrouter/nvidia/nemotron-nano-12b-v2-vl:free": [
-          "tools",
-          "vision",
-          "reasoning"
-        ],
-        "openrouter/nvidia/nemotron-nano-9b-v2:free": [
-          "tools",
-          "reasoning",
-          "json"
         ],
         "openrouter/openrouter/free": [
           "tools",
@@ -1429,9 +1422,45 @@
       "display": "xKiro (multi-vendor gateway)",
       "base_url": "https://api.xkiro.com/v1",
       "key_required": true,
-      "key_hint": "Create an API key at xkiro.com — keys look like sk-xt-... (docs: docs.xkiro.com)",
-      "believed_free": [],
-      "model_reasoning": {},
+      "key_hint": "Create an API key at xkiro.com \u2014 keys look like sk-xt-... (docs: docs.xkiro.com)",
+      "believed_free": [
+        "xkiro/qwen/qwen-plus-2025-07-28:free",
+        "xkiro/qwen/qwen3-coder-plus:free",
+        "xkiro/qwen/qwen3-max:free",
+        "xkiro/qwen/qwen3-omni-flash:free",
+        "xkiro/qwen/qwen3-vl-plus:free",
+        "xkiro/qwen/qwen3.5-397b-a17b:free",
+        "xkiro/qwen/qwen3.5-flash:free",
+        "xkiro/qwen/qwen3.5-omni-flash:free",
+        "xkiro/qwen/qwen3.5-omni-plus:free",
+        "xkiro/qwen/qwen3.5-plus:free",
+        "xkiro/qwen/qwen3.6-27b:free",
+        "xkiro/qwen/qwen3.6-35b-a3b:free",
+        "xkiro/qwen/qwen3.6-max-preview:free",
+        "xkiro/qwen/qwen3.6-plus:free",
+        "xkiro/qwen/qwen3.7-max:free",
+        "xkiro/qwen/qwen3.7-plus:free",
+        "xkiro/qwen/qwen3.8-max:free"
+      ],
+      "model_reasoning": {
+        "xkiro/qwen/qwen-plus-2025-07-28:free": "exploratory",
+        "xkiro/qwen/qwen3-coder-plus:free": "exploratory",
+        "xkiro/qwen/qwen3-max:free": "exploratory",
+        "xkiro/qwen/qwen3-omni-flash:free": "exploratory",
+        "xkiro/qwen/qwen3-vl-plus:free": "exploratory",
+        "xkiro/qwen/qwen3.5-397b-a17b:free": "deep",
+        "xkiro/qwen/qwen3.5-flash:free": "exploratory",
+        "xkiro/qwen/qwen3.5-omni-flash:free": "exploratory",
+        "xkiro/qwen/qwen3.5-omni-plus:free": "exploratory",
+        "xkiro/qwen/qwen3.5-plus:free": "exploratory",
+        "xkiro/qwen/qwen3.6-27b:free": "standard",
+        "xkiro/qwen/qwen3.6-35b-a3b:free": "standard",
+        "xkiro/qwen/qwen3.6-max-preview:free": "exploratory",
+        "xkiro/qwen/qwen3.6-plus:free": "exploratory",
+        "xkiro/qwen/qwen3.7-max:free": "exploratory",
+        "xkiro/qwen/qwen3.7-plus:free": "exploratory",
+        "xkiro/qwen/qwen3.8-max:free": "exploratory"
+      },
       "free_limits": {},
       "fallback_models": []
     },
@@ -1439,7 +1468,7 @@
       "display": "TeamoRouter (LLM routing gateway)",
       "base_url": "https://api.teamorouter.com/v1",
       "key_required": true,
-      "key_hint": "Create an API key at teamorouter.com — keys look like sk-teamo-... (docs: teamorouter.com/docs/api-integration)",
+      "key_hint": "Create an API key at teamorouter.com \u2014 keys look like sk-teamo-... (docs: teamorouter.com/docs/api-integration)",
       "believed_free": [],
       "model_reasoning": {},
       "free_limits": {},
@@ -1584,7 +1613,7 @@
       "display": "GMI Cloud",
       "base_url": "https://api.gmi-serving.com/v1",
       "key_required": true,
-      "key_hint": "Create an API key at console.gmicloud.ai → Organization Settings → API Keys (docs: docs.gmicloud.ai/inference-engine). Inference is served from api.gmi-serving.com; the console host is GMI's control plane and serves no /chat/completions.",
+      "key_hint": "Create an API key at console.gmicloud.ai \u2192 Organization Settings \u2192 API Keys (docs: docs.gmicloud.ai/inference-engine). Inference is served from api.gmi-serving.com; the console host is GMI's control plane and serves no /chat/completions.",
       "believed_free": [],
       "model_reasoning": {},
       "free_limits": {},
@@ -1704,10 +1733,6 @@
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 4e-07
     },
-    "cerebras/gpt-oss-120b": {
-      "input_cost_per_token": 3.5e-07,
-      "output_cost_per_token": 7.5e-07
-    },
     "cerebras/llama-3.3-70b": {
       "input_cost_per_token": 8.5e-07,
       "output_cost_per_token": 1.2e-06
@@ -1785,6 +1810,10 @@
       "output_cost_per_token": 4e-07
     },
     "deepseek/deepseek-v4-flash": {
+      "input_cost_per_token": 4.4e-07,
+      "output_cost_per_token": 1.32e-06
+    },
+    "deepseek/deepseek-v4-flash-vision-exp": {
       "input_cost_per_token": 4.4e-07,
       "output_cost_per_token": 1.32e-06
     },
@@ -1993,12 +2022,16 @@
       "output_cost_per_token": 2.8e-07
     },
     "fireworks/accounts/fireworks/models/deepseek-v4-flash-0731": {
-      "input_cost_per_token": 1.4e-07,
-      "output_cost_per_token": 2.8e-07
+      "input_cost_per_token": 2.2e-07,
+      "output_cost_per_token": 6.6e-07
     },
     "fireworks/accounts/fireworks/models/deepseek-v4-pro": {
       "input_cost_per_token": 1.74e-06,
       "output_cost_per_token": 3.48e-06
+    },
+    "fireworks/accounts/fireworks/models/deepseek-v4-pro-0813": {
+      "input_cost_per_token": 1.32e-06,
+      "output_cost_per_token": 3.96e-06
     },
     "fireworks/accounts/fireworks/models/devstral-small-2505": {
       "input_cost_per_token": 9e-07,
@@ -2105,6 +2138,10 @@
       "output_cost_per_token": 4.4e-06
     },
     "fireworks/accounts/fireworks/models/glm-5p2": {
+      "input_cost_per_token": 1.4e-06,
+      "output_cost_per_token": 4.4e-06
+    },
+    "fireworks/accounts/fireworks/models/glm-5p3": {
       "input_cost_per_token": 1.4e-06,
       "output_cost_per_token": 4.4e-06
     },
@@ -2980,41 +3017,21 @@
       "input_cost_per_token": 7.5e-08,
       "output_cost_per_token": 3e-07
     },
-    "google/gemini-2.5-flash": {
-      "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 2.5e-06
-    },
-    "google/gemini-2.5-flash-lite": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 4e-07
-    },
     "google/gemini-2.5-flash-lite-preview-06-17": {
       "input_cost_per_token": 1e-07,
       "output_cost_per_token": 4e-07
     },
     "google/gemini-2.5-flash-native-audio-latest": {
-      "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 2.5e-06
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 2e-06
     },
     "google/gemini-2.5-flash-native-audio-preview-09-2025": {
-      "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 2.5e-06
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 2e-06
     },
     "google/gemini-2.5-pro-preview-tts": {
-      "input_cost_per_token": 1.25e-06,
-      "output_cost_per_token": 1e-05
-    },
-    "google/gemini-3-flash-preview": {
-      "input_cost_per_token": 5e-07,
-      "output_cost_per_token": 3e-06
-    },
-    "google/gemini-3.1-flash-lite": {
-      "input_cost_per_token": 2.5e-07,
-      "output_cost_per_token": 1.5e-06
-    },
-    "google/gemini-3.1-flash-lite-preview": {
-      "input_cost_per_token": 2.5e-07,
-      "output_cost_per_token": 1.5e-06
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 2e-05
     },
     "google/gemini-3.1-flash-live-preview": {
       "input_cost_per_token": 7.5e-07,
@@ -3023,22 +3040,6 @@
     "google/gemini-3.1-pro-preview-customtools": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1.2e-05
-    },
-    "google/gemini-3.5-flash": {
-      "input_cost_per_token": 1.5e-06,
-      "output_cost_per_token": 9e-06
-    },
-    "google/gemini-3.5-flash-lite": {
-      "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 2.5e-06
-    },
-    "google/gemini-3.6-flash": {
-      "input_cost_per_token": 7.5e-07,
-      "output_cost_per_token": 3.75e-06
-    },
-    "google/gemini-3.7-flash": {
-      "input_cost_per_token": 7.5e-07,
-      "output_cost_per_token": 3.75e-06
     },
     "google/gemini-exp-1206": {
       "input_cost_per_token": 3e-07,
@@ -3059,6 +3060,10 @@
     "google/gemini-gemma-2-9b-it": {
       "input_cost_per_token": 3.5e-07,
       "output_cost_per_token": 1.05e-06
+    },
+    "google/gemini-omni-1.1-flash": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 9e-06
     },
     "google/gemini-omni-flash-preview": {
       "input_cost_per_token": 1.5e-06,
@@ -3124,21 +3129,13 @@
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 3e-06
     },
-    "groq/openai/gpt-oss-120b": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 6e-07
-    },
-    "groq/openai/gpt-oss-20b": {
-      "input_cost_per_token": 7.5e-08,
-      "output_cost_per_token": 3e-07
-    },
-    "groq/openai/gpt-oss-safeguard-20b": {
-      "input_cost_per_token": 7.5e-08,
-      "output_cost_per_token": 3e-07
-    },
     "groq/qwen/qwen3-32b": {
       "input_cost_per_token": 2.9e-07,
       "output_cost_per_token": 5.9e-07
+    },
+    "groq/qwen/qwen3.8-27b": {
+      "input_cost_per_token": 8e-07,
+      "output_cost_per_token": 4e-06
     },
     "mistral/codestral-2405": {
       "input_cost_per_token": 1e-06,
@@ -3220,6 +3217,14 @@
       "input_cost_per_token": 5e-07,
       "output_cost_per_token": 1.5e-06
     },
+    "mistral/ministral-14b-2512": {
+      "input_cost_per_token": 2e-07,
+      "output_cost_per_token": 2e-07
+    },
+    "mistral/ministral-14b-latest": {
+      "input_cost_per_token": 2e-07,
+      "output_cost_per_token": 2e-07
+    },
     "mistral/ministral-3-14b-2512": {
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 2e-07
@@ -3232,6 +3237,14 @@
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 1.5e-07
     },
+    "mistral/ministral-3b-2512": {
+      "input_cost_per_token": 1e-07,
+      "output_cost_per_token": 1e-07
+    },
+    "mistral/ministral-3b-latest": {
+      "input_cost_per_token": 1e-07,
+      "output_cost_per_token": 1e-07
+    },
     "mistral/ministral-8b-2512": {
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 1.5e-07
@@ -3239,6 +3252,18 @@
     "mistral/ministral-8b-latest": {
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 1.5e-07
+    },
+    "mistral/mistral-code-agent-latest": {
+      "input_cost_per_token": 4e-07,
+      "output_cost_per_token": 2e-06
+    },
+    "mistral/mistral-code-fim-latest": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 9e-07
+    },
+    "mistral/mistral-code-latest": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 9e-07
     },
     "mistral/mistral-large-2402": {
       "input_cost_per_token": 4e-06,
@@ -3284,11 +3309,19 @@
       "input_cost_per_token": 1.5e-06,
       "output_cost_per_token": 7.5e-06
     },
+    "mistral/mistral-medium-3": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 7.5e-06
+    },
     "mistral/mistral-medium-3-1-2508": {
       "input_cost_per_token": 4e-07,
       "output_cost_per_token": 2e-06
     },
     "mistral/mistral-medium-3-5": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 7.5e-06
+    },
+    "mistral/mistral-medium-3.5": {
       "input_cost_per_token": 1.5e-06,
       "output_cost_per_token": 7.5e-06
     },
@@ -3315,6 +3348,18 @@
     "mistral/mistral-tiny": {
       "input_cost_per_token": 2.5e-07,
       "output_cost_per_token": 2.5e-07
+    },
+    "mistral/mistral-vibe-cli-fast": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "mistral/mistral-vibe-cli-latest": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 7.5e-06
+    },
+    "mistral/mistral-vibe-cli-with-tools": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 7.5e-06
     },
     "mistral/open-codestral-mamba": {
       "input_cost_per_token": 2.5e-07,
@@ -3352,6 +3397,14 @@
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 6e-06
     },
+    "mistral/voxtral-small-2507": {
+      "input_cost_per_token": 1e-07,
+      "output_cost_per_token": 4e-07
+    },
+    "mistral/voxtral-small-latest": {
+      "input_cost_per_token": 1e-07,
+      "output_cost_per_token": 4e-07
+    },
     "mistral/zai-glm-5-2": {
       "input_cost_per_token": 1.4e-06,
       "output_cost_per_token": 4.4e-06
@@ -3381,6 +3434,10 @@
       "output_cost_per_token": 3e-06
     },
     "moonshot/kimi-k2.6": {
+      "input_cost_per_token": 9.5e-07,
+      "output_cost_per_token": 4e-06
+    },
+    "moonshot/kimi-k2.7-code": {
       "input_cost_per_token": 9.5e-07,
       "output_cost_per_token": 4e-06
     },
@@ -3459,10 +3516,6 @@
     "openrouter/aion-labs/aion-rp-llama-3.1-8b": {
       "input_cost_per_token": 8e-07,
       "output_cost_per_token": 1.6e-06
-    },
-    "openrouter/allenai/olmo-3-32b-think": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 5e-07
     },
     "openrouter/amazon/nova-2-lite-v1": {
       "input_cost_per_token": 3e-07,
@@ -3609,12 +3662,8 @@
       "output_cost_per_token": 5e-06
     },
     "openrouter/arcee-ai/trinity-large-thinking": {
-      "input_cost_per_token": 2.2e-07,
-      "output_cost_per_token": 8.5e-07
-    },
-    "openrouter/arcee-ai/virtuoso-large": {
-      "input_cost_per_token": 7.5e-07,
-      "output_cost_per_token": 1.2e-06
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 8e-07
     },
     "openrouter/baidu/ernie-4.5-vl-424b-a47b": {
       "input_cost_per_token": 4.2e-07,
@@ -3697,32 +3746,40 @@
       "output_cost_per_token": 1e-06
     },
     "openrouter/deepseek/deepseek-v3.2": {
-      "input_cost_per_token": 2.6e-07,
-      "output_cost_per_token": 3.8e-07
+      "input_cost_per_token": 2.69e-07,
+      "output_cost_per_token": 4e-07
     },
     "openrouter/deepseek/deepseek-v3.2-exp": {
       "input_cost_per_token": 2.7e-07,
       "output_cost_per_token": 4.1e-07
     },
     "openrouter/deepseek/deepseek-v4-flash": {
-      "input_cost_per_token": 4.886e-08,
-      "output_cost_per_token": 9.772e-08
+      "input_cost_per_token": 8.246e-08,
+      "output_cost_per_token": 1.6492e-07
     },
     "openrouter/deepseek/deepseek-v4-flash-0731": {
-      "input_cost_per_token": 8e-08,
+      "input_cost_per_token": 6.5e-08,
       "output_cost_per_token": 1.8e-07
+    },
+    "openrouter/deepseek/deepseek-v4-flash-0731:batch": {
+      "input_cost_per_token": 1.4e-07,
+      "output_cost_per_token": 2.8e-07
     },
     "openrouter/deepseek/deepseek-v4-flash-vision-exp": {
       "input_cost_per_token": 2.2e-07,
       "output_cost_per_token": 6.6e-07
     },
     "openrouter/deepseek/deepseek-v4-pro": {
-      "input_cost_per_token": 3.96894e-07,
-      "output_cost_per_token": 7.93788e-07
+      "input_cost_per_token": 1.034256e-06,
+      "output_cost_per_token": 2.068512e-06
     },
     "openrouter/deepseek/deepseek-v4-pro-0813": {
-      "input_cost_per_token": 1.122e-06,
-      "output_cost_per_token": 3.366e-06
+      "input_cost_per_token": 6.6e-07,
+      "output_cost_per_token": 1.98e-06
+    },
+    "openrouter/deepseek/deepseek-v4-pro-0813:batch": {
+      "input_cost_per_token": 1.32e-06,
+      "output_cost_per_token": 3.96e-06
     },
     "openrouter/google/gemini-2.0-flash-001": {
       "input_cost_per_token": 1e-07,
@@ -3845,8 +3902,8 @@
       "output_cost_per_token": 1.875e-06
     },
     "openrouter/google/gemini-3.7-flash": {
-      "input_cost_per_token": 3.75e-07,
-      "output_cost_per_token": 1.875e-06
+      "input_cost_per_token": 7.5e-07,
+      "output_cost_per_token": 3.75e-06
     },
     "openrouter/google/gemini-3.7-flash:batch": {
       "input_cost_per_token": 1.875e-07,
@@ -3868,17 +3925,17 @@
       "input_cost_per_token": 5e-08,
       "output_cost_per_token": 1e-07
     },
-    "openrouter/google/gemma-3n-e4b-it": {
-      "input_cost_per_token": 6e-08,
-      "output_cost_per_token": 1.2e-07
-    },
     "openrouter/google/gemma-4-26b-a4b-it": {
       "input_cost_per_token": 7e-08,
       "output_cost_per_token": 3.4e-07
     },
     "openrouter/google/gemma-4-31b-it": {
-      "input_cost_per_token": 1e-07,
+      "input_cost_per_token": 9e-08,
       "output_cost_per_token": 3.4e-07
+    },
+    "openrouter/google/gemma-4-31b-it:batch": {
+      "input_cost_per_token": 3.9e-07,
+      "output_cost_per_token": 9.7e-07
     },
     "openrouter/gryphe/mythomax-l2-13b": {
       "input_cost_per_token": 6e-08,
@@ -3896,25 +3953,9 @@
       "input_cost_per_token": 2.5e-07,
       "output_cost_per_token": 7.5e-07
     },
-    "openrouter/inclusionai/ling-2.6-1t": {
-      "input_cost_per_token": 7.5e-08,
-      "output_cost_per_token": 6.25e-07
-    },
-    "openrouter/inclusionai/ling-2.6-flash": {
-      "input_cost_per_token": 1e-08,
-      "output_cost_per_token": 3e-08
-    },
     "openrouter/inclusionai/ling-3.0-flash": {
       "input_cost_per_token": 2.1e-08,
       "output_cost_per_token": 6.3e-08
-    },
-    "openrouter/inclusionai/ring-2.6-1t": {
-      "input_cost_per_token": 7.5e-08,
-      "output_cost_per_token": 6.25e-07
-    },
-    "openrouter/kwaipilot/kat-coder-air-v2.5": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 6e-07
     },
     "openrouter/kwaipilot/kat-coder-pro-v2": {
       "input_cost_per_token": 3e-07,
@@ -3953,22 +3994,26 @@
       "output_cost_per_token": 3.3e-07
     },
     "openrouter/meta-llama/llama-3.3-70b-instruct": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 3.2e-07
+      "input_cost_per_token": 7.1e-07,
+      "output_cost_per_token": 7.1e-07
     },
     "openrouter/meta-llama/llama-4-maverick": {
       "input_cost_per_token": 2e-07,
-      "output_cost_per_token": 8e-07
+      "output_cost_per_token": 6.96e-07
     },
     "openrouter/meta-llama/llama-4-scout": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 3e-07
+      "input_cost_per_token": 1.1e-07,
+      "output_cost_per_token": 3.4e-07
     },
     "openrouter/meta-llama/llama-guard-4-12b": {
       "input_cost_per_token": 1.8e-07,
       "output_cost_per_token": 1.8e-07
     },
     "openrouter/meta/muse-glimmer-30b": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "openrouter/meta/muse-glimmer-30b:batch": {
       "input_cost_per_token": 3.5e-07,
       "output_cost_per_token": 1.5e-06
     },
@@ -4017,8 +4062,8 @@
       "output_cost_per_token": 1.08e-06
     },
     "openrouter/minimax/minimax-m2.7": {
-      "input_cost_per_token": 2.4e-07,
-      "output_cost_per_token": 9.6e-07
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06
     },
     "openrouter/minimax/minimax-m3": {
       "input_cost_per_token": 3e-07,
@@ -4032,9 +4077,13 @@
       "input_cost_per_token": 3e-07,
       "output_cost_per_token": 9e-07
     },
+    "openrouter/mistralai/codestral-2508:batch": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 9e-07
+    },
     "openrouter/mistralai/devstral-2512": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 6e-07
+      "input_cost_per_token": 4e-07,
+      "output_cost_per_token": 2e-06
     },
     "openrouter/mistralai/ministral-14b-2512": {
       "input_cost_per_token": 2e-07,
@@ -4044,11 +4093,11 @@
       "input_cost_per_token": 1e-07,
       "output_cost_per_token": 1e-07
     },
-    "openrouter/mistralai/ministral-8b": {
-      "input_cost_per_token": 1.1e-07,
-      "output_cost_per_token": 1.1e-07
-    },
     "openrouter/mistralai/ministral-8b-2512": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 1.5e-07
+    },
+    "openrouter/mistralai/ministral-8b-2512:batch": {
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 1.5e-07
     },
@@ -4068,6 +4117,10 @@
       "input_cost_per_token": 5e-07,
       "output_cost_per_token": 1.5e-06
     },
+    "openrouter/mistralai/mistral-large-2512:batch": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 1.5e-06
+    },
     "openrouter/mistralai/mistral-medium-3": {
       "input_cost_per_token": 4e-07,
       "output_cost_per_token": 2e-06
@@ -4076,7 +4129,15 @@
       "input_cost_per_token": 1.5e-06,
       "output_cost_per_token": 7.5e-06
     },
+    "openrouter/mistralai/mistral-medium-3-5:batch": {
+      "input_cost_per_token": 7.5e-07,
+      "output_cost_per_token": 3.75e-06
+    },
     "openrouter/mistralai/mistral-medium-3.1": {
+      "input_cost_per_token": 4e-07,
+      "output_cost_per_token": 2e-06
+    },
+    "openrouter/mistralai/mistral-medium-3.1:batch": {
       "input_cost_per_token": 4e-07,
       "output_cost_per_token": 2e-06
     },
@@ -4093,6 +4154,10 @@
       "output_cost_per_token": 8e-08
     },
     "openrouter/mistralai/mistral-small-2603": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "openrouter/mistralai/mistral-small-2603:batch": {
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 6e-07
     },
@@ -4133,14 +4198,14 @@
       "output_cost_per_token": 4e-06
     },
     "openrouter/moonshotai/kimi-k2.7-code": {
-      "input_cost_per_token": 6.7e-07,
+      "input_cost_per_token": 6.6e-07,
       "output_cost_per_token": 3.4e-06
     },
-    "openrouter/moonshotai/kimi-k2.7-code:batch": {
-      "input_cost_per_token": 9.5e-07,
-      "output_cost_per_token": 4e-06
-    },
     "openrouter/moonshotai/kimi-k3": {
+      "input_cost_per_token": 3e-06,
+      "output_cost_per_token": 1.5e-05
+    },
+    "openrouter/moonshotai/kimi-k3:batch": {
       "input_cost_per_token": 3e-06,
       "output_cost_per_token": 1.5e-05
     },
@@ -4185,8 +4250,8 @@
       "output_cost_per_token": 4e-07
     },
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b": {
-      "input_cost_per_token": 6e-07,
-      "output_cost_per_token": 3.6e-06
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 2.2e-06
     },
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:batch": {
       "input_cost_per_token": 6e-07,
@@ -4212,10 +4277,6 @@
       "input_cost_per_token": 1.5e-06,
       "output_cost_per_token": 2e-06
     },
-    "openrouter/openai/gpt-3.5-turbo:batch": {
-      "input_cost_per_token": 2.5e-07,
-      "output_cost_per_token": 7.5e-07
-    },
     "openrouter/openai/gpt-4": {
       "input_cost_per_token": 3e-05,
       "output_cost_per_token": 6e-05
@@ -4228,10 +4289,6 @@
       "input_cost_per_token": 1e-05,
       "output_cost_per_token": 3e-05
     },
-    "openrouter/openai/gpt-4-turbo:batch": {
-      "input_cost_per_token": 5e-06,
-      "output_cost_per_token": 1.5e-05
-    },
     "openrouter/openai/gpt-4.1": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 8e-06
@@ -4240,21 +4297,9 @@
       "input_cost_per_token": 4e-07,
       "output_cost_per_token": 1.6e-06
     },
-    "openrouter/openai/gpt-4.1-mini:batch": {
-      "input_cost_per_token": 2e-07,
-      "output_cost_per_token": 8e-07
-    },
     "openrouter/openai/gpt-4.1-nano": {
       "input_cost_per_token": 1e-07,
       "output_cost_per_token": 4e-07
-    },
-    "openrouter/openai/gpt-4.1-nano:batch": {
-      "input_cost_per_token": 5e-08,
-      "output_cost_per_token": 2e-07
-    },
-    "openrouter/openai/gpt-4.1:batch": {
-      "input_cost_per_token": 1e-06,
-      "output_cost_per_token": 4e-06
     },
     "openrouter/openai/gpt-4o": {
       "input_cost_per_token": 2.5e-06,
@@ -4280,14 +4325,6 @@
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 6e-07
     },
-    "openrouter/openai/gpt-4o-mini:batch": {
-      "input_cost_per_token": 7.5e-08,
-      "output_cost_per_token": 3e-07
-    },
-    "openrouter/openai/gpt-4o:batch": {
-      "input_cost_per_token": 1.25e-06,
-      "output_cost_per_token": 5e-06
-    },
     "openrouter/openai/gpt-5": {
       "input_cost_per_token": 1.25e-06,
       "output_cost_per_token": 1e-05
@@ -4299,10 +4336,6 @@
     "openrouter/openai/gpt-5-codex": {
       "input_cost_per_token": 1.25e-06,
       "output_cost_per_token": 1e-05
-    },
-    "openrouter/openai/gpt-5-codex:batch": {
-      "input_cost_per_token": 6.25e-07,
-      "output_cost_per_token": 5e-06
     },
     "openrouter/openai/gpt-5-image": {
       "input_cost_per_token": 1e-05,
@@ -4316,25 +4349,13 @@
       "input_cost_per_token": 2.5e-07,
       "output_cost_per_token": 2e-06
     },
-    "openrouter/openai/gpt-5-mini:batch": {
-      "input_cost_per_token": 1.25e-07,
-      "output_cost_per_token": 1e-06
-    },
     "openrouter/openai/gpt-5-nano": {
       "input_cost_per_token": 5e-08,
       "output_cost_per_token": 4e-07
     },
-    "openrouter/openai/gpt-5-nano:batch": {
-      "input_cost_per_token": 2.5e-08,
-      "output_cost_per_token": 2e-07
-    },
     "openrouter/openai/gpt-5-pro": {
       "input_cost_per_token": 1.5e-05,
       "output_cost_per_token": 0.00012
-    },
-    "openrouter/openai/gpt-5-pro:batch": {
-      "input_cost_per_token": 7.5e-06,
-      "output_cost_per_token": 6e-05
     },
     "openrouter/openai/gpt-5.1": {
       "input_cost_per_token": 1.25e-06,
@@ -4352,10 +4373,6 @@
       "input_cost_per_token": 2.5e-07,
       "output_cost_per_token": 2e-06
     },
-    "openrouter/openai/gpt-5.1:batch": {
-      "input_cost_per_token": 6.25e-07,
-      "output_cost_per_token": 5e-06
-    },
     "openrouter/openai/gpt-5.2": {
       "input_cost_per_token": 1.75e-06,
       "output_cost_per_token": 1.4e-05
@@ -4371,14 +4388,6 @@
     "openrouter/openai/gpt-5.2-pro": {
       "input_cost_per_token": 2.1e-05,
       "output_cost_per_token": 0.000168
-    },
-    "openrouter/openai/gpt-5.2-pro:batch": {
-      "input_cost_per_token": 1.05e-05,
-      "output_cost_per_token": 8.4e-05
-    },
-    "openrouter/openai/gpt-5.2:batch": {
-      "input_cost_per_token": 8.75e-07,
-      "output_cost_per_token": 7e-06
     },
     "openrouter/openai/gpt-5.3-codex": {
       "input_cost_per_token": 1.75e-06,
@@ -4396,29 +4405,13 @@
       "input_cost_per_token": 7.5e-07,
       "output_cost_per_token": 4.5e-06
     },
-    "openrouter/openai/gpt-5.4-mini:batch": {
-      "input_cost_per_token": 3.75e-07,
-      "output_cost_per_token": 2.25e-06
-    },
     "openrouter/openai/gpt-5.4-nano": {
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 1.25e-06
     },
-    "openrouter/openai/gpt-5.4-nano:batch": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 6.25e-07
-    },
     "openrouter/openai/gpt-5.4-pro": {
       "input_cost_per_token": 3e-05,
       "output_cost_per_token": 0.00018
-    },
-    "openrouter/openai/gpt-5.4-pro:batch": {
-      "input_cost_per_token": 1.5e-05,
-      "output_cost_per_token": 9e-05
-    },
-    "openrouter/openai/gpt-5.4:batch": {
-      "input_cost_per_token": 1.25e-06,
-      "output_cost_per_token": 7.5e-06
     },
     "openrouter/openai/gpt-5.5": {
       "input_cost_per_token": 5e-06,
@@ -4428,14 +4421,6 @@
       "input_cost_per_token": 3e-05,
       "output_cost_per_token": 0.00018
     },
-    "openrouter/openai/gpt-5.5-pro:batch": {
-      "input_cost_per_token": 1.5e-05,
-      "output_cost_per_token": 9e-05
-    },
-    "openrouter/openai/gpt-5.5:batch": {
-      "input_cost_per_token": 2.5e-06,
-      "output_cost_per_token": 1.5e-05
-    },
     "openrouter/openai/gpt-5.6-luna": {
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 1.2e-06
@@ -4443,14 +4428,6 @@
     "openrouter/openai/gpt-5.6-luna-pro": {
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 1.2e-06
-    },
-    "openrouter/openai/gpt-5.6-luna-pro:batch": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 6e-07
-    },
-    "openrouter/openai/gpt-5.6-luna:batch": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 6e-07
     },
     "openrouter/openai/gpt-5.6-sol": {
       "input_cost_per_token": 2e-06,
@@ -4460,14 +4437,6 @@
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1e-05
     },
-    "openrouter/openai/gpt-5.6-sol-pro:batch": {
-      "input_cost_per_token": 1e-06,
-      "output_cost_per_token": 5e-06
-    },
-    "openrouter/openai/gpt-5.6-sol:batch": {
-      "input_cost_per_token": 1e-06,
-      "output_cost_per_token": 5e-06
-    },
     "openrouter/openai/gpt-5.6-terra": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1.2e-05
@@ -4475,18 +4444,6 @@
     "openrouter/openai/gpt-5.6-terra-pro": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1.2e-05
-    },
-    "openrouter/openai/gpt-5.6-terra-pro:batch": {
-      "input_cost_per_token": 1e-06,
-      "output_cost_per_token": 6e-06
-    },
-    "openrouter/openai/gpt-5.6-terra:batch": {
-      "input_cost_per_token": 1e-06,
-      "output_cost_per_token": 6e-06
-    },
-    "openrouter/openai/gpt-5:batch": {
-      "input_cost_per_token": 6.25e-07,
-      "output_cost_per_token": 5e-06
     },
     "openrouter/openai/gpt-audio": {
       "input_cost_per_token": 2.5e-06,
@@ -4504,9 +4461,17 @@
       "input_cost_per_token": 3.7e-08,
       "output_cost_per_token": 1.7e-07
     },
+    "openrouter/openai/gpt-oss-120b:batch": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
+    },
     "openrouter/openai/gpt-oss-20b": {
       "input_cost_per_token": 3e-08,
       "output_cost_per_token": 1.3e-07
+    },
+    "openrouter/openai/gpt-oss-20b:batch": {
+      "input_cost_per_token": 5e-08,
+      "output_cost_per_token": 2e-07
     },
     "openrouter/openai/gpt-oss-safeguard-20b": {
       "input_cost_per_token": 7.5e-08,
@@ -4520,14 +4485,6 @@
       "input_cost_per_token": 0.00015,
       "output_cost_per_token": 0.0006
     },
-    "openrouter/openai/o1-pro:batch": {
-      "input_cost_per_token": 7.5e-05,
-      "output_cost_per_token": 0.0003
-    },
-    "openrouter/openai/o1:batch": {
-      "input_cost_per_token": 7.5e-06,
-      "output_cost_per_token": 3e-05
-    },
     "openrouter/openai/o3": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 8e-06
@@ -4540,25 +4497,9 @@
       "input_cost_per_token": 1.1e-06,
       "output_cost_per_token": 4.4e-06
     },
-    "openrouter/openai/o3-mini-high:batch": {
-      "input_cost_per_token": 5.5e-07,
-      "output_cost_per_token": 2.2e-06
-    },
-    "openrouter/openai/o3-mini:batch": {
-      "input_cost_per_token": 5.5e-07,
-      "output_cost_per_token": 2.2e-06
-    },
     "openrouter/openai/o3-pro": {
       "input_cost_per_token": 2e-05,
       "output_cost_per_token": 8e-05
-    },
-    "openrouter/openai/o3-pro:batch": {
-      "input_cost_per_token": 1e-05,
-      "output_cost_per_token": 4e-05
-    },
-    "openrouter/openai/o3:batch": {
-      "input_cost_per_token": 1e-06,
-      "output_cost_per_token": 4e-06
     },
     "openrouter/openai/o4-mini": {
       "input_cost_per_token": 1.1e-06,
@@ -4567,14 +4508,6 @@
     "openrouter/openai/o4-mini-high": {
       "input_cost_per_token": 1.1e-06,
       "output_cost_per_token": 4.4e-06
-    },
-    "openrouter/openai/o4-mini-high:batch": {
-      "input_cost_per_token": 5.5e-07,
-      "output_cost_per_token": 2.2e-06
-    },
-    "openrouter/openai/o4-mini:batch": {
-      "input_cost_per_token": 5.5e-07,
-      "output_cost_per_token": 2.2e-06
     },
     "openrouter/perceptron/perceptron-mk1": {
       "input_cost_per_token": 1.5e-07,
@@ -4628,17 +4561,13 @@
       "input_cost_per_token": 2.6e-07,
       "output_cost_per_token": 7.8e-07
     },
-    "openrouter/qwen/qwen-plus-2025-07-28:thinking": {
-      "input_cost_per_token": 2.6e-07,
-      "output_cost_per_token": 7.8e-07
-    },
     "openrouter/qwen/qwen-vl-plus": {
       "input_cost_per_token": 2.1e-07,
       "output_cost_per_token": 6.3e-07
     },
     "openrouter/qwen/qwen2.5-vl-72b-instruct": {
-      "input_cost_per_token": 8e-07,
-      "output_cost_per_token": 1e-06
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 7.5e-07
     },
     "openrouter/qwen/qwen3-14b": {
       "input_cost_per_token": 1.2e-07,
@@ -4649,8 +4578,8 @@
       "output_cost_per_token": 1.82e-06
     },
     "openrouter/qwen/qwen3-235b-a22b-2507": {
-      "input_cost_per_token": 9e-08,
-      "output_cost_per_token": 5.5e-07
+      "input_cost_per_token": 8.75e-08,
+      "output_cost_per_token": 3.5e-07
     },
     "openrouter/qwen/qwen3-235b-a22b-thinking-2507": {
       "input_cost_per_token": 2.3e-07,
@@ -4705,7 +4634,7 @@
       "output_cost_per_token": 3.9e-06
     },
     "openrouter/qwen/qwen3-next-80b-a3b-instruct": {
-      "input_cost_per_token": 1e-07,
+      "input_cost_per_token": 9e-08,
       "output_cost_per_token": 1.1e-06
     },
     "openrouter/qwen/qwen3-next-80b-a3b-thinking": {
@@ -4721,8 +4650,8 @@
       "output_cost_per_token": 4e-06
     },
     "openrouter/qwen/qwen3-vl-30b-a3b-instruct": {
-      "input_cost_per_token": 1.3e-07,
-      "output_cost_per_token": 5.2e-07
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
     },
     "openrouter/qwen/qwen3-vl-30b-a3b-thinking": {
       "input_cost_per_token": 2e-07,
@@ -4741,8 +4670,8 @@
       "output_cost_per_token": 2.1e-06
     },
     "openrouter/qwen/qwen3.5-122b-a10b": {
-      "input_cost_per_token": 2.6e-07,
-      "output_cost_per_token": 2.08e-06
+      "input_cost_per_token": 2.9e-07,
+      "output_cost_per_token": 2.4e-06
     },
     "openrouter/qwen/qwen3.5-27b": {
       "input_cost_per_token": 1.95e-07,
@@ -4759,6 +4688,10 @@
     "openrouter/qwen/qwen3.5-9b": {
       "input_cost_per_token": 1e-07,
       "output_cost_per_token": 1.5e-07
+    },
+    "openrouter/qwen/qwen3.5-9b:batch": {
+      "input_cost_per_token": 1.7e-07,
+      "output_cost_per_token": 2.5e-07
     },
     "openrouter/qwen/qwen3.5-flash-02-23": {
       "input_cost_per_token": 6.5e-08,
@@ -4777,8 +4710,8 @@
       "output_cost_per_token": 3.6e-06
     },
     "openrouter/qwen/qwen3.6-35b-a3b": {
-      "input_cost_per_token": 1.4e-07,
-      "output_cost_per_token": 1e-06
+      "input_cost_per_token": 1e-07,
+      "output_cost_per_token": 9e-07
     },
     "openrouter/qwen/qwen3.6-flash": {
       "input_cost_per_token": 1.875e-07,
@@ -4808,9 +4741,17 @@
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 6e-06
     },
+    "openrouter/qwen/qwen3.8-2.4t-a95b:batch": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06
+    },
     "openrouter/qwen/qwen3.8-27b": {
-      "input_cost_per_token": 4e-07,
-      "output_cost_per_token": 3e-06
+      "input_cost_per_token": 4.25e-07,
+      "output_cost_per_token": 2.55e-06
+    },
+    "openrouter/qwen/qwen3.8-flash": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 4.7e-07
     },
     "openrouter/qwen/qwen3.8-max": {
       "input_cost_per_token": 2e-06,
@@ -4881,19 +4822,19 @@
       "output_cost_per_token": 2.95e-07
     },
     "openrouter/tencent/hy3": {
-      "input_cost_per_token": 1.32e-07,
-      "output_cost_per_token": 5.28e-07
+      "input_cost_per_token": 8.25e-08,
+      "output_cost_per_token": 3.3e-07
     },
     "openrouter/tencent/hy3-preview": {
       "input_cost_per_token": 1.8e-07,
       "output_cost_per_token": 6e-07
     },
+    "openrouter/tencent/hy4-preview": {
+      "input_cost_per_token": 8.34e-07,
+      "output_cost_per_token": 2.501e-06
+    },
     "openrouter/thedrummer/cydonia-24b-v4.1": {
       "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 5e-07
-    },
-    "openrouter/thedrummer/rocinante-12b": {
-      "input_cost_per_token": 2.5e-07,
       "output_cost_per_token": 5e-07
     },
     "openrouter/thedrummer/skyfall-36b-v2": {
@@ -4910,6 +4851,10 @@
     },
     "openrouter/thinkingmachines/inkling-small": {
       "input_cost_per_token": 4.5e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "openrouter/thinkingmachines/inkling-small:batch": {
+      "input_cost_per_token": 5e-07,
       "output_cost_per_token": 1.2e-06
     },
     "openrouter/thinkingmachines/inkling:batch": {
@@ -4985,8 +4930,8 @@
       "output_cost_per_token": 1.8e-06
     },
     "openrouter/z-ai/glm-4.6": {
-      "input_cost_per_token": 5e-07,
-      "output_cost_per_token": 2e-06
+      "input_cost_per_token": 4.3e-07,
+      "output_cost_per_token": 1.75e-06
     },
     "openrouter/z-ai/glm-4.6:exacto": {
       "input_cost_per_token": 4.5e-07,
@@ -5017,16 +4962,20 @@
       "output_cost_per_token": 3.036e-06
     },
     "openrouter/z-ai/glm-5.2": {
-      "input_cost_per_token": 9.66e-07,
-      "output_cost_per_token": 3.036e-06
-    },
-    "openrouter/z-ai/glm-5.2:batch": {
-      "input_cost_per_token": 1.4e-06,
-      "output_cost_per_token": 4.4e-06
+      "input_cost_per_token": 1.19e-06,
+      "output_cost_per_token": 3.74e-06
     },
     "openrouter/z-ai/glm-5.3": {
       "input_cost_per_token": 1.4e-06,
       "output_cost_per_token": 4.4e-06
+    },
+    "openrouter/z-ai/glm-5.3-flash": {
+      "input_cost_per_token": 7.5e-08,
+      "output_cost_per_token": 2.5e-07
+    },
+    "openrouter/z-ai/glm-5.3-flash:batch": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 5e-07
     },
     "openrouter/z-ai/glm-5v-turbo": {
       "input_cost_per_token": 1.2e-06,
@@ -5049,20 +4998,20 @@
       "output_cost_per_token": 1e-05
     },
     "openrouter/~deepseek/deepseek-v4-flash-latest": {
-      "input_cost_per_token": 4e-08,
-      "output_cost_per_token": 1.3e-07
+      "input_cost_per_token": 3e-08,
+      "output_cost_per_token": 1.6e-07
     },
     "openrouter/~google/gemini-flash-latest": {
-      "input_cost_per_token": 3.75e-07,
-      "output_cost_per_token": 1.875e-06
+      "input_cost_per_token": 7.5e-07,
+      "output_cost_per_token": 3.75e-06
     },
     "openrouter/~google/gemini-pro-latest": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1.2e-05
     },
     "openrouter/~moonshotai/kimi-latest": {
-      "input_cost_per_token": 2.6e-06,
-      "output_cost_per_token": 1.3e-05
+      "input_cost_per_token": 2.55e-06,
+      "output_cost_per_token": 1.275e-05
     },
     "openrouter/~openai/gpt-latest": {
       "input_cost_per_token": 2e-06,
@@ -5077,8 +5026,8 @@
       "output_cost_per_token": 6e-06
     },
     "openrouter/~z-ai/glm-latest": {
-      "input_cost_per_token": 1.4e-06,
-      "output_cost_per_token": 4.4e-06
+      "input_cost_per_token": 1.1875e-06,
+      "output_cost_per_token": 4.18e-06
     },
     "sambanova/deepseek-r1": {
       "input_cost_per_token": 5e-06,
@@ -5156,6 +5105,10 @@
       "input_cost_per_token": 5e-07,
       "output_cost_per_token": 1e-06
     },
+    "together/arize-ai/qwen-2-1.5b-instruct": {
+      "input_cost_per_token": 1e-07,
+      "output_cost_per_token": 1e-07
+    },
     "together/deepseek-ai/deepseek-r1": {
       "input_cost_per_token": 3e-06,
       "output_cost_per_token": 7e-06
@@ -5172,9 +5125,29 @@
       "input_cost_per_token": 6e-07,
       "output_cost_per_token": 1.7e-06
     },
+    "together/deepseek-ai/deepseek-v4-flash-0731": {
+      "input_cost_per_token": 1.4e-07,
+      "output_cost_per_token": 2.8e-07
+    },
+    "together/deepseek-ai/deepseek-v4-pro": {
+      "input_cost_per_token": 1.74e-06,
+      "output_cost_per_token": 3.48e-06
+    },
+    "together/deepseek-ai/deepseek-v4-pro-0813": {
+      "input_cost_per_token": 1.32e-06,
+      "output_cost_per_token": 3.96e-06
+    },
+    "together/google/gemma-3n-e4b-it": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 1.2e-07
+    },
+    "together/google/gemma-4-31b-it": {
+      "input_cost_per_token": 3.9e-07,
+      "output_cost_per_token": 9.7e-07
+    },
     "together/meta-llama/llama-3.3-70b-instruct-turbo": {
-      "input_cost_per_token": 8.8e-07,
-      "output_cost_per_token": 8.8e-07
+      "input_cost_per_token": 1.04e-06,
+      "output_cost_per_token": 1.04e-06
     },
     "together/meta-llama/llama-4-maverick-17b-128e-instruct-fp8": {
       "input_cost_per_token": 2.7e-07,
@@ -5183,6 +5156,10 @@
     "together/meta-llama/llama-4-scout-17b-16e-instruct": {
       "input_cost_per_token": 1.8e-07,
       "output_cost_per_token": 5.9e-07
+    },
+    "together/meta-llama/llama-guard-4-12b": {
+      "input_cost_per_token": 2e-07,
+      "output_cost_per_token": 2e-07
     },
     "together/meta-llama/meta-llama-3.1-405b-instruct-turbo": {
       "input_cost_per_token": 3.5e-06,
@@ -5195,6 +5172,14 @@
     "together/meta-llama/meta-llama-3.1-8b-instruct-turbo": {
       "input_cost_per_token": 1.8e-07,
       "output_cost_per_token": 1.8e-07
+    },
+    "together/meta-models/muse-glimmer-30b": {
+      "input_cost_per_token": 3.5e-07,
+      "output_cost_per_token": 1.5e-06
+    },
+    "together/minimaxai/minimax-m3": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06
     },
     "together/mistralai/mixtral-8x7b-instruct-v0.1": {
       "input_cost_per_token": 6e-07,
@@ -5212,6 +5197,18 @@
       "input_cost_per_token": 5e-07,
       "output_cost_per_token": 2.8e-06
     },
+    "together/moonshotai/kimi-k2.7-code": {
+      "input_cost_per_token": 9.5e-07,
+      "output_cost_per_token": 4e-06
+    },
+    "together/moonshotai/kimi-k3": {
+      "input_cost_per_token": 3e-06,
+      "output_cost_per_token": 1.5e-05
+    },
+    "together/nvidia/nemotron-3-ultra-550b-a55b": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 3.6e-06
+    },
     "together/openai/gpt-oss-120b": {
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 6e-07
@@ -5219,6 +5216,10 @@
     "together/openai/gpt-oss-20b": {
       "input_cost_per_token": 5e-08,
       "output_cost_per_token": 2e-07
+    },
+    "together/pearl-ai/gemma-4-31b-it": {
+      "input_cost_per_token": 2.8e-07,
+      "output_cost_per_token": 8.6e-07
     },
     "together/qwen/qwen3-235b-a22b-fp8-tput": {
       "input_cost_per_token": 2e-07,
@@ -5247,6 +5248,34 @@
     "together/qwen/qwen3.5-397b-a17b": {
       "input_cost_per_token": 6e-07,
       "output_cost_per_token": 3.6e-06
+    },
+    "together/qwen/qwen3.5-9b": {
+      "input_cost_per_token": 1.7e-07,
+      "output_cost_per_token": 2.5e-07
+    },
+    "together/qwen/qwen3.6-plus": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 3e-06
+    },
+    "together/qwen/qwen3.7-max": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 7.5e-06
+    },
+    "together/qwen/qwen3.7-plus": {
+      "input_cost_per_token": 3.2e-07,
+      "output_cost_per_token": 1.28e-06
+    },
+    "together/qwen/qwen3.8-2.4t-a95b": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 6.25e-06
+    },
+    "together/thinkingmachines/inkling": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 4.05e-06
+    },
+    "together/thinkingmachines/inkling-small": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 1.2e-06
     },
     "together/together-ai-21.1b-41b": {
       "input_cost_per_token": 8e-07,
@@ -5284,113 +5313,105 @@
       "input_cost_per_token": 4.5e-07,
       "output_cost_per_token": 2e-06
     },
-    "xai/grok-2": {
-      "input_cost_per_token": 2e-06,
-      "output_cost_per_token": 1e-05
+    "together/zai-org/glm-5.2": {
+      "input_cost_per_token": 1.4e-06,
+      "output_cost_per_token": 4.4e-06
     },
-    "xai/grok-2-1212": {
-      "input_cost_per_token": 2e-06,
-      "output_cost_per_token": 1e-05
+    "together/zai-org/glm-5.3": {
+      "input_cost_per_token": 1.4e-06,
+      "output_cost_per_token": 4.4e-06
     },
-    "xai/grok-2-latest": {
-      "input_cost_per_token": 2e-06,
-      "output_cost_per_token": 1e-05
-    },
-    "xai/grok-2-vision": {
-      "input_cost_per_token": 2e-06,
-      "output_cost_per_token": 1e-05
-    },
-    "xai/grok-2-vision-1212": {
-      "input_cost_per_token": 2e-06,
-      "output_cost_per_token": 1e-05
-    },
-    "xai/grok-2-vision-latest": {
-      "input_cost_per_token": 2e-06,
-      "output_cost_per_token": 1e-05
+    "together/zai-org/glm-5.3-flash": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 5e-07
     },
     "xai/grok-3": {
-      "input_cost_per_token": 3e-06,
-      "output_cost_per_token": 1.5e-05
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-3-beta": {
-      "input_cost_per_token": 3e-06,
-      "output_cost_per_token": 1.5e-05
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-3-fast-beta": {
-      "input_cost_per_token": 5e-06,
-      "output_cost_per_token": 2.5e-05
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-3-fast-latest": {
-      "input_cost_per_token": 5e-06,
-      "output_cost_per_token": 2.5e-05
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-3-latest": {
-      "input_cost_per_token": 3e-06,
-      "output_cost_per_token": 1.5e-05
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-3-mini": {
-      "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 5e-07
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-3-mini-beta": {
-      "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 5e-07
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-3-mini-fast": {
-      "input_cost_per_token": 6e-07,
-      "output_cost_per_token": 4e-06
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-3-mini-fast-beta": {
-      "input_cost_per_token": 6e-07,
-      "output_cost_per_token": 4e-06
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-3-mini-fast-latest": {
-      "input_cost_per_token": 6e-07,
-      "output_cost_per_token": 4e-06
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-3-mini-latest": {
-      "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 5e-07
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-4": {
-      "input_cost_per_token": 3e-06,
-      "output_cost_per_token": 1.5e-05
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-4-0709": {
-      "input_cost_per_token": 3e-06,
-      "output_cost_per_token": 1.5e-05
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-4-1-fast": {
-      "input_cost_per_token": 2e-07,
-      "output_cost_per_token": 5e-07
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-4-1-fast-non-reasoning": {
-      "input_cost_per_token": 2e-07,
-      "output_cost_per_token": 5e-07
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-4-1-fast-non-reasoning-latest": {
-      "input_cost_per_token": 2e-07,
-      "output_cost_per_token": 5e-07
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-4-1-fast-reasoning": {
-      "input_cost_per_token": 2e-07,
-      "output_cost_per_token": 5e-07
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-4-1-fast-reasoning-latest": {
-      "input_cost_per_token": 2e-07,
-      "output_cost_per_token": 5e-07
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-4-fast-non-reasoning": {
-      "input_cost_per_token": 2e-07,
-      "output_cost_per_token": 5e-07
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-4-fast-reasoning": {
-      "input_cost_per_token": 2e-07,
-      "output_cost_per_token": 5e-07
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-4-latest": {
-      "input_cost_per_token": 3e-06,
-      "output_cost_per_token": 1.5e-05
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
+    },
+    "xai/grok-4.20": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
     },
     "xai/grok-4.20-0309-non-reasoning": {
       "input_cost_per_token": 1.25e-06,
@@ -5408,11 +5429,35 @@
       "input_cost_per_token": 1.25e-06,
       "output_cost_per_token": 2.5e-06
     },
+    "xai/grok-4.20-multi-agent": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
+    },
     "xai/grok-4.20-multi-agent-0309": {
       "input_cost_per_token": 1.25e-06,
       "output_cost_per_token": 2.5e-06
     },
     "xai/grok-4.20-multi-agent-beta-0309": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
+    },
+    "xai/grok-4.20-multi-agent-latest": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
+    },
+    "xai/grok-4.20-non-reasoning": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
+    },
+    "xai/grok-4.20-non-reasoning-latest": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
+    },
+    "xai/grok-4.20-reasoning": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
+    },
+    "xai/grok-4.20-reasoning-latest": {
       "input_cost_per_token": 1.25e-06,
       "output_cost_per_token": 2.5e-06
     },
@@ -5436,10 +5481,6 @@
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 6e-06
     },
-    "xai/grok-beta": {
-      "input_cost_per_token": 5e-06,
-      "output_cost_per_token": 1.5e-05
-    },
     "xai/grok-build-0.1": {
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 2e-06
@@ -5455,10 +5496,6 @@
     "xai/grok-code-fast-1-0825": {
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 2e-06
-    },
-    "xai/grok-vision-beta": {
-      "input_cost_per_token": 5e-06,
-      "output_cost_per_token": 1.5e-05
     }
   }
 }
