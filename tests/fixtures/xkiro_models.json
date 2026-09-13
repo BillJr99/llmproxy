@@ -1,0 +1,204 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "openai/gpt-5.3-codex-spark",
+      "object": "model",
+      "type": "model",
+      "display_name": "Codex 5.3 Spark",
+      "created": 1,
+      "owned_by": "openai",
+      "modality": "chat",
+      "access_tier": "free",
+      "pricing": {
+        "currency": "USD",
+        "unit": "per_1m_tokens",
+        "input": 0,
+        "output": 0
+      },
+      "capabilities": {
+        "vision": false,
+        "tools": true,
+        "reasoning": true
+      },
+      "context_length": 128000,
+      "max_output_tokens": 65536,
+      "reasoning_efforts": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "default": "medium"
+      }
+    },
+    {
+      "id": "mistralai/ministral-8b",
+      "object": "model",
+      "type": "model",
+      "display_name": "Ministral 3 8B",
+      "created": 1,
+      "owned_by": "mistral",
+      "modality": "chat",
+      "access_tier": "free",
+      "pricing": {
+        "currency": "USD",
+        "unit": "per_1m_tokens",
+        "input": 0,
+        "output": 0
+      },
+      "capabilities": {
+        "vision": true,
+        "tools": true,
+        "reasoning": false
+      },
+      "context_length": 256000,
+      "max_output_tokens": 8192
+    },
+    {
+      "id": "sensenova/sensenova-6.8-flash-lite",
+      "object": "model",
+      "type": "model",
+      "display_name": "SenseNova 6.8 Flash-Lite",
+      "created": 1,
+      "owned_by": "api",
+      "modality": "chat",
+      "access_tier": "free",
+      "pricing": {
+        "currency": "USD",
+        "unit": "per_1m_tokens",
+        "input": 0,
+        "output": 0
+      },
+      "capabilities": {
+        "vision": true,
+        "tools": true,
+        "reasoning": true
+      },
+      "context_length": 262144,
+      "max_output_tokens": 65536,
+      "reasoning_efforts": {
+        "levels": [
+          "none",
+          "low",
+          "medium",
+          "high"
+        ],
+        "default": "medium"
+      }
+    },
+    {
+      "id": "xiaomi/mimo-v2.5",
+      "object": "model",
+      "type": "model",
+      "display_name": "MiMo v2.5",
+      "created": 1,
+      "owned_by": "mimo",
+      "modality": "chat",
+      "access_tier": "premium",
+      "pricing": {
+        "currency": "USD",
+        "unit": "per_1m_tokens",
+        "input": 0.091,
+        "output": 0.182,
+        "cache_read": 0.00715
+      },
+      "capabilities": {
+        "vision": true,
+        "tools": true,
+        "reasoning": true
+      },
+      "context_length": 1050000,
+      "max_output_tokens": 65536
+    },
+    {
+      "id": "openai/gpt-5.6-terra",
+      "object": "model",
+      "type": "model",
+      "display_name": "GPT-5.6 Terra",
+      "created": 1,
+      "owned_by": "openai",
+      "modality": "chat",
+      "access_tier": "paid",
+      "pricing": {
+        "currency": "USD",
+        "unit": "per_1m_tokens",
+        "input": 1,
+        "output": 6,
+        "cache_read": 0.125
+      },
+      "capabilities": {
+        "vision": true,
+        "tools": true,
+        "reasoning": true
+      },
+      "context_length": 1000000,
+      "max_output_tokens": 65536,
+      "reasoning_efforts": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "default": "medium"
+      }
+    },
+    {
+      "id": "vendor/embed-1",
+      "object": "model",
+      "modality": "embedding",
+      "owned_by": "vendor",
+      "access_tier": "free",
+      "pricing": {
+        "currency": "USD",
+        "unit": "per_1m_tokens",
+        "input": 0,
+        "output": 0
+      },
+      "capabilities": {
+        "vision": false,
+        "tools": false,
+        "reasoning": false
+      }
+    },
+    {
+      "id": "vendor/tier-says-free-but-bills",
+      "object": "model",
+      "modality": "chat",
+      "owned_by": "vendor",
+      "access_tier": "free",
+      "pricing": {
+        "currency": "USD",
+        "unit": "per_1m_tokens",
+        "input": 0.5,
+        "output": 1.5
+      },
+      "capabilities": {
+        "vision": false,
+        "tools": true,
+        "reasoning": false
+      }
+    },
+    {
+      "id": "vendor/unknown-price-unit",
+      "object": "model",
+      "modality": "chat",
+      "owned_by": "vendor",
+      "access_tier": "paid",
+      "pricing": {
+        "currency": "USD",
+        "unit": "per_1k_tokens",
+        "input": 2,
+        "output": 4
+      },
+      "capabilities": {
+        "vision": false,
+        "tools": false,
+        "reasoning": false
+      }
+    }
+  ]
+}

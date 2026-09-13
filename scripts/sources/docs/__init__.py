@@ -25,6 +25,7 @@ from .huggingface import HuggingFaceDocs
 from .mistral import MistralDocs
 from .openrouter import OpenRouterFreeFilter as OpenRouterFreeFilter  # alt form
 from .sambanova import SambaNovaDocs
+from .tokenharbor import TokenHarborDocs
 
 DOCS_SOURCES: list[type[DocsScraperBase]] = [
     GoogleDocs,
@@ -36,4 +37,5 @@ DOCS_SOURCES: list[type[DocsScraperBase]] = [
     GitHubModelsDocs,
     CloudflareWorkersDocs,
     HuggingFaceDocs,
+    TokenHarborDocs,
 ]

@@ -110,6 +110,11 @@
       "api_key": "sk-teamo-...",
       "model_filter": null
     },
+    "tokenharbor": {
+      "base_url": "https://tokenharbor.ai/v1",
+      "api_key": "thk_live_...",
+      "model_filter": null
+    },
     "ollama-cloud": {
       "base_url": "https://ollama.com/v1",
       "api_key": "...",
@@ -450,23 +455,20 @@
     "openrouter/thinkingmachines/inkling-small:free",
     "openrouter/thinkingmachines/inkling:free",
     "openrouter/z-ai/glm-5.2:free",
-    "xkiro/qwen/qwen-plus-2025-07-28:free",
-    "xkiro/qwen/qwen3-coder-plus:free",
-    "xkiro/qwen/qwen3-max:free",
-    "xkiro/qwen/qwen3-omni-flash:free",
-    "xkiro/qwen/qwen3-vl-plus:free",
-    "xkiro/qwen/qwen3.5-397b-a17b:free",
-    "xkiro/qwen/qwen3.5-flash:free",
-    "xkiro/qwen/qwen3.5-omni-flash:free",
-    "xkiro/qwen/qwen3.5-omni-plus:free",
-    "xkiro/qwen/qwen3.5-plus:free",
-    "xkiro/qwen/qwen3.6-27b:free",
-    "xkiro/qwen/qwen3.6-35b-a3b:free",
-    "xkiro/qwen/qwen3.6-max-preview:free",
-    "xkiro/qwen/qwen3.6-plus:free",
-    "xkiro/qwen/qwen3.7-max:free",
-    "xkiro/qwen/qwen3.7-plus:free",
-    "xkiro/qwen/qwen3.8-max:free",
+    "xkiro/mistralai/codestral-2508",
+    "xkiro/mistralai/devstral-medium",
+    "xkiro/mistralai/ministral-14b",
+    "xkiro/mistralai/ministral-3b",
+    "xkiro/mistralai/ministral-8b",
+    "xkiro/mistralai/mistral-large-2512",
+    "xkiro/mistralai/mistral-medium-3.5",
+    "xkiro/mistralai/mistral-small-2603",
+    "xkiro/openai/gpt-5.3-codex-spark",
+    "xkiro/sensenova/sensenova-6.7-flash-lite",
+    "xkiro/sensenova/sensenova-6.8-flash-lite",
+    "tokenharbor/deepseek-v4-flash:free",
+    "tokenharbor/deepseek-v4.1-flash:free",
+    "tokenharbor/mimo-v2.5:free",
     "moonshot/kimi-latest",
     "minimax/MiniMax-M1",
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct",
@@ -732,6 +734,15 @@
     "openrouter/xiaomi/mimo-v2.5-pro": "exploratory",
     "openrouter/z-ai/glm-4.5-air:free": "standard",
     "openrouter/z-ai/glm-5.2:free": "exploratory",
+    "xkiro/mistralai/codestral-2508": "exploratory",
+    "xkiro/mistralai/devstral-medium": "standard",
+    "xkiro/mistralai/ministral-14b": "exploratory",
+    "xkiro/mistralai/ministral-3b": "exploratory",
+    "xkiro/mistralai/ministral-8b": "exploratory",
+    "xkiro/mistralai/mistral-large-2512": "standard",
+    "xkiro/mistralai/mistral-medium-3.5": "standard",
+    "xkiro/mistralai/mistral-small-2603": "exploratory",
+    "xkiro/openai/gpt-5.3-codex-spark": "exploratory",
     "xkiro/qwen/qwen-plus-2025-07-28:free": "exploratory",
     "xkiro/qwen/qwen3-coder-plus:free": "exploratory",
     "xkiro/qwen/qwen3-max:free": "exploratory",
@@ -749,6 +760,8 @@
     "xkiro/qwen/qwen3.7-max:free": "exploratory",
     "xkiro/qwen/qwen3.7-plus:free": "exploratory",
     "xkiro/qwen/qwen3.8-max:free": "exploratory",
+    "xkiro/sensenova/sensenova-6.7-flash-lite": "exploratory",
+    "xkiro/sensenova/sensenova-6.8-flash-lite": "exploratory",
     "moonshot/kimi-latest": "standard",
     "minimax/MiniMax-M1": "standard",
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": "standard",
@@ -1104,6 +1117,52 @@
       "tools",
       "reasoning",
       "json"
+    ],
+    "xkiro/mistralai/codestral-2508": [
+      "tools"
+    ],
+    "xkiro/mistralai/devstral-medium": [
+      "tools"
+    ],
+    "xkiro/mistralai/ministral-14b": [
+      "tools",
+      "vision"
+    ],
+    "xkiro/mistralai/ministral-3b": [
+      "tools",
+      "vision"
+    ],
+    "xkiro/mistralai/ministral-8b": [
+      "tools",
+      "vision"
+    ],
+    "xkiro/mistralai/mistral-large-2512": [
+      "tools",
+      "vision"
+    ],
+    "xkiro/mistralai/mistral-medium-3.5": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/mistralai/mistral-small-2603": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/openai/gpt-5.3-codex-spark": [
+      "tools",
+      "reasoning"
+    ],
+    "xkiro/sensenova/sensenova-6.7-flash-lite": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/sensenova/sensenova-6.8-flash-lite": [
+      "tools",
+      "vision",
+      "reasoning"
     ],
     "moonshot/kimi-latest": [
       "tools",
