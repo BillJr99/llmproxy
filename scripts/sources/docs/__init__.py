@@ -22,7 +22,6 @@ from .github_models import GitHubModelsDocs
 from .google import GoogleDocs
 from .groq import GroqDocs
 from .huggingface import HuggingFaceDocs
-from .mistral import MistralDocs
 from .openrouter import OpenRouterFreeFilter as OpenRouterFreeFilter  # alt form
 from .sambanova import SambaNovaDocs
 from .tokenharbor import TokenHarborDocs
@@ -31,7 +30,6 @@ DOCS_SOURCES: list[type[DocsScraperBase]] = [
     GoogleDocs,
     GroqDocs,
     CerebrasDocs,
-    MistralDocs,
     CohereDocs,
     SambaNovaDocs,
     GitHubModelsDocs,
