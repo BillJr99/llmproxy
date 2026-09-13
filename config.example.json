@@ -250,31 +250,39 @@
   },
   "believed_free": [
     "nous/inclusionai/ling-3.0-flash-fin:free",
+    "nous/inclusionai/ling-3.0-flash-sante:free",
     "nous/meituan/longcat-2.0:free",
     "nous/poolside/laguna-s-2.1:free",
     "nous/poolside/laguna-xs-2.1:free",
     "nous/stepfun/step-3.7-flash:free",
-    "nous/tencent/hy3:free",
     "nous/upstage/solar-pro4:free",
     "nvidia/meta/llama-3.1-70b-instruct",
     "google/gemini-2.0-flash",
     "google/gemini-2.0-flash-lite",
     "google/gemini-2.5-computer-use-preview-10-2025",
+    "google/gemini-2.5-flash",
     "google/gemini-2.5-flash-image",
+    "google/gemini-2.5-flash-lite",
     "google/gemini-2.5-flash-lite-preview-09-2025",
     "google/gemini-2.5-flash-native-audio-preview-12-2025",
     "google/gemini-2.5-flash-preview-09-2025",
     "google/gemini-2.5-pro",
+    "google/gemini-3-flash-preview",
     "google/gemini-3-pro-image",
     "google/gemini-3-pro-preview",
     "google/gemini-3.1-flash-image",
+    "google/gemini-3.1-flash-lite",
     "google/gemini-3.1-flash-lite-image",
+    "google/gemini-3.1-flash-lite-preview",
     "google/gemini-3.1-flash-tts-preview",
     "google/gemini-3.1-pro-preview",
     "google/gemini-3.5-flash",
+    "google/gemini-3.5-flash-lite",
     "google/gemini-3.5-live-translate-preview",
     "google/gemini-3.5-transcribe",
+    "google/gemini-3.6-flash",
     "google/gemini-3.7-flash",
+    "google/gemini-3.8-flash",
     "google/gemma-3-12b-it",
     "google/gemma-3-1b-it",
     "google/gemma-3-27b-it",
@@ -283,6 +291,7 @@
     "cerebras/gpt-oss-120b",
     "cerebras/llama3.1-8b",
     "cerebras/qwen-3-235b-a22b-instruct-2507",
+    "cerebras/qwen-3.8-27b1",
     "github/ai21-labs/AI21-Jamba-1.5-Large",
     "github/cohere/Cohere-command-r-08-2024",
     "github/cohere/Cohere-command-r-plus-08-2024",
@@ -330,6 +339,8 @@
     "groq/meta-llama/llama-prompt-guard-2-22m",
     "groq/meta-llama/llama-prompt-guard-2-86m",
     "groq/mixtral-8x7b-32768",
+    "groq/openai/gpt-oss-20b",
+    "groq/openai/gpt-oss-safeguard-20b",
     "groq/qwen/qwen3.6-27b",
     "groq/qwen/qwen3.8-27b",
     "groq/whisper-large-v3",
@@ -392,6 +403,7 @@
     "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.2-lora",
     "cloudflare-workers/@cf/mistralai/mistral-small-3.1-24b-instruct",
     "cloudflare-workers/@cf/moondream/moondream3.1-9b-a2b",
+    "cloudflare-workers/@cf/moondream/moondream3.1-9B-A2B",
     "cloudflare-workers/@cf/moonshotai/kimi-k2.5",
     "cloudflare-workers/@cf/moonshotai/kimi-k2.6",
     "cloudflare-workers/@cf/moonshotai/kimi-k2.7-code",
@@ -439,9 +451,11 @@
     "openrouter/google/lyria-3-clip-preview",
     "openrouter/google/lyria-3-pro-preview",
     "openrouter/inclusionai/ling-3.0-flash-fin:free",
+    "openrouter/inclusionai/ling-3.0-flash-sante:free",
+    "openrouter/inclusionai/ling-3.0-flash-vl:free",
     "openrouter/liquid/lfm-2.5-2.6b:free",
-    "openrouter/minimax/minimax-m2.7:free",
-    "openrouter/minimax/minimax-m3:free",
+    "openrouter/nex-agi/nex-n2.5-mini:free",
+    "openrouter/nex-agi/nex-n2.5-pro:free",
     "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
     "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
@@ -454,7 +468,6 @@
     "openrouter/stealth/ox-alpha",
     "openrouter/thinkingmachines/inkling-small:free",
     "openrouter/thinkingmachines/inkling:free",
-    "openrouter/z-ai/glm-5.2:free",
     "xkiro/mistralai/codestral-2508",
     "xkiro/mistralai/devstral-medium",
     "xkiro/mistralai/ministral-14b",
@@ -483,6 +496,7 @@
   "cost_observed_free_tier": [],
   "model_reasoning": {
     "nous/inclusionai/ling-3.0-flash-fin:free": "exploratory",
+    "nous/inclusionai/ling-3.0-flash-sante:free": "exploratory",
     "nous/meituan/longcat-2.0:free": "exploratory",
     "nous/poolside/laguna-s-2.1:free": "exploratory",
     "nous/poolside/laguna-xs-2.1:free": "exploratory",
@@ -515,6 +529,7 @@
     "google/gemini-3.5-transcribe": "exploratory",
     "google/gemini-3.6-flash": "exploratory",
     "google/gemini-3.7-flash": "exploratory",
+    "google/gemini-3.8-flash": "exploratory",
     "google/gemma-3-12b-it": "exploratory",
     "google/gemma-3-1b-it": "exploratory",
     "google/gemma-3-27b-it": "standard",
@@ -523,6 +538,7 @@
     "cerebras/gpt-oss-120b": "deep",
     "cerebras/llama3.1-8b": "exploratory",
     "cerebras/qwen-3-235b-a22b-instruct-2507": "deep",
+    "cerebras/qwen-3.8-27b1": "exploratory",
     "cerebras/zai-glm-4.7": "standard",
     "github/ai21-labs/AI21-Jamba-1.5-Large": "standard",
     "github/cohere/Cohere-command-r-08-2024": "exploratory",
@@ -645,6 +661,7 @@
     "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.2-lora": "exploratory",
     "cloudflare-workers/@cf/mistralai/mistral-small-3.1-24b-instruct": "standard",
     "cloudflare-workers/@cf/moondream/moondream3.1-9b-a2b": "exploratory",
+    "cloudflare-workers/@cf/moondream/moondream3.1-9B-A2B": "exploratory",
     "cloudflare-workers/@cf/moonshotai/kimi-k2.5": "exploratory",
     "cloudflare-workers/@cf/moonshotai/kimi-k2.6": "exploratory",
     "cloudflare-workers/@cf/moonshotai/kimi-k2.7-code": "exploratory",
@@ -697,6 +714,8 @@
     "openrouter/google/lyria-3-clip-preview": "exploratory",
     "openrouter/google/lyria-3-pro-preview": "exploratory",
     "openrouter/inclusionai/ling-3.0-flash-fin:free": "exploratory",
+    "openrouter/inclusionai/ling-3.0-flash-sante:free": "exploratory",
+    "openrouter/inclusionai/ling-3.0-flash-vl:free": "exploratory",
     "openrouter/liquid/lfm-2.5-1.2b-instruct:free": "exploratory",
     "openrouter/liquid/lfm-2.5-1.2b-thinking:free": "exploratory",
     "openrouter/liquid/lfm-2.5-2.6b:free": "exploratory",
@@ -708,6 +727,8 @@
     "openrouter/mistralai/mistral-7b-instruct:free": "exploratory",
     "openrouter/moonshotai/kimi-k2:free": "deep",
     "openrouter/nex-agi/nex-n2-pro:free": "exploratory",
+    "openrouter/nex-agi/nex-n2.5-mini:free": "exploratory",
+    "openrouter/nex-agi/nex-n2.5-pro:free": "exploratory",
     "openrouter/nousresearch/hermes-3-llama-3.1-405b:free": "deep",
     "openrouter/nvidia/nemotron-3-nano-30b-a3b:free": "standard",
     "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": "deep",
@@ -1041,17 +1062,27 @@
       "tools",
       "reasoning"
     ],
+    "openrouter/inclusionai/ling-3.0-flash-sante:free": [
+      "tools",
+      "reasoning"
+    ],
+    "openrouter/inclusionai/ling-3.0-flash-vl:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
     "openrouter/liquid/lfm-2.5-2.6b:free": [
       "tools",
       "reasoning",
       "json"
     ],
-    "openrouter/minimax/minimax-m2.7:free": [
+    "openrouter/nex-agi/nex-n2.5-mini:free": [
       "tools",
+      "vision",
       "reasoning",
       "json"
     ],
-    "openrouter/minimax/minimax-m3:free": [
+    "openrouter/nex-agi/nex-n2.5-pro:free": [
       "tools",
       "vision",
       "reasoning",
@@ -1112,11 +1143,6 @@
       "tools",
       "vision",
       "reasoning"
-    ],
-    "openrouter/z-ai/glm-5.2:free": [
-      "tools",
-      "reasoning",
-      "json"
     ],
     "xkiro/mistralai/codestral-2508": [
       "tools"
@@ -1302,6 +1328,18 @@
       "requests_per_day": 14400,
       "tokens_per_minute": null,
       "tokens_per_day": null
+    },
+    "groq/openai/gpt-oss-20b": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 8000,
+      "tokens_per_day": 200000
+    },
+    "groq/openai/gpt-oss-safeguard-20b": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 8000,
+      "tokens_per_day": 200000
     },
     "groq/qwen/qwen3.6-27b": {
       "requests_per_minute": 30,
