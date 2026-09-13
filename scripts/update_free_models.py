@@ -89,6 +89,7 @@ _PLACEHOLDER_KEYS: dict[str, str] = {
     "fireworks": "fw_...",
     "xkiro": "sk-xt-...",
     "teamorouter": "sk-teamo-...",
+    "tokenharbor": "thk_live_...",
 }
 
 

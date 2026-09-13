@@ -29,6 +29,7 @@
     "bai",
     "xkiro",
     "teamorouter",
+    "tokenharbor",
     "ollama-cloud",
     "moonshot",
     "minimax",
@@ -1424,25 +1425,28 @@
       "key_required": true,
       "key_hint": "Create an API key at xkiro.com \u2014 keys look like sk-xt-... (docs: docs.xkiro.com)",
       "believed_free": [
-        "xkiro/qwen/qwen-plus-2025-07-28:free",
-        "xkiro/qwen/qwen3-coder-plus:free",
-        "xkiro/qwen/qwen3-max:free",
-        "xkiro/qwen/qwen3-omni-flash:free",
-        "xkiro/qwen/qwen3-vl-plus:free",
-        "xkiro/qwen/qwen3.5-397b-a17b:free",
-        "xkiro/qwen/qwen3.5-flash:free",
-        "xkiro/qwen/qwen3.5-omni-flash:free",
-        "xkiro/qwen/qwen3.5-omni-plus:free",
-        "xkiro/qwen/qwen3.5-plus:free",
-        "xkiro/qwen/qwen3.6-27b:free",
-        "xkiro/qwen/qwen3.6-35b-a3b:free",
-        "xkiro/qwen/qwen3.6-max-preview:free",
-        "xkiro/qwen/qwen3.6-plus:free",
-        "xkiro/qwen/qwen3.7-max:free",
-        "xkiro/qwen/qwen3.7-plus:free",
-        "xkiro/qwen/qwen3.8-max:free"
+        "xkiro/mistralai/codestral-2508",
+        "xkiro/mistralai/devstral-medium",
+        "xkiro/mistralai/ministral-14b",
+        "xkiro/mistralai/ministral-3b",
+        "xkiro/mistralai/ministral-8b",
+        "xkiro/mistralai/mistral-large-2512",
+        "xkiro/mistralai/mistral-medium-3.5",
+        "xkiro/mistralai/mistral-small-2603",
+        "xkiro/openai/gpt-5.3-codex-spark",
+        "xkiro/sensenova/sensenova-6.7-flash-lite",
+        "xkiro/sensenova/sensenova-6.8-flash-lite"
       ],
       "model_reasoning": {
+        "xkiro/mistralai/codestral-2508": "exploratory",
+        "xkiro/mistralai/devstral-medium": "standard",
+        "xkiro/mistralai/ministral-14b": "exploratory",
+        "xkiro/mistralai/ministral-3b": "exploratory",
+        "xkiro/mistralai/ministral-8b": "exploratory",
+        "xkiro/mistralai/mistral-large-2512": "standard",
+        "xkiro/mistralai/mistral-medium-3.5": "standard",
+        "xkiro/mistralai/mistral-small-2603": "exploratory",
+        "xkiro/openai/gpt-5.3-codex-spark": "exploratory",
         "xkiro/qwen/qwen-plus-2025-07-28:free": "exploratory",
         "xkiro/qwen/qwen3-coder-plus:free": "exploratory",
         "xkiro/qwen/qwen3-max:free": "exploratory",
@@ -1459,10 +1463,60 @@
         "xkiro/qwen/qwen3.6-plus:free": "exploratory",
         "xkiro/qwen/qwen3.7-max:free": "exploratory",
         "xkiro/qwen/qwen3.7-plus:free": "exploratory",
-        "xkiro/qwen/qwen3.8-max:free": "exploratory"
+        "xkiro/qwen/qwen3.8-max:free": "exploratory",
+        "xkiro/sensenova/sensenova-6.7-flash-lite": "exploratory",
+        "xkiro/sensenova/sensenova-6.8-flash-lite": "exploratory"
       },
       "free_limits": {},
-      "fallback_models": []
+      "fallback_models": [],
+      "model_capabilities": {
+        "xkiro/mistralai/codestral-2508": [
+          "tools"
+        ],
+        "xkiro/mistralai/devstral-medium": [
+          "tools"
+        ],
+        "xkiro/mistralai/ministral-14b": [
+          "tools",
+          "vision"
+        ],
+        "xkiro/mistralai/ministral-3b": [
+          "tools",
+          "vision"
+        ],
+        "xkiro/mistralai/ministral-8b": [
+          "tools",
+          "vision"
+        ],
+        "xkiro/mistralai/mistral-large-2512": [
+          "tools",
+          "vision"
+        ],
+        "xkiro/mistralai/mistral-medium-3.5": [
+          "tools",
+          "vision",
+          "reasoning"
+        ],
+        "xkiro/mistralai/mistral-small-2603": [
+          "tools",
+          "vision",
+          "reasoning"
+        ],
+        "xkiro/openai/gpt-5.3-codex-spark": [
+          "tools",
+          "reasoning"
+        ],
+        "xkiro/sensenova/sensenova-6.7-flash-lite": [
+          "tools",
+          "vision",
+          "reasoning"
+        ],
+        "xkiro/sensenova/sensenova-6.8-flash-lite": [
+          "tools",
+          "vision",
+          "reasoning"
+        ]
+      }
     },
     "teamorouter": {
       "display": "TeamoRouter (LLM routing gateway)",
@@ -1470,6 +1524,20 @@
       "key_required": true,
       "key_hint": "Create an API key at teamorouter.com \u2014 keys look like sk-teamo-... (docs: teamorouter.com/docs/api-integration)",
       "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "tokenharbor": {
+      "display": "Token Harbor (multi-vendor gateway)",
+      "base_url": "https://tokenharbor.ai/v1",
+      "key_required": true,
+      "key_hint": "Create an API key at tokenharbor.ai/dashboard/api-keys (Universal Key, format thk_live_...; docs: tokenharbor.ai/docs)",
+      "believed_free": [
+        "tokenharbor/deepseek-v4-flash:free",
+        "tokenharbor/deepseek-v4.1-flash:free",
+        "tokenharbor/mimo-v2.5:free"
+      ],
       "model_reasoning": {},
       "free_limits": {},
       "fallback_models": []
@@ -3132,10 +3200,6 @@
     "groq/qwen/qwen3-32b": {
       "input_cost_per_token": 2.9e-07,
       "output_cost_per_token": 5.9e-07
-    },
-    "groq/qwen/qwen3.8-27b": {
-      "input_cost_per_token": 8e-07,
-      "output_cost_per_token": 4e-06
     },
     "mistral/codestral-2405": {
       "input_cost_per_token": 1e-06,
@@ -5496,6 +5560,294 @@
     "xai/grok-code-fast-1-0825": {
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 2e-06
+    },
+    "xkiro/anthropic/claude-fable-5": {
+      "input_cost_per_token": 9e-06,
+      "output_cost_per_token": 4.5e-05
+    },
+    "xkiro/anthropic/claude-fable-5-1": {
+      "input_cost_per_token": 1e-05,
+      "output_cost_per_token": 5e-05
+    },
+    "xkiro/anthropic/claude-haiku-4.5": {
+      "input_cost_per_token": 9.000000000000001e-07,
+      "output_cost_per_token": 4.5e-06
+    },
+    "xkiro/anthropic/claude-opus-4.6": {
+      "input_cost_per_token": 4.5e-06,
+      "output_cost_per_token": 2.25e-05
+    },
+    "xkiro/anthropic/claude-opus-4.7": {
+      "input_cost_per_token": 4.5e-06,
+      "output_cost_per_token": 2.25e-05
+    },
+    "xkiro/anthropic/claude-opus-4.8": {
+      "input_cost_per_token": 4.5e-06,
+      "output_cost_per_token": 2.25e-05
+    },
+    "xkiro/anthropic/claude-opus-5": {
+      "input_cost_per_token": 4.5e-06,
+      "output_cost_per_token": 2.25e-05
+    },
+    "xkiro/anthropic/claude-sonnet-4.6": {
+      "input_cost_per_token": 2.7e-06,
+      "output_cost_per_token": 1.35e-05
+    },
+    "xkiro/anthropic/claude-sonnet-5": {
+      "input_cost_per_token": 1.8000000000000001e-06,
+      "output_cost_per_token": 9e-06
+    },
+    "xkiro/deepseek/deepseek-v4-flash-0731": {
+      "input_cost_per_token": 9.1e-08,
+      "output_cost_per_token": 1.82e-07
+    },
+    "xkiro/deepseek/deepseek-v4-flash-vision-exp": {
+      "input_cost_per_token": 1.43e-07,
+      "output_cost_per_token": 4.29e-07
+    },
+    "xkiro/deepseek/deepseek-v4-pro-0813": {
+      "input_cost_per_token": 2.8275e-07,
+      "output_cost_per_token": 5.655e-07
+    },
+    "xkiro/google/gemini-2.5-flash": {
+      "input_cost_per_token": 1.95e-07,
+      "output_cost_per_token": 1.625e-06
+    },
+    "xkiro/google/gemini-2.5-pro": {
+      "input_cost_per_token": 8.125e-07,
+      "output_cost_per_token": 6.5e-06
+    },
+    "xkiro/google/gemini-3-flash": {
+      "input_cost_per_token": 3.25e-07,
+      "output_cost_per_token": 1.95e-06
+    },
+    "xkiro/google/gemini-3.1-pro": {
+      "input_cost_per_token": 1.3e-06,
+      "output_cost_per_token": 7.8e-06
+    },
+    "xkiro/google/gemini-3.5-flash": {
+      "input_cost_per_token": 9.75e-07,
+      "output_cost_per_token": 5.85e-06
+    },
+    "xkiro/google/gemini-3.6-flash": {
+      "input_cost_per_token": 9.75e-07,
+      "output_cost_per_token": 4.875e-06
+    },
+    "xkiro/google/gemini-3.7-flash": {
+      "input_cost_per_token": 2.4375e-07,
+      "output_cost_per_token": 1.21875e-06
+    },
+    "xkiro/google/gemini-3.8-flash": {
+      "input_cost_per_token": 4.875e-07,
+      "output_cost_per_token": 2.4375e-06
+    },
+    "xkiro/meta/muse-spark-1.2-contributor": {
+      "input_cost_per_token": 6.5e-08,
+      "output_cost_per_token": 1.3e-07
+    },
+    "xkiro/minimax/minimax-m2.5": {
+      "input_cost_per_token": 2.7e-07,
+      "output_cost_per_token": 1.08e-06
+    },
+    "xkiro/minimax/minimax-m2.7": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "xkiro/minimax/minimax-m3": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "xkiro/moonshotai/kimi-k2.5": {
+      "input_cost_per_token": 2.8499999999999997e-07,
+      "output_cost_per_token": 1.4250000000000001e-06
+    },
+    "xkiro/moonshotai/kimi-k2.6": {
+      "input_cost_per_token": 4.7499999999999995e-07,
+      "output_cost_per_token": 2e-06
+    },
+    "xkiro/moonshotai/kimi-k2.7-code": {
+      "input_cost_per_token": 4.5500000000000004e-07,
+      "output_cost_per_token": 2.275e-06
+    },
+    "xkiro/moonshotai/kimi-k3": {
+      "input_cost_per_token": 1.95e-06,
+      "output_cost_per_token": 9.75e-06
+    },
+    "xkiro/nvidia/llama-3.3-nemotron-super-49b": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 3.2e-07
+    },
+    "xkiro/nvidia/nemotron-3-nano": {
+      "input_cost_per_token": 5.0000000000000004e-08,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "xkiro/nvidia/nemotron-3-nano-omni": {
+      "input_cost_per_token": 5.0000000000000004e-08,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "xkiro/nvidia/nemotron-3-super": {
+      "input_cost_per_token": 8e-08,
+      "output_cost_per_token": 4.5000000000000003e-07
+    },
+    "xkiro/nvidia/nemotron-3-ultra": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 2.2e-06
+    },
+    "xkiro/openai/gpt-5.4": {
+      "input_cost_per_token": 2.25e-06,
+      "output_cost_per_token": 1.35e-05
+    },
+    "xkiro/openai/gpt-5.4-mini": {
+      "input_cost_per_token": 6.75e-07,
+      "output_cost_per_token": 4.05e-06
+    },
+    "xkiro/openai/gpt-5.5": {
+      "input_cost_per_token": 4.5e-06,
+      "output_cost_per_token": 2.7e-05
+    },
+    "xkiro/openai/gpt-5.6-luna": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "xkiro/openai/gpt-5.6-sol": {
+      "input_cost_per_token": 4.5e-06,
+      "output_cost_per_token": 2.7e-05
+    },
+    "xkiro/openai/gpt-5.6-terra": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 6e-06
+    },
+    "xkiro/openai/gpt-6-astra": {
+      "input_cost_per_token": 1e-05,
+      "output_cost_per_token": 5e-05
+    },
+    "xkiro/qwen/qwen3.5-plus": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.8000000000000001e-06
+    },
+    "xkiro/qwen/qwen3.6-plus": {
+      "input_cost_per_token": 3.25e-07,
+      "output_cost_per_token": 1.95e-06
+    },
+    "xkiro/qwen/qwen3.7-max": {
+      "input_cost_per_token": 1.475e-06,
+      "output_cost_per_token": 4.425e-06
+    },
+    "xkiro/qwen/qwen3.7-plus": {
+      "input_cost_per_token": 3.2e-07,
+      "output_cost_per_token": 1.28e-06
+    },
+    "xkiro/qwen/qwen3.8-max": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06
+    },
+    "xkiro/tencent/hy3": {
+      "input_cost_per_token": 8.150999999999999e-08,
+      "output_cost_per_token": 3.2603999999999997e-07
+    },
+    "xkiro/tencent/hy4-preview": {
+      "input_cost_per_token": 5.421000000000001e-07,
+      "output_cost_per_token": 1.62565e-06
+    },
+    "xkiro/x-ai/grok-4.5": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 3e-06
+    },
+    "xkiro/x-ai/grok-4.6": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 3e-06
+    },
+    "xkiro/x-ai/grok-build-0.1": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 1e-06
+    },
+    "xkiro/xiaomi/mimo-v2.5": {
+      "input_cost_per_token": 9.1e-08,
+      "output_cost_per_token": 1.82e-07
+    },
+    "xkiro/xiaomi/mimo-v2.5-pro": {
+      "input_cost_per_token": 2.8275e-07,
+      "output_cost_per_token": 5.655e-07
+    },
+    "xkiro/z-ai/glm-4.5": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 2.2e-06
+    },
+    "xkiro/z-ai/glm-4.5-air": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 1.1e-06
+    },
+    "xkiro/z-ai/glm-4.5-airx": {
+      "input_cost_per_token": 1.1e-06,
+      "output_cost_per_token": 4.5e-06
+    },
+    "xkiro/z-ai/glm-4.5-flash": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 1.1e-06
+    },
+    "xkiro/z-ai/glm-4.5-x": {
+      "input_cost_per_token": 2.2e-06,
+      "output_cost_per_token": 8.900000000000001e-06
+    },
+    "xkiro/z-ai/glm-4.5v": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 1.8000000000000001e-06
+    },
+    "xkiro/z-ai/glm-4.6": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 2.2e-06
+    },
+    "xkiro/z-ai/glm-4.6v": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 9.000000000000001e-07
+    },
+    "xkiro/z-ai/glm-4.6v-flash": {
+      "input_cost_per_token": 4e-08,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "xkiro/z-ai/glm-4.6v-flashx": {
+      "input_cost_per_token": 4e-08,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "xkiro/z-ai/glm-4.7": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 2.2e-06
+    },
+    "xkiro/z-ai/glm-4.7-flash": {
+      "input_cost_per_token": 7e-08,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "xkiro/z-ai/glm-4.7-flashx": {
+      "input_cost_per_token": 7e-08,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "xkiro/z-ai/glm-5": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 3.2000000000000003e-06
+    },
+    "xkiro/z-ai/glm-5-turbo": {
+      "input_cost_per_token": 1.2e-06,
+      "output_cost_per_token": 4e-06
+    },
+    "xkiro/z-ai/glm-5.1": {
+      "input_cost_per_token": 1.4e-06,
+      "output_cost_per_token": 4.4e-06
+    },
+    "xkiro/z-ai/glm-5.2": {
+      "input_cost_per_token": 1.4e-06,
+      "output_cost_per_token": 4.4e-06
+    },
+    "xkiro/z-ai/glm-5.3": {
+      "input_cost_per_token": 1.4e-06,
+      "output_cost_per_token": 4.4e-06
+    },
+    "xkiro/z-ai/glm-5.3-flash": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 5e-07
+    },
+    "xkiro/z-ai/glm-5v-turbo": {
+      "input_cost_per_token": 1.2e-06,
+      "output_cost_per_token": 4e-06
     }
   }
 }

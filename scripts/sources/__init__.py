@@ -14,6 +14,7 @@ from .litellm_cost_map import LiteLLMCostMapSource
 from .openrouter import OpenRouterSource
 from .requesty import RequestySource
 from .together import TogetherSource
+from .xkiro import XkiroSource
 
 ALL_SOURCES: dict[str, type[Source]] = {
     "openrouter": OpenRouterSource,
@@ -23,6 +24,8 @@ ALL_SOURCES: dict[str, type[Source]] = {
     "together": TogetherSource,
     "fireworks": FireworksSource,
     "requesty": RequestySource,
+    # Public catalog: needs no API key, so it also runs in CI.
+    "xkiro": XkiroSource,
     # Active cost probe. Excluded from the default source set because it sends
     # real requests; opt in via free_tier.cost_probe.enabled or --cost-probe.
     "cost_probe": CostProbeSource,

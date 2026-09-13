@@ -57,6 +57,12 @@ BUILTIN = OrderedDict([
         "key_required": True,
         "key_hint": "Create an API key at console.gmicloud.ai → Organization Settings → API Keys (docs: docs.gmicloud.ai/inference-engine). Inference is served from api.gmi-serving.com; the console host is GMI's control plane and serves no /chat/completions.",
     }),
+    ("tokenharbor", {
+        "display": "Token Harbor (multi-vendor gateway)",
+        "base_url": "https://tokenharbor.ai/v1",
+        "key_required": True,
+        "key_hint": "Create an API key at tokenharbor.ai/dashboard/api-keys (Universal Key, format thk_live_...; docs: tokenharbor.ai/docs). Free models carry a ':free' id suffix and never bill the wallet.",
+    }),
 ])
 
 # Fields the wizard copies from a template onto the config entry.
