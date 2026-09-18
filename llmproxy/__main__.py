@@ -115,6 +115,22 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _config_int_from(cfg: dict, key: str, default: int) -> int:
+    """Read an int from a config block, falling back to *default* on any problem.
+
+    Local to this module on purpose: startup must not import server.py just to
+    read one number, and a malformed value should start the proxy on the default
+    rather than refuse to start at all.
+    """
+    try:
+        raw = cfg.get(key, default)
+        if isinstance(raw, bool) or raw is None:
+            return default
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def _gunicorn_worker_tmp_dir() -> str | None:
     """Pick a writable directory for gunicorn's per-worker heartbeat files.
 
@@ -278,7 +294,17 @@ def main() -> None:
             load_config(force_reload=True)
             _run_startup_tasks_once()
 
-        workers = 2
+        # One worker by default, deliberately. Every piece of state the routing
+        # layer depends on — the saturation registry, per-model health scores,
+        # free-tier request and token counters — lives in process memory and is
+        # not shared between workers. With two of them a 429 that cools a
+        # candidate in one worker is invisible to the other, which hits the same
+        # exhausted endpoint on the very next request, and free_limits quotas are
+        # counted twice over so the proxy believes it has roughly double the
+        # headroom it really has. gthread's four threads still provide
+        # concurrency. Operators who front several machines, or who genuinely
+        # want the CPU parallelism and accept the accounting drift, can raise it.
+        workers = max(1, _config_int_from(server_cfg, "workers", 1))
         options = {
             "bind": f"{host}:{port}",
             "workers": workers,
@@ -291,9 +317,16 @@ def main() -> None:
             "post_worker_init": _post_worker_init,
         }
         logging.getLogger("llmproxy").info(
-            "Starting with gunicorn — %s:%d (%d workers x 4 threads)",
+            "Starting with gunicorn — %s:%d (%d worker(s) x 4 threads)",
             host, port, workers,
         )
+        if workers > 1:
+            logging.getLogger("llmproxy").warning(
+                "server.workers=%d: quota, health and saturation state is per-process "
+                "and is NOT shared between workers, so free-tier limits are counted "
+                "per worker and cooldowns do not propagate.",
+                workers,
+            )
         _StandaloneApp(app, options).run()
 
     except ImportError:

@@ -187,9 +187,21 @@ When a request targets a (non-fusion) virtual model, llmproxy:
    reorderings may then run on top without ever dropping a candidate: the
    [request-fit triage](#request-fit-triage-every-free-and-local-virtual) for the
    `*/free` and `*/local` virtuals, and [capability ordering](#capability-aware-routing--failover)
-   when the request forces a capability. Finally, any models listed in
+   when the request needs a capability. Any models listed in
    [`favorite_free_models`](#favorite_free_models) that are present in the pool
-   are promoted to the front in ranked order before cycling begins.
+   are then promoted to the front in ranked order, optionally followed by
+   [free-tier cache affinity](#free_tier_cache_affinity) so one conversation
+   sticks to one model. Last of all,
+   [context-window fit](#context_aware_routing) sinks any candidate whose window
+   is known to be too small for the request — a no-op, and literally the same
+   list object, whenever nothing is known to overflow.
+
+   Capability ordering is **three-valued**: a model tagged for the capability
+   ranks first, a model with *no* capability metadata second, and one whose
+   metadata says it lacks the capability last. Tag coverage in the shipped
+   sidecar is partial and the untagged remainder includes some of the strongest
+   tool-callers in the free pool, so treating "unknown" as "incapable" would bury
+   exactly the models you want.
 3. **Tries each candidate in order**, returning the first **usable** response.
 
 A candidate is considered to have **failed** — so llmproxy moves on to the next
@@ -211,12 +223,36 @@ one — in any of these cases:
   chunk before committing; if the stream opens with an `error` event the candidate
   fails over. The peeked chunk is replayed verbatim once a healthy stream is
   committed, so the first token is never dropped.
+- **Stream that produces no output** *(streaming, opt-in)* — with
+  [`server.stream_commit_on_content`](#stream_commit_on_content) the pre-commit
+  check widens from the first non-empty chunk to the first chunk carrying real
+  output, so a provider that accepts the request, emits a role preamble and then
+  errors or closes fails over instead of corrupting the turn.
 
-**Transient failures get one retry first.** Before moving to the next candidate, a
-*transient* failure (HTTP 429 / 5xx, a timeout, or a connection error) is retried
-on the **same** candidate once with a short backoff — a brief blip on an otherwise
-healthy model won't cost you a needless failover. Non-transient errors (400/401/404
-and the like) fail straight over, since a retry wouldn't help.
+**Transient failures fail over immediately; only the last candidate retries.**
+While alternatives remain, a *transient* failure (HTTP 429 / 5xx, a timeout, or a
+connection error) moves straight to the next candidate — one attempt, no backoff —
+so a rate-limited or flaky upstream never stalls the pipeline when another model
+could answer now. The **last** candidate has nowhere to fail over to, so it alone
+gets a same-candidate retry with a short backoff. Non-transient errors
+(400/401/404 and the like) always fail straight over, since a retry wouldn't help.
+
+**The whole walk can be time-boxed.** By default there is no overall deadline: the
+per-candidate timeout is 60s, so a long pool of slow upstreams can keep a client
+waiting for minutes. Set [`server.cycle_deadline_seconds`](#cycle_deadline_seconds)
+to bound the candidate walk as a whole.
+
+**A stream that dies after it starts is not silent.** Once bytes have reached the
+client there is nothing to fail over to, but the stream is still terminated
+properly — an `error` frame, a final chunk carrying `finish_reason`, and `[DONE]` —
+so a client accumulating a partial `tool_calls` argument string learns that no more
+fragments are coming instead of hanging or parsing truncated JSON. The provider is
+also **demoted** for it: a candidate is credited with a success when its stream
+commits, and a later mid-stream death revokes that credit, so an upstream that
+reliably dies four fifths of the way through a generation stops being ranked first.
+Client disconnects are excluded, so pressing Ctrl-C never demotes a healthy model.
+To fail over from a mid-generation death outright, see
+[`server.stream_buffer_full`](#stream_buffer_full).
 
 **Quota errors are remembered.** A 402/429 (or a quota-signalling error body)
 doesn't just fail over within the request — it cools that account/model for a
@@ -633,10 +669,11 @@ which dialect a client or upstream uses.
 | Surface | Endpoints | Notes |
 | --- | --- | --- |
 | **OpenAI** | `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/embeddings` | The original surface. Streaming via SSE. `/v1/completions` forwards to the provider's own legacy endpoint and, when the upstream returns 404 (or the model is virtual/streamed), transparently falls back to `chat/completions` — the `prompt` is wrapped as a user message and the reply is rendered back as `text_completion`. |
+| **OpenAI Responses** | `POST /v1/responses`, `GET`/`DELETE /v1/responses/{id}` | The shape newer OpenAI-ecosystem agents speak. `input` items, `instructions`, flat `tools`, `max_output_tokens`, `reasoning.effort` and `text.format` all map onto the canonical chat form; the reply is rendered back as a `response` object with an `output` array, and streaming emits the typed event vocabulary (`response.created`, `response.output_text.delta`, `response.function_call_arguments.delta`, `response.completed`, …). See [Responses API](#responses-api). |
 | **Anthropic** | `POST /v1/messages`, `POST /v1/messages/count_tokens` | Point an Anthropic SDK at llmproxy. Streaming emits the Anthropic event format (`message_start`, `content_block_delta`, …). |
 | **Gemini** | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens` | Point the Google GenAI SDK at llmproxy. The model id rides in the URL path; streaming emits Gemini `GenerateContentResponse` SSE chunks. |
 
-All three surfaces accept any model id llmproxy knows — direct (`provider__model`) **and**
+All four surfaces accept any model id llmproxy knows — direct (`provider__model`) **and**
 the virtual models (`llmproxy/free`, `llmproxy/deep`, …). So an Anthropic SDK call
 with `model="llmproxy/free"` is routed and load-balanced exactly like the OpenAI path.
 (xAI/Grok, Mistral, Groq, DeepSeek, etc. are OpenAI- and/or Anthropic-compatible, so they
@@ -656,6 +693,72 @@ client.messages.create(model="llmproxy/free", max_tokens=256,
                        messages=[{"role": "user", "content": "hi"}])
 ```
 
+<a name="responses-api"></a>
+### The Responses API (`POST /v1/responses`)
+
+Before this surface existed, a Responses-shaped request fell through to the generic
+`/v1/<anything>` pass-through, which resolves a provider directly and has **no
+cycling engine behind it** — so a virtual model like `llmproxy/free` could not be
+used from a Responses client at all. It now goes through exactly the same pipeline as
+`/v1/chat/completions`: capacity ordering, capability ordering, context fit, quota
+cooldowns and failover all apply.
+
+Three shapes are reconciled:
+
+- **Input.** `input` is a string or a list of items, where an item is a message, a
+  `function_call`, or a `function_call_output`. Chat's flat `messages` list has a slot
+  for each, so the mapping is total. Consecutive `function_call` items collapse onto
+  one assistant message, which is how chat represents parallel tool calls.
+  `instructions` becomes a leading system message, and an `input_image` part keeps its
+  structure so vision routing can still see it.
+- **Output.** A chat completion has one message carrying optional `tool_calls`; a
+  Response has an `output` **array** of `message` and `function_call` items, so one
+  choice fans out to several. `output_text` is provided directly as the SDKs'
+  convenience accessor.
+- **Streaming.** Chat streams homogeneous deltas; Responses streams a typed, ordered
+  lifecycle with a running `sequence_number`. llmproxy emits the full sequence —
+  `response.created`, `response.in_progress`, `response.output_item.added`,
+  `response.content_part.added`, `response.output_text.delta`/`.done`,
+  `response.function_call_arguments.delta`/`.done`, `response.output_item.done`, and
+  `response.completed` (or `response.incomplete` on truncation).
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="unused")
+
+client.responses.create(
+    model="llmproxy/tools__free",          # any virtual model works
+    instructions="You are a terse coding assistant.",
+    input="Summarize README.md",
+    tools=[{"type": "function", "name": "read_file",
+            "parameters": {"type": "object",
+                           "properties": {"path": {"type": "string"}}}}],
+)
+```
+
+**Tool shape.** Both the flat Responses form (`{"type": "function", "name": ...}`) and
+the nested chat form are accepted. OpenAI's server-side built-ins (`web_search`,
+`file_search`, `code_interpreter`) are **dropped rather than forwarded**: they are run
+by OpenAI's own infrastructure, and nothing behind llmproxy could execute them, so
+passing them through would advertise a capability no upstream in the pool has.
+
+**Statefulness.** `store` and `previous_response_id` work against a bounded
+**in-process** conversation store, and the limits are worth knowing before you rely on
+them: nothing is written to disk, so a restart drops every stored conversation, and a
+second gunicorn worker has its own store (another reason the
+[worker default](#workers) is 1). At most 256 conversations are kept, evicted
+oldest-first. `store: false` opts out.
+
+A `previous_response_id` this process does not hold returns a **400** rather than
+answering without the referenced history — silently dropping most of a conversation
+would produce a confident, wrong reply, which is worse than an explicit error. Clients
+that cannot tolerate that should resend the conversation in `input`, which is fully
+supported and entirely stateless.
+
+`GET /v1/responses/{id}` reports whether a conversation is still known; llmproxy
+stores the transcript rather than rendered response bodies, and says so in the reply
+instead of fabricating one. `DELETE /v1/responses/{id}` forgets it.
+
 ### Outbound — what upstreams can speak (`protocol`)
 
 A provider's optional `"protocol"` field selects how llmproxy talks to it:
@@ -674,8 +777,30 @@ results, and token usage, non-streaming and streaming, for **any inbound × upst
 combination** (e.g. an Anthropic-SDK client can stream from a Gemini upstream).
 
 > Non-OpenAI upstreams advertise their models from `model_filter` (there is no
-> OpenAI-shaped `/v1/models` to discover). Best-effort: provider-specific extras
-> (Anthropic thinking/prompt-caching, Gemini safety settings) are not yet mapped.
+> OpenAI-shaped `/v1/models` to discover). Best-effort: some provider-specific
+> extras (Anthropic thinking, Gemini safety settings) are still not mapped.
+> Prompt caching **is** now carried end to end — see below.
+
+<a name="prompt-caching-passthrough"></a>
+#### Prompt caching (`cache_control`) is preserved
+
+Anthropic marks a cacheable prefix by hanging `cache_control` off the last block it
+should cover. Flattening blocks to a plain string — which every translation path here
+used to do — silently deleted those markers, so a client could place its breakpoints
+perfectly and still be billed uncached, with nothing in the response to say why.
+
+Markers are now carried across the canonical middle on `system`, on message content,
+and on tool definitions, in both directions. The canonical representation puts the
+marker on an OpenAI content *part*, which is the same shape OpenRouter uses, so it
+also survives to an OpenAI-protocol upstream. Structure is only introduced when a
+marker is actually present: an ordinary uncached request still flattens to a plain
+string exactly as before.
+
+`anthropic-beta` is also relayed upstream now (it names features, never credentials),
+since prompt caching was historically gated behind it. Cache activity comes back in
+`usage` as `prompt_tokens_details.cached_tokens` (the read side, OpenAI's standard
+field) and `cache_creation_input_tokens` (the write side, which has no OpenAI
+equivalent) — without which a caching setup is impossible to verify.
 
 ## Configuration
 
@@ -769,7 +894,18 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "stream_include_usage": true,
     "allow_implicit_paid": false,
     "saturation_cooldown_seconds": 60,
-    "tool_signal_routing": true
+    "tool_signal_routing": true,
+    "workers": 1,
+    "cycle_deadline_seconds": 0,
+    "context_aware_routing": false,
+    "context_safety_factor": 1.3,
+    "context_output_reserve": 4096,
+    "stream_commit_on_content": false,
+    "stream_precommit_max_bytes": 8192,
+    "stream_precommit_max_seconds": 2.0,
+    "stream_buffer_full": false,
+    "stream_buffer_max_bytes": 8388608,
+    "free_tier_cache_affinity": false
   }
 }
 ```
@@ -1048,6 +1184,143 @@ so the header alone distinguishes *chosen* from *settled for*. When a tier was
 adjusted by tool signals, the log line also records the evidence behind it —
 severity, turn depth, recent read/write/edit counts and the resulting score —
 rather than just the verdict.
+
+<a name="context_aware_routing"></a>
+### Context-window-aware routing
+
+Per-model context limits used to be parsed only to populate `GET /v1/models` and
+were then discarded, so nothing in routing knew how large a candidate's window
+was. A conversation that outgrew a candidate got a `400 context_length_exceeded`,
+which is non-transient, so it failed straight over to the next candidate — chosen
+with no regard for context, and so failing the same way. A long agentic session
+walked the whole pool and ended on the last `400` or a `503`, which is exactly the
+point at which the work was most valuable.
+
+Set `server.context_aware_routing` to `true` and a further stable reordering runs:
+candidates whose window is **known** to be smaller than the request needs sort last.
+Two properties are deliberate and worth stating, because they are what keep bad
+metadata from turning a working request into a hard failure:
+
+- **It demotes; it never drops.** An oversized candidate is still tried, just last,
+  so a wrong `context_length` costs one wasted attempt rather than a `503`.
+- **Unknown is neutral, not a demotion.** A model with no reported window keeps its
+  incoming position rather than sinking alongside one known to be too small.
+
+Windows are discovered from each provider's `/models` listing. Several
+OpenAI-compatible gateways report their *output* cap in `context_length`, so a
+top-level `model_context` map overrides discovery for any model, keyed by either a
+bare upstream id or a qualified `provider/model` one:
+
+```json
+"model_context": {
+  "groq/llama-3.3-70b-versatile": 131072,
+  "some-mislabelled-model": 8192
+}
+```
+
+The request size is estimated over the message text **plus** the serialized `tools`
+array and any assistant `tool_calls` arguments — the parts an agentic conversation
+actually spends its window on, and which the reasoning-tier estimator ignores. That
+estimate is inflated by `server.context_safety_factor` (default `1.3`, since code
+and JSON tokenize nearer 3 chars/token than 4) and `server.context_output_reserve`
+tokens (default `4096`) are held back for the completion, so a model that only just
+fits the prompt is not chosen and then made to fail on its own output. The margin is
+asymmetric on purpose: overestimating costs one suboptimal but working pick, while
+underestimating costs a `400` and a walk down the pool.
+
+When the pass fires it appends `context_fit=~Ntok` to `X-LLMProxy-Route-Reason`.
+
+<a name="cycle_deadline_seconds"></a>
+### `server.cycle_deadline_seconds` — bound the whole candidate walk
+
+`_VIRTUAL_CANDIDATE_TIMEOUT` is 60 seconds **per candidate**, and there is no cap on
+how many candidates a virtual model may have. A run of slow or hanging upstreams can
+therefore keep a client waiting for minutes, and most agents give up first — which
+presents as "the proxy is broken" rather than "the pool is slow".
+
+Set `server.cycle_deadline_seconds` to a wall-clock budget for the candidate walk.
+`0` (the default) disables it and preserves the historical behavior. Three details:
+
+- The **first candidate always gets its attempt**, so a tight budget can never
+  return a `503` with no upstream call made.
+- Each candidate's timeout is shrunk to the remaining budget, and same-candidate
+  retries (including the budget escalation for a reasoning model that spent its
+  whole token budget thinking) are skipped once there is no room for them.
+- The deadline bounds **time-to-commit, not stream duration**. Once a stream is
+  committed it runs for as long as the model talks; a twenty-minute legitimate
+  generation is never cut off by a routing budget.
+
+Pick a value comfortably below your client's read timeout and above 60s, so at least
+one full candidate attempt always fits. `240` is a reasonable starting point.
+
+<a name="stream_commit_on_content"></a>
+### `server.stream_commit_on_content` — widen the pre-commit window
+
+By default llmproxy commits to a stream as soon as the first non-empty chunk arrives
+and is not an error. Many providers emit an SSE role preamble
+(`delta: {"role": "assistant"}`) before anything else, so surviving that check does
+not mean the generation works — and once committed, a failure cannot be failed over.
+
+With this enabled, llmproxy buffers until either the first chunk carrying **real
+output** (visible text, a tool-call fragment, or a refusal) or a bounded budget
+(`server.stream_precommit_max_bytes`, default 8192;
+`server.stream_precommit_max_seconds`, default 2.0) is exhausted. Inside that window
+nothing has reached the client, so a failure fails over cleanly; on commit the whole
+buffer is replayed verbatim, so no token is lost. A stream that *ends* inside the
+window having produced no output is also treated as a failure — the streaming
+counterpart of the non-streaming "200 with an unusable body" check.
+
+The cost is that time-to-first-token rises by up to `stream_precommit_max_seconds`
+for a healthy but slow upstream, which is why it is off by default.
+
+<a name="stream_buffer_full"></a>
+### `server.stream_buffer_full` — true end-to-end streaming failover
+
+The pre-commit window narrows the unprotected window; it does not close it. A
+provider that dies at token 500 of 2000 has already sent the client 500 tokens, and
+no proxy can un-send them.
+
+`server.stream_buffer_full` closes it, by declining to stream incrementally at all:
+each candidate's entire response is read and validated before the client sees a
+byte, so a mid-generation death is failed over exactly like a `500`. The response is
+then replayed from memory as a normal SSE stream, so the client still speaks
+streaming and needs no changes.
+
+The trade is real and worth being explicit about: **time-to-first-token becomes
+time-to-last-token.** For an interactive chat UI that is the wrong choice. For a
+tool-calling coding agent, which cannot act on half a tool call anyway and mostly
+renders a turn once it is complete, it is frequently the right one.
+`server.stream_buffer_max_bytes` (default 8 MiB) caps the buffer; past it the
+response commits and the remainder streams incrementally as usual.
+
+<a name="free_tier_cache_affinity"></a>
+### `server.free_tier_cache_affinity` — keep one conversation on one free model
+
+[Prompt-cache affinity](#prompt-cache-affinity--keeping-a-conversation-on-one-upstream)
+is deliberately *not* applied to free-tier ordering, because spreading load across
+quotas is the entire point of that tier.
+
+That default is wrong for a single-user coding agent. There, consecutive turns
+landing on different models means different tool-calling conventions and different
+instruction-following *inside one task*, and the load being spread is one person's.
+Enabling this applies the same rendezvous-hashed affinity to model choice within
+free pools, so a conversation sticks to one model for as long as it keeps answering.
+As with every ordering pass it only reorders, so failover is unaffected, and
+`favorite_free_models` still outranks it.
+
+<a name="workers"></a>
+### `server.workers` — why the default is 1
+
+Quota counters, health scores and the saturation registry all live in process
+memory and are **not shared between workers**. With more than one, a `429` that
+cools a candidate in one worker is invisible to the others, which hit the same
+exhausted endpoint on the very next request, and `free_limits` quotas are counted
+per worker — so the proxy believes it has roughly *N* times the headroom it really
+has and overruns the provider's limits.
+
+The default is therefore `1` worker with 4 gthread threads, which still serves
+concurrent requests. Raise `server.workers` only if you want the CPU parallelism and
+accept the accounting drift; llmproxy logs a warning at startup when you do.
 
 <a name="allow_implicit_paid"></a>
 ### `server.allow_implicit_paid` — keep cost-avoiding routes free
@@ -1750,7 +2023,8 @@ different:
 
 | File                       | What it is                                                                     |
 |----------------------------|--------------------------------------------------------------------------------|
-| `tests/`                   | The pytest unit/integration suite (run with `pytest`). New as of this release. |
+| `tests/`                   | The pytest unit/integration suite (run with `pytest`). Fully offline — every upstream is stubbed. |
+| `test.sh`                  | Runs the offline suite, then smoke-tests a **running** server with curl.        |
 | `llmproxy_test_client.py`  | Live integration test client. Talks to a running llmproxy over HTTP.           |
 | `test_tui.py`              | Interactive chat TUI for hand-driving the proxy (despite the misleading name). |
 
@@ -1762,12 +2036,29 @@ pytest                                  # run everything
 pytest --cov=llmproxy --cov=scripts     # with coverage
 pytest tests/test_scraper                # just the scraper tests
 ruff check llmproxy scripts tests        # lint
+./test.sh                               # offline suite, then live curl checks
+UNIT_ONLY=1 ./test.sh                   # offline suite only (no server needed)
+SKIP_UNIT=1 ./test.sh                   # live checks only
 ```
+
+The suites covering routing and streaming behavior are worth knowing by name,
+because each was written around a failure mode rather than around a function:
+
+| Suite | Covers |
+| --- | --- |
+| `tests/test_cycling_robustness.py` | The core failover classes: 200-with-error bodies, empty completions, forced-capability misses, quota cooldowns, route headers. |
+| `tests/test_stream_hardening.py` | Terminal frames and health demotion on a mid-stream death, the identity fast path's status check, the pre-commit window, whole-response buffering, and the cycle deadline. Each gated behavior is asserted **off** by default as well as on. |
+| `tests/test_context_routing.py` | Context-window fit: the demote-never-drop and unknown-is-neutral invariants, the `model_context` override, and the discovery cache. |
+| `tests/test_capability_states.py` | Three-valued capability ordering, `cache_control` round-tripping, the free-tier affinity switch, and the worker default. |
+| `tests/test_responses_dialect.py` | The Responses API: input-item mapping, output fan-out, the typed streaming events, and the conversation store. |
 
 CI runs the same checks on every push and pull request — see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml). It runs:
-- `pytest` across Python 3.11 and 3.12,
+- `pytest` across Python 3.11 and 3.12 (new files under `tests/` are collected
+  automatically via the `testpaths` setting in `pyproject.toml`),
 - `ruff` lint,
+- `bash -n test.sh`, since that script ships with the repo and is a documented
+  entry point but is never executed in CI (it needs a live server),
 - a guard that fails the build if `config.example.json` has drifted from
   `llmproxy/providers.json` (regenerate locally with
   `python scripts/update_free_models.py --regen-config-only`).
@@ -2105,6 +2396,9 @@ All endpoints mirror the OpenAI API.
 | GET    | `/v1/models/<model_id>` | Single model lookup                       |
 | POST   | `/v1/chat/completions`  | Chat completions (streaming supported)    |
 | POST   | `/v1/completions`       | Legacy text completions (chat fallback)   |
+| POST   | `/v1/responses`         | Responses API (streaming supported)       |
+| GET    | `/v1/responses/<id>`    | Stored-conversation lookup                |
+| DELETE | `/v1/responses/<id>`    | Forget a stored conversation              |
 | POST   | `/v1/embeddings`        | Embeddings                                |
 | *      | `/v1/<anything>`        | Pass-through to upstream (see note below) |
 

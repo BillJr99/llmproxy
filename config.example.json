@@ -822,6 +822,11 @@
     "google/gemma-3-4b-it": [
       "vision"
     ],
+    "cerebras/gpt-oss-120b": [
+      "tools",
+      "reasoning",
+      "json"
+    ],
     "cerebras/llama3.1-8b": [
       "tools",
       "json"
