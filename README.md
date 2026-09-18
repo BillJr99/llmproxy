@@ -935,9 +935,7 @@ overrides**, for providers that don't expose a standard OpenAI
 
 - **`models_url`** — fetch the model list from this exact URL instead of
   `<base_url>/models`. Use it when the catalog lives at a different path than
-  the chat endpoint. For example, GitHub Models serves chat at
-  `https://models.github.ai/inference/chat/completions` but its catalog at
-  `https://models.github.ai/catalog/models`, and Cloudflare Workers AI has no
+  the chat endpoint. For example, Cloudflare Workers AI has no
   `GET /v1/models` — its catalog is at
   `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/models/search`.
 - **`models_id_field`** — the field on each returned model object that holds the
@@ -951,8 +949,8 @@ overrides**, for providers that don't expose a standard OpenAI
 
 These overrides are part of the provider templates in
 [`llmproxy/providers.json`](llmproxy/providers.json), so the setup wizard writes
-them automatically when you add GitHub Models or Cloudflare Workers AI (with the
-`{account_id}` placeholder substituted into `models_url`).
+them automatically when you add a provider such as Cloudflare Workers AI (with
+the `{account_id}` placeholder substituted into `models_url`).
 
 `believed_free` is an **optional** top-level array of model names that the
 `free` virtual model should include even when their ID doesn't contain the
@@ -1611,7 +1609,6 @@ The wizard currently offers ready-made templates for these providers:
 | Nvidia NIM                                 | `nvidia`                | `https://integrate.api.nvidia.com/v1`                                          |
 | Google Gemini (via OpenAI-compat endpoint) | `google`                | `https://generativelanguage.googleapis.com/v1beta/openai`                      |
 | Cerebras                                   | `cerebras`              | `https://api.cerebras.ai/v1`                                                   |
-| GitHub Models                              | `github`                | `https://models.github.ai/inference`                                           |
 | SambaNova Cloud                            | `sambanova`             | `https://api.sambanova.ai/v1`                                                  |
 | Mistral AI                                 | `mistral`               | `https://api.mistral.ai/v1`                                                    |
 | Groq                                       | `groq`                  | `https://api.groq.com/openai/v1`                                               |
@@ -1662,6 +1659,18 @@ The wizard currently offers ready-made templates for these providers:
 > local Ollama instance), use the manual "Add / edit a provider" option in the
 > wizard.
 
+> **Retired providers.** **GitHub Models** (`github`,
+> `https://models.github.ai/inference`) was retired by GitHub on 30 July 2026 and
+> has been removed from the bundled templates. Its catalog and inference
+> endpoints now return HTTP 410, and there is no drop-in replacement: GitHub
+> directs users to Microsoft (Azure) AI Foundry or GitHub Copilot, neither of
+> which offers an OpenAI-compatible free tier. If an existing `config.json` still
+> carries a `github` provider block, it is inert — the catalog fetch returns
+> nothing, so no candidates enter the rotation — but you can remove it, along
+> with any `github/`-prefixed entries under `believed_free`, `model_reasoning`,
+> `model_capabilities` and `free_limits`, to stop the recurring
+> `/models` fetch warning in the log.
+
 Any OpenAI-compatible provider can also be added manually via the "Add / edit a
 provider (manual)" menu option.
 
@@ -1697,16 +1706,14 @@ own copy of the newest templates), it offers to add it there and to
 >
 > 1. **Point discovery at the real catalog** with the `models_url` /
 >    `models_id_field` / `models_keep_task` overrides (see
->    [Schema](#schema)). The bundled templates for **GitHub Models** and
->    **Cloudflare Workers AI** already do this, so their models are discovered
->    live.
+>    [Schema](#schema)). The bundled template for **Cloudflare Workers AI**
+>    already does this, so its models are discovered live.
 > 2. **Synthesize from `model_filter`** — when no working catalog endpoint
 >    exists, set `model_filter` to the upstream ids you want and llmproxy
 >    advertises those when the `/models` fetch fails.
 >
 > | Provider | Default `/models` symptom | Handling |
 > |---|---|---|
-> | **GitHub Models** | HTTP 404 — catalog is at `/catalog/models`, not `/inference/models` | `models_url` → `https://models.github.ai/catalog/models` |
 > | **Cloudflare Workers AI** | HTTP 405 — no `GET /v1/models` | `models_url` → `…/ai/models/search`, `models_id_field: "name"`, `models_keep_task: "Text Generation"` |
 > | **Cloudflare AI Gateway** | HTTP 401 — gateway proxies inference only, no catalog | `model_filter` (synthesized); a 401 also means the API token is missing/under-scoped for Workers AI |
 > | **Hugging Face Inference** | Returns HTML rather than JSON for `/v1/models` | `model_filter` (synthesized) |

@@ -36,8 +36,6 @@ PROVIDER_ALIASES: dict[str, str] = {
     "google gemini": "google",
     "groq": "groq",
     "cerebras": "cerebras",
-    "github models": "github",
-    "github": "github",
     "sambanova": "sambanova",
     "sambanova cloud": "sambanova",
     "mistral": "mistral",
