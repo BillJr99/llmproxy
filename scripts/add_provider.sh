@@ -63,6 +63,12 @@ BUILTIN = OrderedDict([
         "key_required": True,
         "key_hint": "Create an API key at tokenharbor.ai/dashboard/api-keys (Universal Key, format thk_live_...; docs: tokenharbor.ai/docs). Free models carry a ':free' id suffix and never bill the wallet.",
     }),
+    ("atria-asi", {
+        "display": "Atria ASI",
+        "base_url": "https://api.atria-asi.ai/v1",
+        "key_required": True,
+        "key_hint": "Create an API key at api.atria-asi.ai/console/keys (Google sign-in). Keys look like atr_... (docs: api.atria-asi.ai/docs)",
+    }),
 ])
 
 # Fields the wizard copies from a template onto the config entry.

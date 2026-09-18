@@ -130,6 +130,11 @@
       "api_key": "...",
       "model_filter": null
     },
+    "atria-asi": {
+      "base_url": "https://api.atria-asi.ai/v1",
+      "api_key": "atr_...",
+      "model_filter": null
+    },
     "huggingface": {
       "base_url": "https://router.huggingface.co/v1",
       "api_key": "hf_...",
@@ -785,6 +790,7 @@
     "xkiro/sensenova/sensenova-6.8-flash-lite": "exploratory",
     "moonshot/kimi-latest": "standard",
     "minimax/MiniMax-M1": "standard",
+    "atria-asi/Atria-Dawn-Preview": "deep",
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": "standard",
     "xai/grok-3": "deep",
     "xai/grok-3-mini": "standard",
