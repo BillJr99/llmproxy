@@ -76,7 +76,6 @@ _PLACEHOLDER_KEYS: dict[str, str] = {
     "google": "AIza...",
     "groq": "gsk_...",
     "cerebras": "csk-...",
-    "github": "ghp_...",
     "huggingface": "hf_...",
     "nvidia": "nvapi-...",
     "xai": "xai-...",
@@ -509,7 +508,7 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         }
         # Carry forward optional model-discovery overrides (non-standard /models
         # path, id field, or task filter) so the example documents the working
-        # config for providers like GitHub Models and Cloudflare Workers AI.
+        # config for providers like Cloudflare Workers AI.
         for field in ("models_url", "models_id_field", "models_keep_task", "protocol"):
             if prov.get(field):
                 block[field] = prov[field]
@@ -671,7 +670,7 @@ def _write_sidecar_fallback(sidecar: dict, config_path: str | None) -> None:
 # ---------------------------------------------------------------------------
 
 def _provider_of(model_id: str) -> str:
-    """Provider key for a qualified model id ('github/openai/gpt-4o' -> 'github')."""
+    """Provider key for a qualified model id ('groq/llama-3.3-70b' -> 'groq')."""
     return model_id.split("/", 1)[0]
 
 

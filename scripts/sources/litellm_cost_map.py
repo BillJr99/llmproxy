@@ -63,7 +63,6 @@ PROVIDER_ALIASES: dict[str, str] = {
     "ai21": "ai21",
     "sambanova": "sambanova",
     "huggingface": "huggingface",
-    "github": "github",
     "cloudflare": "cloudflare-workers",
     "together_ai": "together",
     "together": "together",

@@ -245,7 +245,7 @@ def test_fetch_failure_logs_status_and_body_without_secrets(server, monkeypatch,
 
     with caplog.at_level("WARNING"):
         models = server._fetch_provider_models(
-            "github",
+            "someprov",
             {"base_url": "http://upstream.example/inference", "api_key": "super-secret-token"},
             timeout=1,
         )
@@ -262,30 +262,36 @@ def test_fetch_failure_logs_status_and_body_without_secrets(server, monkeypatch,
 
 def test_models_url_override_is_used_for_fetch(server, monkeypatch):
     """When a provider sets models_url, that URL is fetched instead of
-    <base_url>/models (e.g. GitHub serves its catalog at a different path)."""
+    <base_url>/models — some upstreams serve chat and their catalog from
+    different paths.
+
+    Deliberately synthetic: this covers the override itself (plus bare-array
+    catalog parsing and the vendor/model display-id shape), so it must not be
+    pinned to any one provider's continued existence.
+    """
     requested = {}
 
     class _R:
         status_code = 200
         def raise_for_status(self): pass
-        def json(self): return [{"id": "openai/gpt-4.1", "object": "model"}]
+        def json(self): return [{"id": "vendor/model-x", "object": "model"}]
     def _fake_get(url, *a, **kw):
         requested["url"] = url
         return _R()
     monkeypatch.setattr(server.requests, "get", _fake_get)
 
     models = server._fetch_provider_models(
-        "github",
+        "someprov",
         {
-            "base_url": "https://models.github.ai/inference",
+            "base_url": "http://up.example/v1",
             "api_key": "x",
-            "models_url": "https://models.github.ai/catalog/models",
+            "models_url": "http://up.example/catalog/models",
         },
         timeout=1,
     )
-    assert requested["url"] == "https://models.github.ai/catalog/models"
-    assert models and models[0]["_upstream_id"] == "openai/gpt-4.1"
-    assert models[0]["id"] == "github__openai/gpt-4.1"
+    assert requested["url"] == "http://up.example/catalog/models"
+    assert models and models[0]["_upstream_id"] == "vendor/model-x"
+    assert models[0]["id"] == "someprov__vendor/model-x"
 
 
 def test_models_id_field_and_keep_task_adapt_cloudflare_shape(server, monkeypatch):

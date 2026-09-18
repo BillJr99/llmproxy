@@ -18,7 +18,6 @@ from .base import DocsScraperBase
 from .cerebras import CerebrasDocs
 from .cloudflare import CloudflareWorkersDocs
 from .cohere import CohereDocs
-from .github_models import GitHubModelsDocs
 from .google import GoogleDocs
 from .groq import GroqDocs
 from .huggingface import HuggingFaceDocs
@@ -32,7 +31,6 @@ DOCS_SOURCES: list[type[DocsScraperBase]] = [
     CerebrasDocs,
     CohereDocs,
     SambaNovaDocs,
-    GitHubModelsDocs,
     CloudflareWorkersDocs,
     HuggingFaceDocs,
     TokenHarborDocs,

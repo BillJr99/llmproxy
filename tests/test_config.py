@@ -120,18 +120,6 @@ def test_get_provider_helper():
     assert config_mod.get_provider(cfg, "missing") is None
 
 
-def test_heal_adds_models_url_for_github():
-    cfg = {"providers": {"github": {
-        "base_url": "https://models.github.ai/inference",
-        "api_key": "ghp_x",
-        "model_filter": None,
-    }}}
-    cfg, changed, messages = config_mod.heal_config(cfg)
-    assert changed is True
-    assert cfg["providers"]["github"]["models_url"] == "https://models.github.ai/catalog/models"
-    assert any(level == "info" for level, _ in messages)
-
-
 def test_heal_substitutes_account_id_for_cloudflare():
     cfg = {"providers": {"cloudflare-workers": {
         "base_url": "https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1",
@@ -149,13 +137,15 @@ def test_heal_substitutes_account_id_for_cloudflare():
 
 
 def test_heal_matches_renamed_provider_by_base_url():
-    cfg = {"providers": {"my-gh": {
-        "base_url": "https://models.github.ai/inference",
-        "api_key": "ghp_x",
+    cfg = {"providers": {"my-cf": {
+        "base_url": "https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1",
+        "api_key": "k",
     }}}
     cfg, changed, _ = config_mod.heal_config(cfg)
     assert changed is True
-    assert cfg["providers"]["my-gh"]["models_url"] == "https://models.github.ai/catalog/models"
+    assert cfg["providers"]["my-cf"]["models_url"] == (
+        "https://api.cloudflare.com/client/v4/accounts/abc123/ai/models/search?per_page=100"
+    )
 
 
 def test_heal_warns_when_account_id_unrecoverable():
@@ -174,20 +164,22 @@ def test_heal_warns_when_account_id_unrecoverable():
 
 
 def test_heal_never_overwrites_existing_field():
-    cfg = {"providers": {"github": {
-        "base_url": "https://models.github.ai/inference",
-        "api_key": "ghp_x",
+    cfg = {"providers": {"cloudflare-workers": {
+        "base_url": "https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1",
+        "api_key": "k",
         "models_url": "https://my.custom/models",
+        "models_id_field": "name",
+        "models_keep_task": "Text Generation",
     }}}
     cfg, changed, _ = config_mod.heal_config(cfg)
     assert changed is False
-    assert cfg["providers"]["github"]["models_url"] == "https://my.custom/models"
+    assert cfg["providers"]["cloudflare-workers"]["models_url"] == "https://my.custom/models"
 
 
 def test_heal_is_idempotent():
-    cfg = {"providers": {"github": {
-        "base_url": "https://models.github.ai/inference",
-        "api_key": "ghp_x",
+    cfg = {"providers": {"cloudflare-workers": {
+        "base_url": "https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1",
+        "api_key": "k",
     }}}
     cfg, changed1, _ = config_mod.heal_config(cfg)
     assert changed1 is True

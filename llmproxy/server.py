@@ -1123,10 +1123,9 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
     """
     base_url = provider_base_url(provider_cfg)
     # Most providers list models at <base_url>/models. A few expose the catalog
-    # at a different path entirely (e.g. GitHub Models serves chat at
-    # /inference/chat/completions but the catalog at /catalog/models; Cloudflare
-    # Workers AI has no GET /v1/models and lists at /ai/models/search). Allow a
-    # per-provider override so those upstreams can still be discovered.
+    # at a different path entirely (e.g. Cloudflare Workers AI has no
+    # GET /v1/models and lists at /ai/models/search). Allow a per-provider
+    # override so those upstreams can still be discovered.
     url = resolve_env_refs(provider_cfg.get("models_url")) or f"{base_url}/models"
     # Field on each model object that carries the upstream model id. Defaults to
     # the OpenAI "id"; Cloudflare's /ai/models/search puts the usable id (the
