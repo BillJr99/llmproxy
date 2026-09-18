@@ -11,6 +11,12 @@
 #   ./test.sh http://localhost:9000        # custom base (no /v1 suffix)
 #   BASE_URL=http://host:8080 ./test.sh
 #   LLMPROXY_API_KEY=sk-... ./test.sh      # send Authorization: Bearer ...
+#   SKIP_UNIT=1 ./test.sh                  # live checks only, no pytest
+#   UNIT_ONLY=1 ./test.sh                  # offline unit tests only, no server
+#
+# Runs the offline pytest suite first (the same one CI runs) and then the live
+# curl checks, so a single invocation covers both. The unit stage is skipped
+# automatically when pytest is not installed.
 #
 # Requirements: curl. jq is optional but gives richer assertions.
 #
@@ -39,6 +45,28 @@ hdr()  { echo; echo "${CYN}== $1 ==${RST}"; }
 HAVE_JQ=0; command -v jq >/dev/null 2>&1 && HAVE_JQ=1
 command -v curl >/dev/null 2>&1 || { echo "curl is required"; exit 2; }
 [ "$HAVE_JQ" -eq 0 ] && echo "${YEL}note:${RST} jq not found — assertions fall back to grep."
+
+# ── offline unit tests (same suite CI runs) ─────────────────────────────────
+# These need no running server, so they run first: a failure here explains a
+# live failure below far better than the other way round.
+if [ "${SKIP_UNIT:-0}" != "1" ]; then
+  hdr "Offline unit tests (pytest)"
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'import pytest' >/dev/null 2>&1; then
+    if python3 -m pytest tests/ -q 2>&1 | tail -20; then
+      pass "pytest suite"
+    else
+      fail "pytest suite"
+    fi
+  else
+    skip "pytest not installed (pip install -r requirements-dev.txt)"
+  fi
+fi
+[ "${UNIT_ONLY:-0}" = "1" ] && {
+  hdr "Summary"
+  echo "  ${GRN}${PASS} passed${RST}, ${RED}${FAIL} failed${RST}, ${YEL}${WARN} warned${RST}, ${DIM}${SKIP} skipped${RST}"
+  [ "$FAIL" -eq 0 ] || exit 1
+  exit 0
+}
 
 BODY="$(mktemp)"; trap 'rm -f "$BODY"' EXIT
 AUTH=(); [ -n "$API_KEY" ] && AUTH=(-H "Authorization: Bearer ${API_KEY}")
@@ -370,6 +398,61 @@ else
 
   code=$(req POST /v1/chat/completions "{\"model\":\"llmproxy/loadbalanced\",\"reasoning_effort\":\"high\",\"messages\":[{\"role\":\"user\",\"content\":\"Think carefully, then answer: what is 17*23?\"}],\"max_tokens\":64}")
   ok2xx "$code" && pass "think-hard prompt → $code" || warn "think-hard prompt → $code"
+fi
+
+# ── Responses API surface ───────────────────────────────────────────────────
+hdr "Responses API (/v1/responses)"
+RESP_MODEL=""
+has_model llmproxy/free && RESP_MODEL="llmproxy/free"
+[ -z "$RESP_MODEL" ] && has_model llmproxy/loadbalanced && RESP_MODEL="llmproxy/loadbalanced"
+if [ -z "$RESP_MODEL" ]; then
+  skip "no virtual model advertised to route a Responses request through"
+else
+  # Plain turn: the point is that a Responses-shaped request reaches the
+  # virtual-model cycling engine at all, which it could not before this route.
+  code=$(req POST /v1/responses "{\"model\":\"$RESP_MODEL\",\"input\":\"Say hi.\",\"max_output_tokens\":32}")
+  if ok2xx "$code"; then
+    obj=$(jqr '.object'); text=$(jqr '.output_text')
+    if [ "$obj" = "response" ]; then
+      pass "POST /v1/responses → $code ${DIM}(output_text: ${text:0:40})${RST}"
+    else
+      fail "POST /v1/responses → $code but object=$obj (expected 'response')"
+    fi
+    kind=$(jqr '.output[0].type')
+    [ "$kind" = "message" ] && pass "output[0].type = message" || warn "output[0].type = ${kind:-?}"
+    itok=$(jqr '.usage.input_tokens')
+    [ -n "$itok" ] && [ "$itok" != "null" ] && pass "usage uses Responses counter names" \
+      || warn "no usage counters reported"
+  else
+    fail "POST /v1/responses → $code"
+  fi
+
+  # Instructions + tools: exercises the flat-tool and system-prompt mapping.
+  code=$(req POST /v1/responses "{\"model\":\"$RESP_MODEL\",\"instructions\":\"You are terse.\",\"input\":\"What is 2+2?\",\"max_output_tokens\":32,\"tools\":[{\"type\":\"function\",\"name\":\"calc\",\"description\":\"do math\",\"parameters\":{\"type\":\"object\",\"properties\":{\"e\":{\"type\":\"string\"}}}}]}")
+  ok2xx "$code" && pass "instructions + flat tools accepted → $code" || warn "instructions + tools → $code"
+
+  # Streaming: the typed event vocabulary, not chat chunks.
+  SSE="$(mktemp)"
+  curl -sS -N -o "$SSE" -X POST "${BASE_URL}/v1/responses" \
+    -H 'Content-Type: application/json' "${AUTH[@]}" \
+    -d "{\"model\":\"$RESP_MODEL\",\"input\":\"Count to three.\",\"stream\":true,\"max_output_tokens\":32}" \
+    --max-time 60 >/dev/null 2>&1
+  if grep -q '^event: response.created' "$SSE" 2>/dev/null; then
+    pass "streaming emits response.created"
+    grep -q '^event: response.output_text.delta' "$SSE" && pass "streaming emits output_text.delta" \
+      || warn "no output_text.delta seen"
+    grep -qE '^event: response\.(completed|incomplete)' "$SSE" && pass "streaming terminates with a final event" \
+      || fail "stream did not terminate with response.completed/incomplete"
+  else
+    warn "no response.created event (model may have refused or timed out)"
+  fi
+  rm -f "$SSE"
+
+  # An unknown previous_response_id must be an explicit 400, never a silent
+  # answer that drops the referenced history.
+  code=$(req POST /v1/responses "{\"model\":\"$RESP_MODEL\",\"previous_response_id\":\"resp_definitely_missing\",\"input\":\"hi\"}")
+  [ "$code" = "400" ] && pass "unknown previous_response_id → 400" \
+    || fail "unknown previous_response_id → $code (expected 400)"
 fi
 
 # ── summary ─────────────────────────────────────────────────────────────────

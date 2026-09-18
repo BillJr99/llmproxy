@@ -11,6 +11,7 @@ from . import (
     anthropic,  # noqa: F401,E402
     gemini,  # noqa: F401,E402
     openai,  # noqa: F401,E402
+    responses,  # noqa: F401,E402
 )
 from .base import (  # noqa: F401
     InboundAdapter,

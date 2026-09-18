@@ -98,6 +98,7 @@ from .config import (
     save_config,
 )
 from .dialects import get_inbound, get_outbound
+from .dialects.responses import UnknownPreviousResponse
 from .signals import (
     SOURCE_NEUTRAL,
     extract_tool_signals,
@@ -243,6 +244,16 @@ _LOADBALANCED_MODELS: frozenset[str] = frozenset({
 # Always access under _model_route_cache_lock.
 _model_route_cache: dict[str, tuple[str, str]] = {}
 _model_route_cache_lock = threading.Lock()
+
+# Per-model context windows discovered from provider /models listings, keyed by
+# lowercased "provider/upstream_id". Kept beside the route cache rather than
+# folded into its tuple: the route cache is dual-keyed and unpacked as a 2-tuple
+# in roughly twenty places plus six test modules, while the ordering passes that
+# need context have already lost the proxy_id and hold only
+# (provider, cfg, upstream_id) — so the qualified key is the natural shape here.
+# Rebuilt atomically with the route cache under the SAME lock, so routing and
+# context can never disagree about which models exist.
+_model_context_cache: dict[str, int] = {}
 
 # Cached full model list returned by GET /v1/models.
 # Tuple is (model_list, timestamp).  Protected by _models_list_cache_lock.
@@ -850,6 +861,12 @@ _FORWARDED_REQUEST_HEADERS = {
     "X-Title",
     "User-Agent",
     "X-Request-ID",
+    # Anthropic gates several features behind a beta opt-in header, prompt
+    # caching among them historically. Dropping it meant a client could place
+    # perfectly good cache_control breakpoints and still be billed uncached,
+    # with nothing in the response to say why. The header only ever names
+    # features, never credentials, so relaying it leaks nothing.
+    "anthropic-beta",
 }
 
 
@@ -1315,14 +1332,18 @@ def _rebuild_route_cache(providers_cfg: dict, timeout: int,
                 )
 
     new_cache: dict[str, tuple[str, str]] = {}
+    new_context: dict[str, int] = {}
     for m in all_models:
         route = m.pop("_route", None)
+        window = _coerce_context_length(m.get("context_length"))
         if route:
             # Dual-key on both the canonical "provider__model" id and the advertised
             # "provider/model" form so an inbound id in either form resolves to the
             # exact upstream losslessly (no string-level reverse needed on the hot path).
             new_cache[m["id"]] = route
             new_cache[_display_id(m["id"])] = route
+            if window is not None:
+                new_context[f"{route[0]}/{route[1]}".lower()] = window
 
     with _model_route_cache_lock:
         if only_if_empty and _model_route_cache:
@@ -1334,9 +1355,45 @@ def _rebuild_route_cache(providers_cfg: dict, timeout: int,
             return all_models
         _model_route_cache.clear()
         _model_route_cache.update(new_cache)
+        # Swapped inside the same acquisition as the route cache: a reader must
+        # never see routes from one rebuild and context from another.
+        _model_context_cache.clear()
+        _model_context_cache.update(new_context)
 
-    logger.info("[server:_rebuild_route_cache] %d entries", len(new_cache))
+    logger.info(
+        "[server:_rebuild_route_cache] %d entries (%d with a known context window)",
+        len(new_cache), len(new_context),
+    )
     return all_models
+
+
+def _coerce_context_length(value) -> int | None:
+    """Coerce an upstream ``context_length``/``context_window`` to a positive int.
+
+    Returns None for anything unusable: missing, bool (an int subclass, so it has
+    to be excluded explicitly), zero or negative, or non-numeric. Callers treat
+    None as *unknown*, which is neutral — deliberately, because reading junk as a
+    tiny window would demote a perfectly good model.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _get_model_context_snapshot() -> dict[str, int]:
+    """Point-in-time copy of the discovered per-model context windows.
+
+    Unlike ``_get_route_cache_snapshot`` this never warms the cache: it is only
+    consulted on a path where the route cache has already been read, and an empty
+    map simply means "no context metadata", which every consumer treats as
+    neutral.
+    """
+    with _model_route_cache_lock:
+        return dict(_model_context_cache)
 
 
 def _get_route_cache_snapshot() -> dict[str, tuple[str, str]]:
@@ -2627,20 +2684,129 @@ def _translated_stream_response(
                         yield c
 
                 yield from inbound.render_stream(teed(outbound.parse_stream(raw())))
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
             logger.error("[server:_translated_stream] provider=%s timed out", provider_name)
-            yield b'data: {"error":{"message":"Upstream stream timed out."}}\n\n'
+            _demote_on_mid_stream_failure(provider_name, upstream_model, e, account_id)
+            for frame in _mid_stream_frames(
+                "Upstream stream timed out.", upstream_model, inbound,
+            ):
+                yield frame
         except Exception as e:  # noqa: BLE001
             logger.error("[server:_translated_stream] provider=%s: %s", provider_name, e)
             traceback.print_exc()
+            _demote_on_mid_stream_failure(provider_name, upstream_model, e, account_id)
             msg = str(e).replace('"', "'")
-            yield f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
+            for frame in _mid_stream_frames(
+                f"Upstream error: {msg}", upstream_model, inbound,
+            ):
+                yield frame
         finally:
             if config is not None and upstream_model and captured:
                 _record_usage(provider_name, upstream_model, usage=captured,
                               config=config, account_id=account_id)
 
     return Response(generate(), content_type="text/event-stream")
+
+
+# Terminal SSE frames for a stream that dies *after* llmproxy has committed to
+# relaying it. Until now such a stream simply stopped: no ``finish_reason``, no
+# ``[DONE]`` sentinel. A client cannot distinguish that from a slow upstream, so
+# the OpenAI SDKs either hang until their own read timeout or raise a generic
+# "stream ended unexpectedly", and an agent that was mid-tool-call is left
+# holding a truncated ``arguments`` string it will try to parse. Emitting a real
+# terminating sequence turns a corrupt stream into a cleanly short one.
+#
+# ``length`` is deliberate: it is the only standard finish_reason meaning "this
+# turn was cut off", and clients already treat it as incomplete. ``stop`` would
+# claim the turn finished normally, which is exactly the wrong thing to tell an
+# agent holding half a tool call.
+_STREAM_TRUNCATED_FINISH_REASON = "length"
+
+
+def _stream_error_frames(message: str, model: str = "") -> list[bytes]:
+    """SSE frames that terminate a committed stream after an upstream failure.
+
+    Returns, in order: an ``error`` frame carrying *message*, a final
+    chat-completion chunk whose one choice has an empty delta and a concrete
+    ``finish_reason``, and the ``[DONE]`` sentinel.
+
+    The finish chunk matters more than the error frame for agentic clients: it
+    is what tells a delta accumulator that a partially-streamed ``tool_calls``
+    argument string will receive no further fragments, so the client discards the
+    incomplete call instead of invoking a tool with truncated JSON.
+    """
+    try:
+        err = json.dumps({"error": {"message": message, "type": "upstream_error"}})
+        final = json.dumps({
+            "object": "chat.completion.chunk",
+            "model": model or "",
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": _STREAM_TRUNCATED_FINISH_REASON,
+            }],
+        })
+        return [
+            f"data: {err}\n\n".encode(),
+            f"data: {final}\n\n".encode(),
+            b"data: [DONE]\n\n",
+        ]
+    except Exception as e:  # noqa: BLE001
+        # Serialization must never be what prevents a stream from terminating.
+        print(f"[server:_stream_error_frames] {e}")
+        traceback.print_exc()
+        return [b'data: {"error":{"message":"Upstream error."}}\n\n', b"data: [DONE]\n\n"]
+
+
+def _mid_stream_frames(message: str, model: str, inbound) -> list[bytes]:
+    """Terminal frames for a committed stream, in the *client's* dialect.
+
+    The full OpenAI terminating sequence (error frame, finish chunk, ``[DONE]``)
+    is only meaningful to an OpenAI-dialect client. Injecting a
+    ``chat.completion.chunk`` into a native Anthropic or Gemini event stream
+    would hand the client a frame its parser has no case for, so a non-identity
+    inbound gets the bare error frame it has always received — still an
+    improvement over silence, without inventing events for a dialect we would be
+    guessing at.
+    """
+    if getattr(inbound, "is_identity", False):
+        return _stream_error_frames(message, model)
+    try:
+        err = json.dumps({"error": {"message": message, "type": "upstream_error"}})
+        return [f"data: {err}\n\n".encode()]
+    except Exception as e:  # noqa: BLE001
+        print(f"[server:_mid_stream_frames] {e}")
+        traceback.print_exc()
+        return [b'data: {"error":{"message":"Upstream error."}}\n\n']
+
+
+def _demote_on_mid_stream_failure(
+    provider_name: str,
+    upstream_model: str,
+    exc: BaseException,
+    account_id: str | None = None,
+) -> None:
+    """Count a post-commit stream failure against the provider's health.
+
+    A streamed candidate is recorded as a success the moment its stream survives
+    the pre-commit check, because that is the last point at which the request can
+    still fail over. Nothing ever revisited that verdict, so a provider that
+    reliably accepts a request and then dies four fifths of the way through a
+    generation kept a perfect health score and kept being ranked first — the one
+    failure mode the ordering could not see.
+
+    ``_is_upstream_failure`` does the discrimination that makes this safe: a
+    client disconnect, a closed generator, or llmproxy's own stream teardown are
+    not provider faults (see ``_CLIENT_ABORT_MARKERS``), so a user pressing
+    Ctrl-C still cannot demote a healthy upstream.
+    """
+    try:
+        if upstream_model and _is_upstream_failure(exc):
+            _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+    except Exception as e:  # noqa: BLE001
+        # Health accounting must never be what breaks a stream's teardown.
+        print(f"[server:_demote_on_mid_stream_failure] {e}")
+        traceback.print_exc()
 
 
 def _proxy_streaming(
@@ -2699,25 +2865,42 @@ def _proxy_streaming(
             upstream_resp, outbound, inbound, provider_name, upstream_model, config
         )
 
-    # Identity fast path: raw passthrough, unchanged.
+    # Identity fast path: raw passthrough. The upstream is opened *eagerly*, as
+    # on the translation path above, so a pre-stream error (429, 5xx, auth) comes
+    # back as a real response with its real status instead of being wrapped in a
+    # 200 text/event-stream carrying the provider's JSON error as its only
+    # "chunk". Clients (and fusion's streaming-degradation branch, which tests
+    # status_code < 400) cannot recognize the latter as a failure at all.
+    try:
+        upstream_resp = requests.post(url, headers=headers, json=body, stream=True, timeout=timeout)
+    except requests.exceptions.Timeout:
+        return _error(f"Upstream provider '{provider_name}' timed out after {timeout}s.",
+                      status=504, code="timeout")
+    except Exception as e:  # noqa: BLE001
+        return _upstream_error(provider_name, e)
+    if upstream_resp.status_code >= 400:
+        content = upstream_resp.content
+        status = upstream_resp.status_code
+        ct = upstream_resp.headers.get("Content-Type", "application/json")
+        upstream_resp.close()
+        logger.warning(
+            "[server:_proxy_streaming] provider=%s -> %d before any stream bytes",
+            provider_name, status,
+        )
+        return Response(content, status=status, content_type=ct)
+
     @stream_with_context
-    def generate():
+    def generate(r=upstream_resp):
         tail = bytearray()
         try:
-            with requests.post(
-                url,
-                headers=headers,
-                json=body,
-                stream=True,
-                timeout=timeout,
-            ) as upstream_resp:
+            with r:
                 first = True
-                for chunk in upstream_resp.iter_content(chunk_size=None):
+                for chunk in r.iter_content(chunk_size=None):
                     if chunk:
                         if first:
                             logger.info(
                                 "  upstream %d  first chunk: %s",
-                                upstream_resp.status_code,
+                                r.status_code,
                                 chunk[:200],
                             )
                             first = False
@@ -2725,22 +2908,22 @@ def _proxy_streaming(
                         tail += chunk
                         if len(tail) > _STREAM_TAIL_BYTES:
                             del tail[:-_STREAM_TAIL_BYTES]
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
             logger.error(
-                "[server:_proxy_streaming] provider=%s timed out", provider_name
+                "[server:_proxy_streaming] provider=%s timed out mid-stream", provider_name
             )
-            yield (
-                b'data: {"error":{"message":"Upstream stream timed out."}}\n\n'
-            )
+            _demote_on_mid_stream_failure(provider_name, upstream_model, e)
+            for frame in _stream_error_frames("Upstream stream timed out.", upstream_model):
+                yield frame
         except Exception as e:
             logger.error(
                 "[server:_proxy_streaming] provider=%s: %s", provider_name, e
             )
             traceback.print_exc()
+            _demote_on_mid_stream_failure(provider_name, upstream_model, e)
             msg = str(e).replace('"', "'")
-            yield (
-                f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
-            )
+            for frame in _stream_error_frames(f"Upstream error: {msg}", upstream_model):
+                yield frame
         finally:
             if config is not None and upstream_model:
                 _record_stream_usage(provider_name, upstream_model, bytes(tail), config)
@@ -2910,12 +3093,50 @@ def _needed_capabilities(payload: dict) -> set[str]:
     return {cap for cap, (detect, _s, _v) in _CAPABILITIES.items() if detect(payload)}
 
 
+# Capability metadata is sparse: the shipped sidecar tags a minority of the
+# believed-free pool, and the untagged remainder includes some of the strongest
+# tool-callers available. Scoring "no entry" the same as "entry that omits this
+# capability" would bury those models behind weaker tagged ones on exactly the
+# requests they are best at, so the three states are kept distinct.
+_CAP_KNOWN_CAPABLE = 1
+_CAP_UNKNOWN = 0
+_CAP_KNOWN_INCAPABLE = -1
+
+
+def _capability_state(
+    provider_name: str, upstream_id: str, cap: str, cap_map: dict[str, set[str]]
+) -> int:
+    """Three-valued capability lookup for one model and one capability.
+
+    Returns ``_CAP_KNOWN_CAPABLE`` when the model is tagged with *cap*,
+    ``_CAP_KNOWN_INCAPABLE`` when it carries capability metadata that omits
+    *cap*, and ``_CAP_UNKNOWN`` when it carries no metadata at all.
+
+    The middle case is the point. ``_model_has_capability`` collapses "unknown"
+    and "known to lack it" into one False, which is correct for the places that
+    need a yes/no answer (advertising ``supported_parameters``, building the
+    explicitly capability-scoped ``llmproxy/<cap>`` pools) but wrong for
+    *ordering*, where an untagged model deserves to sit between a confirmed
+    match and a confirmed mismatch rather than tied with the mismatch.
+    """
+    caps = cap_map.get(upstream_id.lower()) or cap_map.get(f"{provider_name}/{upstream_id}".lower())
+    if not caps:
+        return _CAP_UNKNOWN
+    return _CAP_KNOWN_CAPABLE if cap in caps else _CAP_KNOWN_INCAPABLE
+
+
 def _order_by_capability(
     candidates: list[tuple[str, dict, str]],
     needed: set[str],
     cap_map: dict[str, set[str]],
 ) -> list[tuple[str, dict, str]]:
     """Stable-sort candidates so those satisfying the most needed caps come first.
+
+    Ranks on the summed three-valued state across *needed* (see
+    ``_capability_state``), so the order is: models tagged for every needed
+    capability, then untagged models, then models whose metadata says they lack
+    one.  Python's ``sorted`` is stable, so candidates on equal footing keep the
+    order the earlier passes gave them.
 
     Never drops candidates — incomplete capability metadata must not turn a
     request into a hard 503.  A no-op when *needed* is empty.
@@ -2925,9 +3146,166 @@ def _order_by_capability(
 
     def satisfied(c: tuple[str, dict, str]) -> int:
         pn, _cfg, uid = c
-        return sum(1 for cap in needed if _model_has_capability(pn, uid, cap, cap_map))
+        return sum(_capability_state(pn, uid, cap, cap_map) for cap in needed)
 
     return sorted(candidates, key=satisfied, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# Context-window fit
+# ---------------------------------------------------------------------------
+# Until now nothing in routing knew how big a model's context window was:
+# ``context_length`` was normalized for the /v1/models listing and thrown away.
+# An agentic conversation that outgrew a candidate got a 400
+# ``context_length_exceeded``, which is non-transient, so it failed straight over
+# to the next candidate — chosen with no regard for context, and so 400-ing too.
+# A long session walked the whole pool and ended on the last 400 or a 503,
+# precisely when the work was most valuable.
+
+# The ~4-chars/token estimate runs low on agent traffic: code, JSON tool schemas
+# and diffs tokenize nearer 3 chars/token, and the estimate ignores per-message
+# role framing. Inflate before comparing against an advertised window.
+_CONTEXT_SAFETY_FACTOR: float = 1.30
+# Output tokens reserved when a request does not cap itself, so a model that
+# "just barely fits" the prompt does not 400 on the completion. Sized for a
+# tool-calling agent's turn (a call plus a short rationale), not for prose.
+_CONTEXT_OUTPUT_RESERVE: int = 4096
+
+
+def _get_model_context(config: dict) -> dict[str, int]:
+    """Return ``config['model_context']`` as a lowercased map of id -> positive int.
+
+    Keys take either form used elsewhere in the config: a bare upstream id
+    (``"llama-3.3-70b"``) or a qualified one (``"groq/llama-3.3-70b"``).
+    Defensive against a hand-edited config: a missing, None or non-dict value
+    yields ``{}``, and a malformed entry is logged once and skipped rather than
+    raising.
+    """
+    raw = config.get("model_context")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        logger.warning(
+            "config['model_context'] must be a dict; got %s — ignoring.",
+            type(raw).__name__,
+        )
+        return {}
+    out: dict[str, int] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or key.startswith("_"):
+            continue
+        window = _coerce_context_length(value)
+        if window is None:
+            logger.warning(
+                "config['model_context'][%r] must be a positive integer; got %r — ignoring.",
+                key, value,
+            )
+            continue
+        out[key.lower()] = window
+    return out
+
+
+def _model_context_window(
+    provider_name: str,
+    upstream_id: str,
+    ctx_map: dict[str, int],
+    discovered: dict[str, int],
+) -> int | None:
+    """One model's context window: config override first, then discovery.
+
+    Config wins deliberately. Several OpenAI-compatible gateways report their
+    *output* cap in ``context_length``, so ``model_context`` exists exactly to
+    correct an upstream that misreports. Returns None when nothing is known,
+    which callers must treat as neutral.
+    """
+    bare = ctx_map.get(upstream_id.lower())
+    if bare is not None:
+        return bare
+    qualified = f"{provider_name}/{upstream_id}".lower()
+    if qualified in ctx_map:
+        return ctx_map[qualified]
+    return discovered.get(qualified)
+
+
+def _estimate_context_tokens(payload: dict) -> int:
+    """Rough token estimate for everything that occupies the context window.
+
+    Builds on ``_estimate_payload_tokens`` (message text) and adds what an
+    agentic request actually spends its window on: the serialized ``tools``
+    array, assistant ``tool_calls`` arguments, and ``tool``-role result bodies.
+
+    Deliberately separate from ``_estimate_payload_tokens`` rather than an
+    extension of it: that function drives reasoning-tier triage and its
+    thresholds are calibrated against message text alone, so widening it in
+    place would silently re-tier every request in the proxy.
+    """
+    base = _estimate_payload_tokens(payload)
+    try:
+        extra = 0
+        tools = payload.get("tools")
+        if isinstance(tools, list) and tools:
+            extra += len(json.dumps(tools, separators=(",", ":")))
+        for msg in payload.get("messages", []):
+            if not isinstance(msg, dict):
+                continue
+            for call in msg.get("tool_calls") or []:
+                if isinstance(call, dict):
+                    extra += len(json.dumps(call, separators=(",", ":")))
+        return base + extra // 4
+    except Exception as e:  # noqa: BLE001 — a size hint must never fail a request
+        print(f"[server:_estimate_context_tokens] {e}")
+        traceback.print_exc()
+        return base
+
+
+def _required_context_tokens(payload: dict, config: dict | None = None) -> int:
+    """Tokens this request needs a candidate's window to hold, with headroom.
+
+    The comparison is conservative in one direction only, because the costs are
+    asymmetric: overestimating demotes a model that would have fit, which costs
+    one suboptimal but *working* pick, while underestimating relays a request
+    that 400s and walks the pool. An asymmetric margin is the right answer to
+    asymmetric costs.
+    """
+    factor = _config_float("context_safety_factor", _CONTEXT_SAFETY_FACTOR, config)
+    reserve = _config_int("context_output_reserve", _CONTEXT_OUTPUT_RESERVE, config)
+    budget = payload.get("max_completion_tokens") or payload.get("max_tokens")
+    if not isinstance(budget, int) or isinstance(budget, bool) or budget <= 0:
+        budget = 0
+    return int(_estimate_context_tokens(payload) * max(1.0, factor)) + max(budget, reserve)
+
+
+def _order_by_context_fit(
+    candidates: list[tuple[str, dict, str]],
+    payload: dict,
+    ctx_map: dict[str, int],
+    discovered: dict[str, int],
+    config: dict | None = None,
+) -> list[tuple[str, dict, str]]:
+    """Stable-sort candidates so models *known* to be too small sort last.
+
+    Structurally identical to ``_order_by_capability``: it reorders and never
+    drops, because a model with a wrong or missing ``context_length`` must not be
+    able to turn a request into a hard 503. Three-valued rather than a score — a
+    candidate is demoted only when its window is *known* and smaller than the
+    request needs, and an unknown window is neutral and keeps its incoming
+    position.
+
+    Returns *candidates* unchanged (the same object) when nothing is known to
+    overflow, which is the common case. That identity is what lets the pass run
+    last, after favorites, without disturbing any other pass's ranking.
+    """
+    if not candidates or len(candidates) < 2:
+        return candidates
+    needed = _required_context_tokens(payload, config)
+
+    def too_small(c: tuple[str, dict, str]) -> bool:
+        window = _model_context_window(c[0], c[2], ctx_map, discovered)
+        return window is not None and window < needed
+
+    if not any(too_small(c) for c in candidates):
+        return candidates
+    return sorted(candidates, key=too_small)
 
 
 # Token thresholds for mapping a request's estimated input size to a reasoning
@@ -2975,6 +3353,7 @@ ROUTE_SOURCE_REQUEST_FIT = "request_fit"
 ROUTE_SOURCE_CAPABILITY = "capability"
 ROUTE_SOURCE_FAVORITE = "favorite"
 ROUTE_SOURCE_AFFINITY = "cache_affinity"
+ROUTE_SOURCE_CONTEXT_FIT = "context_fit"
 ROUTE_SOURCE_FAILOVER = "failover"
 
 TIER_SOURCE_EXPLICIT = "explicit_reasoning_effort"
@@ -2993,6 +3372,166 @@ def _tool_signal_routing_enabled(config: dict | None = None) -> bool:
         return bool(cfg.get("server", {}).get("tool_signal_routing", True))
     except Exception:  # noqa: BLE001 — routing must never fail on config shape
         return True
+
+
+# — configuration accessors for the routing and streaming hardening knobs —
+#
+# All of these read through ``server.*`` with a default that reproduces the
+# behavior llmproxy had before the knob existed, so an untouched config is
+# bit-for-bit unchanged. They follow ``_tool_signal_routing_enabled`` above:
+# tolerant of a hand-edited config, and never able to fail a request on a
+# malformed value.
+
+# Overall wall-clock budget for one virtual-model request's candidate walk.
+# ``_VIRTUAL_CANDIDATE_TIMEOUT`` is per *candidate*, so a pool of N slow
+# upstreams can currently burn N x 60s before the client sees anything. 0
+# disables the deadline, which is the default and today's behavior.
+_DEFAULT_CYCLE_DEADLINE_S: float = 0.0
+# Below this much remaining budget, starting another candidate is pointless — a
+# two-second window buys a TCP connect and nothing else — so the loop stops.
+_MIN_CANDIDATE_TIMEOUT_S: float = 5.0
+# Ceilings on the pre-commit buffer (see ``_open_stream_window``). Both are
+# small: the window exists to see past a role preamble, not to buffer an answer.
+_DEFAULT_PRECOMMIT_MAX_BYTES: int = 8192
+_DEFAULT_PRECOMMIT_MAX_SECONDS: float = 2.0
+
+
+def _config_float(key: str, default: float, config: dict | None = None) -> float:
+    """Read ``server.<key>`` as a float, falling back to *default* on any problem."""
+    try:
+        cfg = config if config is not None else load_config()
+        raw = cfg.get("server", {}).get(key, default)
+        if isinstance(raw, bool) or raw is None:
+            return default
+        return float(raw)
+    except Exception:  # noqa: BLE001 — routing must never fail on config shape
+        return default
+
+
+def _config_int(key: str, default: int, config: dict | None = None) -> int:
+    """Read ``server.<key>`` as an int, falling back to *default* on any problem."""
+    try:
+        cfg = config if config is not None else load_config()
+        raw = cfg.get("server", {}).get(key, default)
+        if isinstance(raw, bool) or raw is None:
+            return default
+        return int(raw)
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def _config_bool(key: str, default: bool, config: dict | None = None) -> bool:
+    """Read ``server.<key>`` as a bool, falling back to *default* on any problem."""
+    try:
+        cfg = config if config is not None else load_config()
+        return bool(cfg.get("server", {}).get(key, default))
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def _cycle_deadline(config: dict | None = None) -> float | None:
+    """Monotonic instant this request's candidate walk must stop by, or None.
+
+    Returns ``time.monotonic() + budget`` so callers compare against a fixed
+    instant instead of re-reading config inside the loop. A budget of zero or
+    less disables the deadline entirely, which is the default.
+    """
+    budget = _config_float("cycle_deadline_seconds", _DEFAULT_CYCLE_DEADLINE_S, config)
+    if budget <= 0:
+        return None
+    return time.monotonic() + budget
+
+
+def _remaining_budget(deadline: float | None) -> float | None:
+    """Seconds left before *deadline*, or None when no deadline is set."""
+    if deadline is None:
+        return None
+    return deadline - time.monotonic()
+
+
+def _timeout_for_candidate(deadline: float | None, candidate_timeout: float) -> float | None:
+    """Per-candidate timeout shrunk to the remaining budget.
+
+    Returns *candidate_timeout* unchanged when no deadline is set, and None when
+    the budget is gone or too small to be worth spending (see
+    ``_MIN_CANDIDATE_TIMEOUT_S``) — which the cycling loops read as "stop here".
+    """
+    remaining = _remaining_budget(deadline)
+    if remaining is None:
+        return candidate_timeout
+    if remaining < _MIN_CANDIDATE_TIMEOUT_S:
+        return None
+    return min(candidate_timeout, remaining)
+
+
+def _free_tier_cache_affinity_enabled(config: dict | None = None) -> bool:
+    """Whether prompt-cache affinity also pins *model* choice in free-tier pools.
+
+    Off by default, and that default is deliberate rather than accidental: the
+    free tier's ordering exists to spread load across quotas, and pinning a
+    conversation to one model spends one model's allowance instead of the
+    pool's.
+
+    It is the wrong default for a single-user coding agent. There, consecutive
+    turns landing on different models means different tool-calling conventions
+    and different instruction-following inside one task, and the load being
+    spread is one person's. Turning this on makes a conversation stick to one
+    model for as long as that model keeps answering, and failover is unaffected
+    because this only reorders.
+    """
+    return _config_bool("free_tier_cache_affinity", False, config)
+
+
+def _precommit_window_enabled(config: dict | None = None) -> bool:
+    """Whether the pre-commit window widens past the first non-empty chunk.
+
+    Off by default, because turning it on can add up to
+    ``stream_precommit_max_seconds`` to time-to-first-token for a healthy but
+    slow upstream. On, llmproxy waits for a chunk that actually carries output
+    before committing, which converts the common free-tier failure "accept the
+    request, emit a role preamble, then die" from an unrecoverable mid-stream
+    corruption into a clean, invisible failover.
+    """
+    return _config_bool("stream_commit_on_content", False, config)
+
+
+def _precommit_max_seconds(deadline: float | None, config: dict | None = None) -> float:
+    """Seconds the pre-commit window may buffer, clamped to the cycle budget.
+
+    Without the clamp the two budgets could disagree: a request whose wall-clock
+    deadline has nearly expired would still sit buffering for the full window.
+    """
+    configured = _config_float(
+        "stream_precommit_max_seconds", _DEFAULT_PRECOMMIT_MAX_SECONDS, config
+    )
+    remaining = _remaining_budget(deadline)
+    if remaining is None:
+        return max(0.0, configured)
+    return max(0.0, min(configured, remaining))
+
+
+# Ceiling on the whole-response buffer used by ``server.stream_buffer_full``.
+# Past this the response is committed and the remainder streamed incrementally:
+# a reply this large is one the client wants to start seeing, and an unbounded
+# buffer is a memory footgun on a threaded server.
+_DEFAULT_STREAM_BUFFER_MAX_BYTES: int = 8 * 1024 * 1024
+
+
+def _stream_buffer_full_enabled(config: dict | None = None) -> bool:
+    """Whether a streamed virtual-model request is buffered whole before relay.
+
+    Off by default. When on, ``_proxy_cycling_streaming`` reads each candidate's
+    entire response before sending the client a byte, which is the only way to
+    get genuine end-to-end failover on a streamed request: a provider that dies
+    four fifths of the way through a generation can then be failed over exactly
+    like one that returned a 500, because nothing has been committed yet.
+
+    The cost is real and should be stated plainly rather than buried:
+    time-to-first-token becomes time-to-*last*-token. For a tool-calling agent
+    that cannot act on half a tool call anyway this is often the right trade; for
+    an interactive chat UI it is not.
+    """
+    return _config_bool("stream_buffer_full", False, config)
 
 
 def _target_reasoning_tier_explained(payload: dict) -> tuple[str, str]:
@@ -3274,6 +3813,177 @@ def _peek_stream(resp) -> tuple[bytes | None, bytes, "Iterator[bytes]"]:
     return error_body, prefix, chunks
 
 
+def _delta_yields_output(delta) -> bool:
+    """True when a streamed delta carries something the client can act on.
+
+    The streaming analogue of ``_choice_yields_output``: visible text, a
+    tool-call or function-call fragment, or a refusal. A role-only preamble
+    (``{"role": "assistant"}``) and a reasoning-only delta are deliberately NOT
+    output — they are exactly what a first-chunk peek mistakes for a working
+    generation, which is the whole reason the window below exists.
+    """
+    if not isinstance(delta, dict):
+        return False
+    if delta.get("tool_calls") or delta.get("function_call"):
+        return True
+    if delta.get("refusal"):
+        return True
+    content = delta.get("content")
+    if isinstance(content, str):
+        return bool(content)
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, str) and part:
+                return True
+            if isinstance(part, dict) and (part.get("text") or ""):
+                return True
+    return False
+
+
+def _sse_window_has_output(buffered: list[bytes], outbound) -> bool:
+    """True when the buffered SSE bytes already contain an output-bearing delta.
+
+    Parses with the provider's own ``outbound.parse_stream``, so this is correct
+    for native Anthropic and Gemini event streams as well as the OpenAI case
+    (whose adapter inherits the canonical ``data: {json}`` parser).
+
+    The parse runs over a throwaway iterator built from a copy of the buffer and
+    its result is discarded; on commit the caller replays the buffer from the
+    start through a *fresh* ``parse_stream``, so no adapter state machine is ever
+    left half-advanced. Do not "optimize" that replay away.
+
+    Defensive by design: any parse failure reads as "no output yet" rather than
+    as a stream failure, so a dialect quirk can only cost a little buffering.
+    """
+    try:
+        for chunk in outbound.parse_stream(iter(list(buffered))):
+            if chunk is None:  # [DONE] sentinel
+                continue
+            if not isinstance(chunk, dict):
+                continue
+            for choice in chunk.get("choices") or []:
+                if isinstance(choice, dict) and _delta_yields_output(choice.get("delta")):
+                    return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[server:_sse_window_has_output] {e}")
+        traceback.print_exc()
+    return False
+
+
+def _open_stream_window(
+    resp,
+    outbound,
+    *,
+    max_bytes: int,
+    max_seconds: float,
+) -> tuple[bytes | None, list[bytes], "Iterator[bytes]", str]:
+    """Buffer the opening of a streamed response until it is safe to commit.
+
+    Generalizes ``_peek_stream``. Pulls chunks until the first of:
+
+    * an SSE error event appears in the buffer      -> ``"error"`` (fail over)
+    * an output-bearing delta appears               -> ``"content"`` (commit)
+    * ``max_bytes`` or ``max_seconds`` is exhausted -> ``"budget"`` (commit)
+    * the upstream ends the stream                  -> ``"content"`` or ``"empty"``
+
+    Returns ``(error_body, buffered, rest, reason)``. ``buffered`` holds every
+    chunk pulled, in order, for verbatim replay: no byte is ever dropped, so the
+    client still receives the first token.
+
+    A stream that *ends* inside the window having produced no output-bearing
+    delta returns ``"empty"``, which the caller fails over. That is the streaming
+    counterpart of ``_response_unusable``'s empty-completion check, and it is
+    precisely the case a first-chunk peek cannot see: a provider that accepts the
+    request, emits a role preamble, and then closes.
+    """
+    chunks = resp.iter_content(chunk_size=None)
+    buffered: list[bytes] = []
+    total = 0
+    started = time.monotonic()
+    for chunk in chunks:
+        if not chunk:
+            continue
+        buffered.append(chunk)
+        total += len(chunk)
+        joined = b"".join(buffered)
+        if _sse_prefix_is_error(joined):
+            return joined, buffered, chunks, "error"
+        if _sse_window_has_output(buffered, outbound):
+            return None, buffered, chunks, "content"
+        if total >= max_bytes or (time.monotonic() - started) >= max_seconds:
+            return None, buffered, chunks, "budget"
+    # The upstream closed while we were still inside the window.
+    if not buffered:
+        return None, buffered, chunks, "empty"
+    joined = b"".join(buffered)
+    if _sse_prefix_is_error(joined):
+        return joined, buffered, chunks, "error"
+    if _sse_window_has_output(buffered, outbound):
+        return None, buffered, chunks, "content"
+    return None, buffered, chunks, "empty"
+
+
+class _ReplayUpstream:
+    """A already-consumed upstream stream, re-served from memory.
+
+    ``server.stream_buffer_full`` reads a candidate's whole response before
+    committing, which means the real ``requests.Response`` is exhausted by the
+    time the relay code runs. Both relay paths (identity passthrough and the
+    dialect translator) expect an object they can iterate and close, so the
+    buffered bytes are handed back wearing the same shape. Only the members
+    those paths actually touch are implemented.
+    """
+
+    def __init__(self, status_code: int, chunks: list[bytes]) -> None:
+        self.status_code = status_code
+        self.headers: dict = {"Content-Type": "text/event-stream"}
+        self._chunks = chunks
+
+    def iter_content(self, chunk_size=None):  # noqa: ANN001 — requests' signature
+        yield from self._chunks
+
+    def close(self) -> None:
+        return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> bool:  # noqa: ANN002
+        return False
+
+
+def _drain_stream(
+    rest, buffered: list[bytes], max_bytes: int
+) -> tuple[bool, str]:
+    """Read the remainder of a stream into *buffered*.
+
+    Returns ``(ok, detail)``. ``ok`` is False when the upstream died partway,
+    which — because nothing has been sent to the client yet — the caller can
+    still treat as an ordinary candidate failure and fail over from.
+
+    Stops early once *max_bytes* is buffered. A response that large is being
+    relayed to a client that asked for a stream, so the right move is to commit
+    what we have and hand the rest over incrementally rather than grow the
+    buffer without bound.
+    """
+    total = sum(len(c) for c in buffered)
+    try:
+        for chunk in rest:
+            if not chunk:
+                continue
+            buffered.append(chunk)
+            total += len(chunk)
+            if total >= max_bytes:
+                return True, "truncated"
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+        return False, f"{type(e).__name__}: {e}"
+    except Exception as e:  # noqa: BLE001
+        print(f"[server:_drain_stream] {e}")
+        traceback.print_exc()
+        return False, f"{type(e).__name__}: {e}"
+    return True, "complete"
+
+
 def _sse_prefix_is_error(prefix: bytes) -> bool:
     """True when the opening SSE bytes encode a JSON object carrying an error."""
     for line in prefix.split(b"\n"):
@@ -3388,6 +4098,8 @@ def _escalate_budget_if_starved(
     resp: "Response",
     timeout: int,
     label: str,
+    *,
+    deadline: float | None = None,
 ) -> "Response":
     """Retry a budget-starved 200 on the *same* candidate with a larger budget.
 
@@ -3398,6 +4110,12 @@ def _escalate_budget_if_starved(
     budget and retry, up to ``_BUDGET_BUMP_MAX_RETRIES`` times or until the budget
     hits ``_BUDGET_BUMP_CEILING``. Returns the first usable response, or the last
     attempt (which the caller's normal failover path then handles).
+
+    ``deadline`` is the caller's wall-clock budget. This is the one place that
+    spends *several* full timeouts on a single candidate, so without the check a
+    240-second cycle budget could still be overrun by two more 60-second calls.
+    Keyword-only with a None default, so callers that do not set a deadline (and
+    every existing test) behave exactly as before.
     """
     payload = upstream_payload
     for _ in range(_BUDGET_BUMP_MAX_RETRIES):
@@ -3406,6 +4124,14 @@ def _escalate_budget_if_starved(
         bumped = _bumped_budget(payload)
         if bumped is None:
             return resp
+        attempt_timeout = _timeout_for_candidate(deadline, timeout)
+        if attempt_timeout is None:
+            logger.warning(
+                "  [%s] %s/%s was budget-starved but the cycle deadline leaves no "
+                "room to retry it; returning the empty body",
+                label, provider_name, upstream_payload.get("model"),
+            )
+            return resp
         new_budget = bumped.get("max_completion_tokens") or bumped.get("max_tokens")
         logger.warning(
             "  [%s] %s/%s returned an empty, budget-truncated body; "
@@ -3413,7 +4139,7 @@ def _escalate_budget_if_starved(
             label, provider_name, upstream_payload.get("model"), new_budget,
         )
         payload = bumped
-        resp = _proxy_request(endpoint, provider_name, provider_cfg, payload, timeout)
+        resp = _proxy_request(endpoint, provider_name, provider_cfg, payload, attempt_timeout)
     return resp
 
 
@@ -3476,32 +4202,55 @@ def _proxy_cycling_non_streaming(
     successful response bytes so the caller can record token + cost usage.
     """
     candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
+    deadline = _cycle_deadline()
     total = len(candidates)
     last: Response | None = None
     for idx, (provider_name, provider_cfg, upstream_model) in enumerate(candidates):
+        # The first candidate always gets its attempt: an already-tight budget
+        # must never produce a 503 with zero upstream calls made.
+        attempt_timeout = candidate_timeout if idx == 0 else _timeout_for_candidate(
+            deadline, candidate_timeout
+        )
+        if attempt_timeout is None:
+            logger.warning(
+                "  [%s] cycle deadline reached after %d candidate(s); returning the last error",
+                label, idx,
+            )
+            break
         account_id = provider_account_id(provider_cfg)
         upstream_payload = {**payload, "model": upstream_model}
         max_attempts = _candidate_max_attempts(idx, total)
         for attempt in range(max_attempts):
             logger.info("  [%s] trying %s/%s", label, provider_name, upstream_model)
             _started = time.monotonic()
-            resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, candidate_timeout)
+            resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, attempt_timeout)
             _elapsed_ms = (time.monotonic() - _started) * 1000.0
             if resp.status_code < 400 or not _is_transient_status(resp.status_code):
                 break
             if attempt < max_attempts - 1:
+                # Same-candidate retries only happen on the last candidate, so an
+                # exhausted budget here means there is nowhere left to go anyway;
+                # spending the backoff would be pure added latency.
+                retry_timeout = _timeout_for_candidate(deadline, candidate_timeout)
+                if retry_timeout is None:
+                    logger.warning(
+                        "  [%s] %s/%s returned %d but the cycle deadline leaves no room to retry",
+                        label, provider_name, upstream_model, resp.status_code,
+                    )
+                    break
                 logger.warning(
                     "  [%s] %s/%s returned %d, retrying (%d/%d)",
                     label, provider_name, upstream_model, resp.status_code,
                     attempt + 1, max_attempts - 1,
                 )
+                attempt_timeout = retry_timeout
                 time.sleep(_VIRTUAL_RETRY_BACKOFF)
         # A 200 that emitted no visible content only because it ran out of token
         # budget gets a larger budget on this same candidate before we fail over.
         if resp.status_code < 400:
             resp = _escalate_budget_if_starved(
                 endpoint, provider_name, provider_cfg, upstream_payload,
-                resp, candidate_timeout, label,
+                resp, attempt_timeout, label, deadline=deadline,
             )
         if resp.status_code < 400:
             body = resp.get_data()
@@ -3582,11 +4331,26 @@ def _proxy_cycling_streaming(
     post-stream.
     """
     candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
+    deadline = _cycle_deadline(config)
     inbound = inbound or get_inbound("openai")
     total = len(candidates)
     last_error: tuple[bytes, int, str] | None = None
 
     for idx, (provider_name, provider_cfg, upstream_model) in enumerate(candidates):
+        # As on the non-streaming path, candidate 0 always gets its attempt.
+        # Note the deadline bounds time-to-*commit*, not stream duration: once a
+        # stream is committed below, the generator runs for as long as the model
+        # talks. A twenty-minute legitimate generation must not be killed by a
+        # routing budget.
+        attempt_timeout = candidate_timeout if idx == 0 else _timeout_for_candidate(
+            deadline, candidate_timeout
+        )
+        if attempt_timeout is None:
+            logger.warning(
+                "  [%s] cycle deadline reached after %d candidate(s); returning the last error",
+                label, idx,
+            )
+            break
         account_id = provider_account_id(provider_cfg)
         upstream_payload = {**payload, "model": upstream_model}
         max_attempts = _candidate_max_attempts(idx, total)
@@ -3596,6 +4360,10 @@ def _proxy_cycling_streaming(
             endpoint, base_url, provider_cfg, upstream_payload,
             stream=True, forwarded_headers=_forwarded_client_headers(),
         )
+        # Shrink the read timeout too. It governs how long we wait for bytes
+        # *before committing*; left at the full stream_timeout, one silent
+        # upstream could eat the entire deadline inside a single post().
+        read_timeout = timeout if deadline is None else min(timeout, max(attempt_timeout, 1.0))
 
         # Open the upstream. Transient failures fail over to the next candidate
         # immediately unless this is the last one (then same-candidate retries).
@@ -3604,9 +4372,11 @@ def _proxy_cycling_streaming(
             logger.info("  [%s] trying %s/%s  [streaming]", label, provider_name, upstream_model)
             try:
                 resp = requests.post(url, headers=headers, json=body, stream=True,
-                                     timeout=(candidate_timeout, timeout))
+                                     timeout=(attempt_timeout, read_timeout))
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-                if attempt < max_attempts - 1:
+                if attempt < max_attempts - 1 and _timeout_for_candidate(
+                    deadline, candidate_timeout
+                ) is not None:
                     logger.warning("  [%s] %s/%s connect error: %s, retrying (%d/%d)",
                                    label, provider_name, upstream_model, e, attempt + 1, max_attempts - 1)
                     time.sleep(_VIRTUAL_RETRY_BACKOFF)
@@ -3623,7 +4393,9 @@ def _proxy_cycling_streaming(
                 break
             if resp.status_code < 400 or not _is_transient_status(resp.status_code):
                 break
-            if attempt < max_attempts - 1:
+            if attempt < max_attempts - 1 and _timeout_for_candidate(
+                deadline, candidate_timeout
+            ) is not None:
                 logger.warning("  [%s] %s/%s -> %d, retrying (%d/%d)",
                                label, provider_name, upstream_model, resp.status_code, attempt + 1, max_attempts - 1)
                 resp.close()
@@ -3650,11 +4422,28 @@ def _proxy_cycling_streaming(
             continue
 
         try:
-            # Peek the opening of the stream so a 200 that immediately emits an
-            # SSE error event fails over like an HTTP error instead of being
-            # handed to the client.  The peeked prefix is replayed verbatim, so
-            # the first token is never dropped.
-            error_body, prefix, rest = _peek_stream(resp)
+            # Inspect the opening of the stream so a 200 that immediately emits
+            # an SSE error event fails over like an HTTP error instead of being
+            # handed to the client.  Everything read here is replayed verbatim,
+            # so the first token is never dropped.
+            #
+            # With ``server.stream_commit_on_content`` the inspection widens from
+            # the first non-empty chunk to the first chunk carrying real output
+            # (see ``_open_stream_window``): many providers emit a role preamble
+            # before anything else, so surviving a one-chunk peek does not mean
+            # the generation works.
+            if _precommit_window_enabled(config):
+                error_body, buffered, rest, window_reason = _open_stream_window(
+                    resp, outbound,
+                    max_bytes=_config_int(
+                        "stream_precommit_max_bytes", _DEFAULT_PRECOMMIT_MAX_BYTES, config
+                    ),
+                    max_seconds=_precommit_max_seconds(deadline, config),
+                )
+            else:
+                error_body, prefix, rest = _peek_stream(resp)
+                buffered = [prefix] if prefix else []
+                window_reason = "peek"
             if error_body is not None:
                 # A stream that opens with a quota error cools the candidate too.
                 if _is_quota_error(None, error_body):
@@ -3667,32 +4456,99 @@ def _proxy_cycling_streaming(
                     label, provider_name, upstream_model,
                 )
                 continue
+            if window_reason == "empty":
+                # The upstream accepted the request, said nothing usable, and
+                # closed. Non-streaming calls this an unusable body and fails
+                # over; streaming could not see it until the window existed.
+                last_error = (
+                    b'data: {"error":{"message":"Upstream stream produced no output."}}\n\n',
+                    502,
+                    "text/event-stream",
+                )
+                _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+                resp.close()
+                logger.warning(
+                    "  [%s] %s/%s -> 200 but the stream produced no output, trying next",
+                    label, provider_name, upstream_model,
+                )
+                continue
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
             _record_outcome(provider_name, upstream_model, False, account_id=account_id)
             logger.warning("  [%s] %s/%s error mid-peek: %s, trying next", label, provider_name, upstream_model, e)
             resp.close()
             continue
 
+        # Optional whole-response buffering. This is the only configuration in
+        # which a streamed request gets *genuine* end-to-end failover: a provider
+        # that dies four fifths of the way through a generation has still sent
+        # the client nothing, so it can be failed over exactly like a 500. The
+        # price is that time-to-first-token becomes time-to-last-token, which is
+        # why it is opt-in rather than the default.
+        if _stream_buffer_full_enabled(config):
+            ok, detail = _drain_stream(
+                rest, buffered,
+                _config_int(
+                    "stream_buffer_max_bytes", _DEFAULT_STREAM_BUFFER_MAX_BYTES, config
+                ),
+            )
+            resp.close()
+            whole = b"".join(buffered)
+            if not ok:
+                last_error = (
+                    b'data: {"error":{"message":"Upstream stream failed before completion."}}\n\n',
+                    502,
+                    "text/event-stream",
+                )
+                _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+                logger.warning(
+                    "  [%s] %s/%s died mid-stream (%s); buffering let us fail over, trying next",
+                    label, provider_name, upstream_model, detail,
+                )
+                continue
+            if _sse_prefix_is_error(whole) or not _sse_window_has_output(buffered, outbound):
+                if _is_quota_error(None, whole):
+                    _record_quota_saturation(provider_name, provider_cfg, upstream_model, None)
+                last_error = (
+                    whole or b'data: {"error":{"message":"Upstream stream produced no output."}}\n\n',
+                    502,
+                    "text/event-stream",
+                )
+                _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+                logger.warning(
+                    "  [%s] %s/%s buffered stream was unusable, trying next",
+                    label, provider_name, upstream_model,
+                )
+                continue
+            # Sound and complete: re-serve it from memory.
+            resp = _ReplayUpstream(200, list(buffered))
+            rest = iter(())
+            window_reason = f"buffered:{detail}"
+
         # Reactive capability detection (forced-tool/json 200-body checks) is
-        # intentionally NOT applied beyond the first-chunk error peek: inspecting
-        # delta.tool_calls would require buffering the whole SSE stream before
-        # committing.  Proactive capability ordering still steers streaming
-        # requests to capable models.
-        # The stream opened cleanly and survived the peek. That is the last
-        # moment this path can attribute anything to the upstream: from here the
-        # bytes belong to the client, and a failure downstream (a disconnect, a
-        # closed generator) says nothing about the provider — see
-        # ``_is_upstream_failure``.
+        # intentionally NOT applied beyond the pre-commit window: validating
+        # delta.tool_calls would require buffering the whole SSE stream, which is
+        # what ``server.stream_buffer_full`` is for.  Proactive capability
+        # ordering still steers streaming requests to capable models.
+        #
+        # The stream survived the pre-commit window. That is the last moment this
+        # path can still fail over: from here the bytes belong to the client.
+        # Health is credited here rather than at connect, so "healthy" means the
+        # candidate produced output (or exhausted the window) rather than merely
+        # having returned a byte. A failure *after* this point is caught by the
+        # generator below and demoted through ``_demote_on_mid_stream_failure``.
         _record_outcome(provider_name, upstream_model, True, account_id=account_id)
         if on_success is not None:
             on_success(provider_name, upstream_model, None, account_id)
+        logger.info(
+            "  [%s] %s/%s committed (%s)", label, provider_name, upstream_model, window_reason
+        )
 
         # Translation path: pipe the native stream through the adapters.
         if not (outbound.is_identity and inbound.is_identity):
             return _stamp_route_headers(
                 _translated_stream_response(
                     resp, outbound, inbound, provider_name, upstream_model, config,
-                    prefix=prefix, account_id=account_id,
+                    prefix=b"".join(buffered), account_id=account_id,
                 ),
                 route_reason, provider_name, upstream_model, idx,
             )
@@ -3700,7 +4556,7 @@ def _proxy_cycling_streaming(
         captured_resp = resp
         captured_provider = provider_name
         captured_model = upstream_model
-        captured_prefix = prefix
+        captured_prefix = list(buffered)
         captured_rest = rest
 
         @stream_with_context
@@ -3710,7 +4566,7 @@ def _proxy_cycling_streaming(
             try:
                 with r:
                     first = True
-                    for chunk in itertools.chain((pfx,) if pfx else (), rst):
+                    for chunk in itertools.chain(pfx, rst):
                         if chunk:
                             if first:
                                 logger.info("  upstream %d  first chunk: %s", r.status_code, chunk[:200])
@@ -3719,13 +4575,18 @@ def _proxy_cycling_streaming(
                             tail += chunk
                             if len(tail) > _STREAM_TAIL_BYTES:
                                 del tail[:-_STREAM_TAIL_BYTES]
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 logger.error("[%s] provider=%s timed out mid-stream", label, pn)
-                yield b'data: {"error":{"message":"Upstream stream timed out."}}\n\n'
+                _demote_on_mid_stream_failure(pn, um, e, acct)
+                for frame in _stream_error_frames("Upstream stream timed out.", um):
+                    yield frame
             except Exception as e:
                 logger.error("[%s] provider=%s mid-stream error: %s", label, pn, e)
+                traceback.print_exc()
+                _demote_on_mid_stream_failure(pn, um, e, acct)
                 msg = str(e).replace('"', "'")
-                yield f'data: {{"error":{{"message":"Upstream error: {msg}"}}}}\n\n'.encode()
+                for frame in _stream_error_frames(f"Upstream error: {msg}", um):
+                    yield frame
             finally:
                 _record_stream_usage(pn, um, bytes(tail), config, account_id=acct)
 
@@ -5371,7 +6232,19 @@ def _proxy_endpoint(
         return _error("Request body must be valid JSON.", status=400)
 
     inbound_adapter = get_inbound(inbound)
-    payload = inbound_adapter.to_canonical_request(raw_body)
+    try:
+        payload = inbound_adapter.to_canonical_request(raw_body)
+    except UnknownPreviousResponse as e:
+        # A Responses client referenced a conversation this process does not
+        # hold (different worker, or a restart since). Answering anyway would
+        # silently drop the whole prior transcript and return a confident, wrong
+        # reply, so say so instead and let the client resend its history.
+        return _error(
+            f"Unknown previous_response_id '{e}'. llmproxy stores conversation "
+            "state in memory only, so it does not survive a restart and is not "
+            "shared between workers; resend the conversation in 'input'.",
+            status=400, code="invalid_request_error",
+        )
 
     # Dialects that carry the model id / stream flag outside the JSON body
     # (e.g. Gemini puts them in the URL path) override them here.
@@ -5499,6 +6372,33 @@ def _proxy_endpoint(
             ordered = _apply_favorite_free_ordering(ordered, config)
             if ordered and ordered[0] is not before:
                 decisions.append(ROUTE_SOURCE_FAVORITE)
+        # Model-level stickiness for free pools, opt-in. Runs after favorites so
+        # an explicitly ranked favorite still wins; among the rest, one
+        # conversation keeps landing on the same model instead of being spread.
+        if is_free_virtual and _free_tier_cache_affinity_enabled(config):
+            akey = _affinity_key(payload)
+            if akey and len(ordered) > 1:
+                pinned = ordered[0] if ordered else None
+                ordered = _order_by_cache_affinity(ordered, akey)
+                if ordered and ordered[0] is not pinned:
+                    decisions.append(f"{ROUTE_SOURCE_AFFINITY}=free")
+        # Context fit runs last of the model-level passes. It is an identity
+        # when nothing is known to overflow, so in the common case it costs the
+        # earlier passes nothing; in the uncommon case it correctly outranks
+        # them, because a pinned favorite or a tools-capable model that cannot
+        # hold the conversation is not a usable pick at all. Capability metadata
+        # only predicts a soft failure; a known-undersized window predicts a hard
+        # one.
+        if _config_bool("context_aware_routing", False, config):
+            before_ctx = ordered
+            ordered = _order_by_context_fit(
+                ordered, payload, _get_model_context(config),
+                _get_model_context_snapshot(), config,
+            )
+            if ordered is not before_ctx:
+                decisions.append(
+                    f"{ROUTE_SOURCE_CONTEXT_FIT}=~{_required_context_tokens(payload, config)}tok"
+                )
         # Expand accounts LAST: each model's credentials become adjacent
         # candidates in its ranked slot, so cycling rotates accounts-first then
         # models. A no-op for single-credential providers.
@@ -5608,6 +6508,55 @@ def anthropic_messages() -> Response:
     apply), and the response is rendered back into the Anthropic Messages shape.
     """
     return _proxy_endpoint("chat/completions", inbound="anthropic")
+
+
+@app.route("/v1/responses", methods=["POST"])
+def openai_responses() -> Response:
+    """OpenAI Responses API surface (``POST /v1/responses``).
+
+    Without this route a Responses request fell through to the generic
+    ``/v1/<subpath>`` passthrough, which resolves a provider directly and has no
+    cycling engine behind it — so a virtual model like ``llmproxy/free`` could
+    not be used from a Responses-speaking client at all. Here the request is
+    translated to canonical OpenAI chat form and routed exactly like
+    ``/v1/chat/completions``, so virtual models, capacity and capability
+    ordering, context fit and failover all apply, and the result is rendered back
+    into the Responses shape.
+    """
+    return _proxy_endpoint("chat/completions", inbound="responses")
+
+
+@app.route("/v1/responses/<response_id>", methods=["GET"])
+def openai_response_get(response_id: str) -> Response:
+    """Fetch a stored Response by id.
+
+    llmproxy keeps conversation state only in the bounded in-process store that
+    backs ``previous_response_id`` (see ``dialects/responses._ResponseStore``),
+    and that store holds the transcript rather than the rendered Response object.
+    So this reports whether the conversation is still known and says plainly that
+    the body is not retained, instead of fabricating one.
+    """
+    from .dialects.responses import STORE
+    if STORE.get(response_id) is None:
+        return _error(f"No stored response with id '{response_id}'.",
+                      status=404, code="not_found")
+    return jsonify({
+        "id": response_id,
+        "object": "response",
+        "status": "completed",
+        "_note": (
+            "llmproxy stores the conversation transcript for previous_response_id "
+            "but does not retain rendered response bodies."
+        ),
+    })
+
+
+@app.route("/v1/responses/<response_id>", methods=["DELETE"])
+def openai_response_delete(response_id: str) -> Response:
+    """Forget a stored conversation."""
+    from .dialects.responses import STORE
+    deleted = STORE.delete(response_id)
+    return jsonify({"id": response_id, "object": "response.deleted", "deleted": deleted})
 
 
 @app.route("/v1/messages/count_tokens", methods=["POST"])

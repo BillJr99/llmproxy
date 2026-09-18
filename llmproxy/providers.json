@@ -260,6 +260,11 @@
         "cerebras/zai-glm-4.7": "standard"
       },
       "model_capabilities": {
+        "cerebras/gpt-oss-120b": [
+          "tools",
+          "reasoning",
+          "json"
+        ],
         "cerebras/llama3.1-8b": [
           "tools",
           "json"

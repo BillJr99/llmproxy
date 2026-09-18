@@ -48,6 +48,12 @@ jobs:
       - name: Lint
         run: ruff check llmproxy scripts tests
 
+      # test.sh ships with the repo and now also drives the offline pytest
+      # suite, so a syntax error in it breaks a documented entry point. It is
+      # never executed in CI (it needs a live server), so check it statically.
+      - name: Shell syntax
+        run: bash -n test.sh
+
   config-example-up-to-date:
     runs-on: ubuntu-latest
     steps:

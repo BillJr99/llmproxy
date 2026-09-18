@@ -73,16 +73,93 @@ def _system_text(system) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Prompt-cache breakpoints (``cache_control``)
+# ---------------------------------------------------------------------------
+# Anthropic marks a cacheable prefix by hanging ``cache_control`` off the last
+# block it should cover. Flattening blocks to a bare string — which every path
+# here used to do — silently deleted those markers, so a client that had
+# carefully placed its breakpoints got no caching and no warning, only a bigger
+# bill and a slower turn.
+#
+# The canonical middle is OpenAI chat, which has somewhere to put this: content
+# as a list of parts, with the marker riding on the part. That is the same shape
+# OpenRouter uses, so it also survives to an OpenAI-protocol upstream unchanged.
+# Structure is only introduced when a marker is actually present, so the common
+# uncached request still flattens to a plain string exactly as before.
+
+def _has_cache_control(blocks) -> bool:
+    """True when any block in *blocks* carries a ``cache_control`` marker."""
+    if not isinstance(blocks, list):
+        return False
+    return any(isinstance(b, dict) and b.get("cache_control") for b in blocks)
+
+
+def _text_parts_with_cache_control(blocks) -> list[dict]:
+    """Anthropic text blocks -> canonical content parts, markers preserved."""
+    parts: list[dict] = []
+    for b in blocks:
+        if not isinstance(b, dict) or b.get("type") != "text":
+            continue
+        part: dict = {"type": "text", "text": b.get("text", "")}
+        if b.get("cache_control"):
+            part["cache_control"] = b["cache_control"]
+        parts.append(part)
+    return parts
+
+
+def _system_content(system):
+    """Canonical ``system`` content: a string, or parts when cached.
+
+    Returns the flattened string for the ordinary case and a parts list only
+    when the client placed a cache breakpoint, so an uncached request produces
+    exactly the message it always did.
+    """
+    if isinstance(system, list) and _has_cache_control(system):
+        return _text_parts_with_cache_control(system)
+    return _system_text(system)
+
+
+# ---------------------------------------------------------------------------
 # canonical OpenAI  ->  Anthropic Messages (request body)
 # ---------------------------------------------------------------------------
 
-def _openai_to_anthropic_messages(messages: list[dict]) -> tuple[str, list[dict]]:
+def _canonical_text_blocks(content) -> list[dict]:
+    """Canonical content -> Anthropic text blocks, ``cache_control`` preserved.
+
+    A plain string yields a single unmarked block, which is what this path has
+    always produced. A parts list yields one block per part and carries any
+    breakpoint across, so a cache marker that arrived on an inbound Anthropic
+    request survives the round trip back out to an Anthropic upstream.
+    """
+    if isinstance(content, list):
+        blocks: list[dict] = []
+        for part in content:
+            if isinstance(part, str):
+                blocks.append({"type": "text", "text": part})
+                continue
+            if not isinstance(part, dict):
+                continue
+            block: dict = {"type": "text", "text": part.get("text", "")}
+            if part.get("cache_control"):
+                block["cache_control"] = part["cache_control"]
+            blocks.append(block)
+        return blocks
+    text = _text_of(content)
+    return [{"type": "text", "text": text}] if text else []
+
+
+def _openai_to_anthropic_messages(messages: list[dict]) -> tuple[list, list[dict]]:
     system_chunks: list[str] = []
+    system_blocks: list[dict] = []
     out: list[dict] = []
     for msg in messages:
         role = msg.get("role")
         if role == "system":
-            system_chunks.append(_text_of(msg.get("content")))
+            content = msg.get("content")
+            if isinstance(content, list):
+                system_blocks.extend(_canonical_text_blocks(content))
+            else:
+                system_chunks.append(_text_of(content))
             continue
         if role == "tool":
             out.append({"role": "user", "content": [{
@@ -92,10 +169,7 @@ def _openai_to_anthropic_messages(messages: list[dict]) -> tuple[str, list[dict]
             }]})
             continue
         if role == "assistant":
-            blocks: list[dict] = []
-            text = _text_of(msg.get("content"))
-            if text:
-                blocks.append({"type": "text", "text": text})
+            blocks: list[dict] = _canonical_text_blocks(msg.get("content"))
             for tc in msg.get("tool_calls") or []:
                 fn = tc.get("function", {})
                 try:
@@ -107,7 +181,15 @@ def _openai_to_anthropic_messages(messages: list[dict]) -> tuple[str, list[dict]
             out.append({"role": "assistant", "content": blocks or [{"type": "text", "text": ""}]})
             continue
         # user (and any other role) -> user text block
-        out.append({"role": "user", "content": [{"type": "text", "text": _text_of(msg.get("content"))}]})
+        user_blocks = _canonical_text_blocks(msg.get("content"))
+        out.append({"role": "user", "content": user_blocks or [{"type": "text", "text": ""}]})
+    # A marked system prompt has to stay a block list for its breakpoint to mean
+    # anything; an unmarked one collapses to the plain string as before.
+    if system_blocks:
+        joined = "\n".join(c for c in system_chunks if c)
+        if joined:
+            system_blocks.insert(0, {"type": "text", "text": joined})
+        return system_blocks, out
     return "\n".join(c for c in system_chunks if c), out
 
 
@@ -134,11 +216,14 @@ def _to_anthropic_request(payload: dict) -> dict:
     for tool in payload.get("tools") or []:
         if tool.get("type") == "function" and tool.get("function"):
             fn = tool["function"]
-            tools.append({
+            entry: dict = {
                 "name": fn.get("name"),
                 "description": fn.get("description", ""),
                 "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
-            })
+            }
+            if tool.get("cache_control"):
+                entry["cache_control"] = tool["cache_control"]
+            tools.append(entry)
     if tools:
         body["tools"] = tools
     return body
@@ -147,6 +232,24 @@ def _to_anthropic_request(payload: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Anthropic Messages (response)  <->  canonical OpenAI (response)
 # ---------------------------------------------------------------------------
+
+# Anthropic reports cache activity as two extra usage counters. OpenAI carries
+# the read side as ``prompt_tokens_details.cached_tokens``; there is no standard
+# OpenAI field for the write side, so it is surfaced under its Anthropic name.
+# Without this a caller has no way to tell a cache hit from a miss, which makes
+# a caching setup impossible to verify — the one number you actually want.
+
+def _cache_usage_fields(usage_in: dict) -> dict:
+    """Canonical usage extras describing prompt-cache activity, if any."""
+    out: dict = {}
+    read = usage_in.get("cache_read_input_tokens")
+    written = usage_in.get("cache_creation_input_tokens")
+    if isinstance(read, int):
+        out["prompt_tokens_details"] = {"cached_tokens": read}
+    if isinstance(written, int):
+        out["cache_creation_input_tokens"] = written
+    return out
+
 
 def _anthropic_response_to_openai(data: dict) -> dict:
     text_out = []
@@ -175,6 +278,7 @@ def _anthropic_response_to_openai(data: dict) -> dict:
         "model": data.get("model", ""),
         "choices": [{"index": 0, "message": message, "finish_reason": finish}],
         "usage": {
+            **_cache_usage_fields(usage_in),
             "prompt_tokens": usage_in.get("input_tokens", 0),
             "completion_tokens": usage_in.get("output_tokens", 0),
             "total_tokens": usage_in.get("input_tokens", 0) + usage_in.get("output_tokens", 0),
@@ -220,7 +324,7 @@ def _openai_response_to_anthropic(data: dict) -> dict:
 
 def _anthropic_to_openai_request(body: dict) -> dict:
     messages: list[dict] = []
-    system = _system_text(body.get("system"))
+    system = _system_content(body.get("system"))
     if system:
         messages.append({"role": "system", "content": system})
     for msg in body.get("messages", []):
@@ -232,6 +336,7 @@ def _anthropic_to_openai_request(body: dict) -> dict:
         text_parts: list[str] = []
         tool_calls: list[dict] = []
         tool_results: list[dict] = []
+        cached = _has_cache_control(content)
         for block in content or []:
             btype = block.get("type")
             if btype == "text":
@@ -251,14 +356,19 @@ def _anthropic_to_openai_request(body: dict) -> dict:
                     "tool_call_id": block.get("tool_use_id", ""),
                     "content": _text_of(block.get("content")),
                 })
+        # Only build a parts list when a cache breakpoint is actually present;
+        # otherwise flatten to the plain string this has always produced.
+        text_content = (
+            _text_parts_with_cache_control(content) if cached else "".join(text_parts)
+        )
         if role == "assistant":
-            m: dict = {"role": "assistant", "content": "".join(text_parts) or None}
+            m: dict = {"role": "assistant", "content": text_content or None}
             if tool_calls:
                 m["tool_calls"] = tool_calls
             messages.append(m)
         else:  # user
             if text_parts:
-                messages.append({"role": "user", "content": "".join(text_parts)})
+                messages.append({"role": "user", "content": text_content})
             messages.extend(tool_results)
 
     payload: dict = {"model": body.get("model", ""), "messages": messages}
@@ -274,11 +384,16 @@ def _anthropic_to_openai_request(body: dict) -> dict:
         payload["stream"] = True
     tools = []
     for tool in body.get("tools") or []:
-        tools.append({"type": "function", "function": {
+        entry: dict = {"type": "function", "function": {
             "name": tool.get("name"),
             "description": tool.get("description", ""),
             "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
-        }})
+        }}
+        # A breakpoint on a tool definition caches the whole tool block; carry it
+        # on the canonical entry so an Anthropic upstream gets it back.
+        if tool.get("cache_control"):
+            entry["cache_control"] = tool["cache_control"]
+        tools.append(entry)
     if tools:
         payload["tools"] = tools
         if isinstance(body.get("tool_choice"), dict):
@@ -366,6 +481,7 @@ class AnthropicOutbound(OutboundAdapter):
                  "choices": [{"index": 0, "delta": {}, "finish_reason": finish or "stop"}]}
         if usage:
             final["usage"] = {
+                **_cache_usage_fields(usage),
                 "prompt_tokens": usage.get("input_tokens", 0),
                 "completion_tokens": usage.get("output_tokens", 0),
                 "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
