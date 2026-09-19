@@ -968,6 +968,12 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
 }
 ```
 
+> **Three timeouts, not one.** `request_timeout` and `stream_timeout` bound a
+> single socket read; [`virtual_timeout_seconds`](#virtual_timeout_seconds)
+> bounds *silence* in a virtual pool and is the one that catches a stream which
+> starts normally and then stops. They are not interchangeable and they compose
+> (the smaller wins) — see [which one you want](#which-timeout).
+
 > **Config layout (free_tier / providers_pr).** The free-tier maintenance
 > switches and the auto-PR settings live under two grouped objects, `free_tier`
 > and `providers_pr`, rather than as loose top-level keys. Configs written with
@@ -1509,6 +1515,47 @@ Two limits worth knowing:
 
 Pick a value above your slowest legitimate inter-chunk gap and below your
 client's own read timeout. `90` is a reasonable starting point for agent traffic.
+
+<a name="which-timeout"></a>
+#### Which of the three timeouts do I want?
+
+There are three, and they are not interchangeable.
+
+| Key | Default | Applies to | Bounds |
+|-----|---------|------------|--------|
+| `request_timeout` | `120` | Every upstream call, virtual or pinned, plus provider `/models` discovery and the admin "test provider" button | A single socket read on a non-streaming call |
+| `stream_timeout` | `300` | Every streamed call, virtual or pinned | A single socket read on a streamed call, which incidentally bounds the gap between chunks |
+| `virtual_timeout_seconds` | `0` (off) | Virtual pools only | Silence, at every stage, streaming or not |
+
+**Lowering `stream_timeout` really would catch a stalled stream.** It becomes the
+socket read timeout, and because that is a property of the socket it stays in
+force inside the chunk loop, so `stream_timeout: 90` does bound the inter-chunk
+gap. At the default `300` the bound exists but is far beyond any agent's
+patience, which is why a stall presents as a hang. So if all you want is to stop
+streams hanging, that one key will do it.
+
+Three things it cannot do, which is why `virtual_timeout_seconds` exists:
+
+- **`stream_timeout` is wired to gunicorn's worker timeout** (`max(stream_timeout, 120)`),
+  so changing it also changes when a worker is killed, and the two can no longer
+  be tuned apart.
+- **`request_timeout` cannot express this at all for non-streaming requests.** A
+  virtual candidate's timeout is `min(request_timeout, 60)`, and that `60` is a
+  constant — so `request_timeout: 90` still gives you 60 per candidate, and you
+  can only move it down. It is also read in a dozen places including provider
+  discovery, so lowering it shortens those too.
+- **Neither is scoped to virtual pools.** Both also govern pinned
+  `provider/model` requests, which have no pool to rotate within.
+
+Use `virtual_timeout_seconds` when you want one patience setting for the pools
+and nothing else disturbed. Use `stream_timeout` when you want every stream
+bounded, pinned requests included, and do not mind moving the worker timeout
+with it. They compose: the effective bound is whichever is smaller.
+
+**The cooldown is separate from all three.** A timeout is treated as a `429`
+whichever key produced it, and that is arguably the larger half of the fix —
+without it, a model that has started timing out keeps its rank and costs a full
+timeout on *every* request rather than just the first.
 
 <a name="cycle_deadline_seconds"></a>
 ### `server.cycle_deadline_seconds` — bound the whole candidate walk
