@@ -213,9 +213,23 @@ _VIRTUAL_RETRY_BACKOFF: float = 0.5
 # budget before failing over. The budget is multiplied by _BUDGET_BUMP_FACTOR
 # each retry, capped at _BUDGET_BUMP_CEILING, for at most _BUDGET_BUMP_MAX_RETRIES
 # rounds — bounded so a pathological model can't drive unbounded cost/latency.
-_BUDGET_BUMP_FACTOR: int = 4
+# Factor 16 rather than a gentler ramp because the models that hit this are
+# reasoning models: one starved at 8 tokens is starved at 32 and at 128 too, so
+# the intermediate rungs are pure waste — three full round trips to learn what
+# the first one already implied. Sixteen reaches the ceiling in at most three
+# bumps from any starting budget (8 -> 128 -> 2048 -> 4096; from 256, one), so
+# the fourth retry is margin for an unusually small budget rather than a step
+# that normally fires: _bumped_budget returns None at the ceiling and the loop
+# exits without spending a call.
+#
+# The ceiling stays 4096 deliberately. Nothing in llmproxy knows any model's
+# real maximum output, so a higher ceiling risks asking for more than the model
+# allows — and a provider answers that with a 400, which turns a recoverable
+# empty completion into a hard failure. Raising it would need per-model output
+# caps first.
+_BUDGET_BUMP_FACTOR: int = 16
 _BUDGET_BUMP_CEILING: int = 4096
-_BUDGET_BUMP_MAX_RETRIES: int = 2
+_BUDGET_BUMP_MAX_RETRIES: int = 4
 # Stable per-process timestamp used as the OpenAI-standard ``created`` fallback
 # for models whose upstream listing omits it (and for synthetic virtual models).
 _SERVER_EPOCH: int = int(time.time())
@@ -1808,8 +1822,12 @@ def _rebuild_route_cache(providers_cfg: dict, timeout: int,
         _model_context_cache.update(new_context)
 
     logger.info(
-        "[server:_rebuild_route_cache] %d entries (%d with a known context window)",
-        len(new_cache), len(new_context),
+        # Report MODELS, not cache entries. The cache is dual-keyed, so
+        # len(new_cache) is twice the model count while len(new_context) is not
+        # — printed side by side they read as though at most half the models
+        # have a known context window.
+        "[server:_rebuild_route_cache] %d model(s) (%d with a known context window)",
+        len(set(new_cache.values())), len(new_context),
     )
     return all_models
 
@@ -1862,6 +1880,24 @@ def _get_route_cache_snapshot() -> dict[str, tuple[str, str]]:
 
     with _model_route_cache_lock:
         return dict(_model_route_cache)
+
+
+def _get_distinct_routes() -> list[tuple[str, str]]:
+    """Every ``(provider, upstream_id)`` in the route cache, each exactly once.
+
+    The cache is dual-keyed: ``_rebuild_route_cache`` stores every model under
+    both the canonical ``provider__model`` id and the advertised
+    ``provider/model`` form, so an inbound id in either shape resolves without
+    string surgery. That is right for a lookup and wrong for a walk — iterating
+    ``.items()`` yields every model twice, which silently doubled every virtual
+    candidate pool in the proxy.
+
+    Callers building a pool want routing targets, not cache keys, so they walk
+    this instead. First-seen order is preserved, which is canonical-id insertion
+    order, so the sequence every downstream ordering pass builds on is exactly
+    what it was minus the duplicate.
+    """
+    return list(dict.fromkeys(_get_route_cache_snapshot().values()))
 
 
 def _sync_local_provider_models_once() -> None:
@@ -2320,7 +2356,7 @@ def _recompute_flagship_members(config: dict, config_path: str | None) -> dict |
         return None
 
     candidates: list[Candidate] = []
-    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+    for provider_name, upstream_id in _get_distinct_routes():
         provider_cfg = get_provider(config, provider_name)
         if not provider_cfg or not _provider_exposes_to_virtual_models(provider_cfg):
             continue
@@ -2754,9 +2790,19 @@ def _infer_local_reasoning_level(model_id: str) -> str:
 
 
 @app.route("/v1/models", methods=["GET"])
+@app.route("/models", methods=["GET"])
 def list_models() -> Response:
     """
     Aggregate model listings from all configured providers.
+
+    Also served bare at ``/models``, for the same reason ``/version`` is: clients
+    configured with a base URL that already ends in the API root probe it there,
+    and without the rule Flask returns 404 — the ``/v1/<path>`` pass-through only
+    covers ``/v1/*``. It costs nothing, since it is the same view.
+
+    That one rule covers two cases, because ``_StripApiPrefix`` runs first: a
+    client pointed at the bare root, and one pointed at ``/api``, whose
+    ``/api/models`` is rewritten to ``/models`` before routing.
 
     Each provider is queried concurrently.  Providers that fail are logged as
     warnings and omitted rather than causing an overall failure.  The route
@@ -3109,9 +3155,13 @@ def _build_models_list(providers: dict, config: dict, timeout: int, models_ttl: 
 
 
 @app.route("/v1/models/<path:model_id>", methods=["GET"])
+@app.route("/models/<path:model_id>", methods=["GET"])
 def get_model(model_id: str) -> Response:
     """
     Return metadata for a single proxy model ID.
+
+    Aliased bare at ``/models/<id>`` alongside the listing, so a client that
+    found a model through ``/models`` does not hit a 404 on the very next call.
 
     Accepts the display format returned by /v1/models ("provider__model"),
     two legacy display formats kept for backward compatibility
@@ -6282,7 +6332,7 @@ def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
     """
     config = load_config()
     candidates = []
-    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+    for provider_name, upstream_id in _get_distinct_routes():
         provider_cfg = get_provider(config, provider_name)
         if not provider_cfg:
             continue
@@ -6379,7 +6429,7 @@ def _get_local_model_candidates() -> list[tuple[str, dict, str]]:
     """(provider_name, provider_cfg, upstream_model) for every model whose provider base_url is localhost."""
     config = load_config()
     candidates = []
-    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+    for provider_name, upstream_id in _get_distinct_routes():
         provider_cfg = get_provider(config, provider_name)
         if not provider_cfg:
             continue
@@ -6556,7 +6606,7 @@ def _get_reasoning_model_candidates(level: str) -> list[tuple[str, dict, str]]:
     flagship = _get_flagship_models(config) if overlay else set()
     reasoning = {} if overlay else _get_model_reasoning(config)
     candidates = []
-    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+    for provider_name, upstream_id in _get_distinct_routes():
         qualified = f"{provider_name}/{upstream_id}".lower()
         if overlay:
             matched = qualified in flagship or upstream_id.lower() in flagship
@@ -6594,7 +6644,7 @@ def _get_capability_model_candidates(cap: str) -> list[tuple[str, dict, str]]:
     config = load_config()
     cap_map = _model_capabilities(config)
     candidates = []
-    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+    for provider_name, upstream_id in _get_distinct_routes():
         if _model_has_capability(provider_name, upstream_id, cap, cap_map):
             provider_cfg = get_provider(config, provider_name)
             if not provider_cfg:
@@ -6633,7 +6683,7 @@ def _get_loadbalanced_candidates() -> list[tuple[str, dict, str]]:
     """
     config = load_config()
     candidates = []
-    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+    for provider_name, upstream_id in _get_distinct_routes():
         provider_cfg = get_provider(config, provider_name)
         if not provider_cfg:
             continue
@@ -6681,7 +6731,7 @@ def _provider_free_headroom(provider_name: str, provider_cfg: dict) -> bool:
     if allowance is None:
         return False
     used_min = used_day = used_tok_min = used_tok_day = 0
-    for _proxy_id, (pn, upstream_id) in _get_route_cache_snapshot().items():
+    for pn, upstream_id in _get_distinct_routes():
         if pn != provider_name:
             continue
         key = f"{pn}/{upstream_id}".lower()
@@ -6914,7 +6964,7 @@ def _get_provider_virtual_candidates(provider_name: str, dimension: str) -> list
             return []
         return [
             (provider_name, provider_cfg, upstream_id)
-            for _proxy_id, (pn, upstream_id) in _get_route_cache_snapshot().items()
+            for pn, upstream_id in _get_distinct_routes()
             if pn == provider_name
         ]
     if dimension == "free":
@@ -7168,7 +7218,7 @@ def _get_all_model_candidates() -> list[tuple[str, dict, str]]:
     draws from (subject to the allow_paid filter applied by the caller)."""
     config = load_config()
     out: list[tuple[str, dict, str]] = []
-    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+    for provider_name, upstream_id in _get_distinct_routes():
         provider_cfg = get_provider(config, provider_name)
         if not provider_cfg:
             continue

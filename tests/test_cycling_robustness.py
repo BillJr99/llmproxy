@@ -280,8 +280,19 @@ def test_budget_escalation_is_bounded_then_fails_over(server, monkeypatch):
         "chat/completions", "t", candidates, {"max_tokens": 8}, 5
     )
     m1_calls = [c for c in calls if c["model"] == "m1"]
-    # one initial + at most _BUDGET_BUMP_MAX_RETRIES bumped attempts, then failover
-    assert len(m1_calls) == 1 + server._BUDGET_BUMP_MAX_RETRIES
+    # Bounded by whichever limit binds first: the retry count, or the ceiling.
+    # With a large factor the ceiling binds sooner, and the remaining retries
+    # cost nothing because _bumped_budget refuses to bump at the ceiling — so
+    # asserting exactly 1 + MAX_RETRIES would encode the factor, not the rule.
+    budgets = [c["max_tokens"] for c in m1_calls]
+    expected = [8]
+    while (len(expected) <= server._BUDGET_BUMP_MAX_RETRIES
+           and expected[-1] < server._BUDGET_BUMP_CEILING):
+        expected.append(min(expected[-1] * server._BUDGET_BUMP_FACTOR,
+                            server._BUDGET_BUMP_CEILING))
+    assert budgets == expected
+    assert len(m1_calls) <= 1 + server._BUDGET_BUMP_MAX_RETRIES
+    assert budgets[-1] == server._BUDGET_BUMP_CEILING, "must escalate to the ceiling"
     assert calls[-1]["model"] == "m2"
     assert b"ok" in resp.get_data()
 

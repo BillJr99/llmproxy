@@ -255,6 +255,15 @@ to bound the candidate walk as a whole.
 it refused rather than by a cooldown, so requests at least that big
 [route around it](#oversized-requests) while smaller ones still prefer it.
 
+**Each model appears in a pool exactly once.** The route cache is dual-keyed — every model
+is stored under both its canonical `provider__model` id and the advertised
+`provider/model` form, so an inbound id in either shape resolves without string surgery —
+and until recently the code that *built* candidate pools walked those keys rather than the
+routes behind them, so every pool was silently doubled. Failover therefore retried the
+same model before moving to the next one, and a provider's shared `free_allowance` was
+counted twice over, exhausting at half its real quota. Pools are now built from distinct
+routing targets; lookups still use both keys.
+
 **A slow candidate can be given a deadline of its own, and is remembered.** Set
 [`server.virtual_timeout_seconds`](#virtual_timeout_seconds) to say how long any
 virtual-pool candidate may go without producing bytes — including the gap between
@@ -741,6 +750,14 @@ need no separate inbound surface — use the OpenAI or Anthropic endpoints for t
 > assume an OpenRouter-/Open WebUI-/Ollama-style base URL (`http://host/api` or
 > `http://host/api/v1`) work without hitting a 404 fallback. The bare `/v1` surface is
 > unchanged. The admin UI/API is **not** aliased — it stays at `/admin` only.
+
+> **Bare `/models`.** The model listing is additionally served at `/models` and
+> `/models/<id>`, alongside `/v1/models`. Some clients treat their configured base URL as
+> already being the API root and probe `/models` directly; without the alias that is a
+> 404, for the same reason `/version` has its own bare route. Because the `/api` rewrite
+> runs before routing, the one alias also makes `/api/models` resolve. Only the listing is
+> aliased this way — `/chat/completions` and the other endpoints stay under `/v1`, since
+> nothing probes those without a prefix.
 
 ```python
 # Anthropic SDK pointed at llmproxy — works with streaming and tools
@@ -1637,6 +1654,16 @@ Set `server.cycle_deadline_seconds` to a wall-clock budget for the candidate wal
 
 Pick a value comfortably below your client's read timeout and above 60s, so at least
 one full candidate attempt always fits. `240` is a reasonable starting point.
+
+**The one path that spends several timeouts on a single candidate** is the token-budget
+escalation: when a model answers `200` with an empty completion truncated on `max_tokens`
+— a reasoning model that spent its whole budget thinking — llmproxy retries it with a
+larger budget rather than failing over, multiplying by 16 up to a 4096 ceiling, at most
+four times. The ceiling is reached in at most three bumps from any starting budget, so the
+worst case is four attempts on one candidate; at the default 60s candidate timeout that is
+a few minutes before it even considers the next model. `cycle_deadline_seconds` is what
+bounds it. Note this applies to non-streaming requests only — the streaming path fails
+over instead.
 
 <a name="stream_commit_on_content"></a>
 ### `server.stream_commit_on_content` — widen the pre-commit window

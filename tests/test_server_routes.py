@@ -330,3 +330,38 @@ def test_the_error_path_still_carries_retry_after(server, monkeypatch):
     assert r.status_code == 429
     assert r.headers.get("Retry-After") == "42"
     assert r.headers.get("X-LLMProxy-Selected-Model") == "fakeprov/free-model"
+
+
+# ── the bare /models surface ────────────────────────────────────────────────
+#
+# Clients configured with a base URL that already ends at the API root probe
+# /models rather than /v1/models, and got a 404. Because _StripApiPrefix rewrites
+# PATH_INFO before routing, one rule also covers a client pointed at /api.
+
+def test_bare_models_matches_the_v1_listing(client):
+    bare = client.get("/models")
+    v1 = client.get("/v1/models")
+    assert bare.status_code == v1.status_code == 200
+    assert bare.get_json() == v1.get_json()
+
+
+def test_api_models_resolves_through_the_prefix_shim(client):
+    """/api/models is rewritten to /models, so it resolves for free."""
+    assert client.get("/api/models").status_code == 200
+
+
+def test_bare_model_detail_is_not_a_404(client):
+    """A client that found a model through /models must not hit a 404 on the
+    very next call."""
+    ids = [m["id"] for m in client.get("/models").get_json().get("data", [])]
+    if not ids:
+        pytest.skip("no models advertised in this fixture")
+    bare = client.get(f"/models/{ids[0]}")
+    v1 = client.get(f"/v1/models/{ids[0]}")
+    assert bare.status_code == v1.status_code == 200
+    assert bare.get_json() == v1.get_json()
+
+
+def test_the_bare_alias_does_not_extend_to_admin(client):
+    """The /admin surface stays unaliased, as the prefix shim already guarantees."""
+    assert client.get("/api/admin").status_code == 404
