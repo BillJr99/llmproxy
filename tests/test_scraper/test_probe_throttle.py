@@ -119,10 +119,14 @@ def test_probe_timestamp_recorded_when_sidecar_write_fails(tmp_path, monkeypatch
     assert "last_probe_at" in state  # throttle timestamp persisted to the bind mount
 
 
-def test_sidecar_mirrored_to_config_dir_when_readonly(tmp_path, monkeypatch):
-    """When the bundled providers.json is read-only, the computed providers.json
-    and config.example.json are mirrored to the user-config dir so a read-only
-    deployment can still review them / open a providers PR."""
+def test_nothing_is_mirrored_into_the_config_dir(tmp_path, monkeypatch):
+    """providers.json is read from the repo checkout, never copied beside
+    config.json.
+
+    A second copy there would shadow nothing, drift from the checkout
+    immediately, and invite hand-edits to a machine-written file. Learned facts
+    go to routing_metadata.json instead, which is per-deployment by design.
+    """
     import scripts.update_free_models as ufm
 
     cfg = tmp_path / "config.json"
@@ -132,8 +136,5 @@ def test_sidecar_mirrored_to_config_dir_when_readonly(tmp_path, monkeypatch):
 
     ufm.main(["--source", "cost_probe", "--config", str(cfg)])
 
-    mirrored_providers = tmp_path / "providers.json"
-    mirrored_example = tmp_path / "config.example.json"
-    assert mirrored_providers.exists() and mirrored_example.exists()
-    assert "providers" in json.loads(mirrored_providers.read_text())
-    assert "providers" in json.loads(mirrored_example.read_text())
+    assert not (tmp_path / "providers.json").exists()
+    assert not (tmp_path / "config.example.json").exists()

@@ -164,16 +164,21 @@ def test_believed_free_cost_is_flagged(usage_server):
     assert body["models"][0]["unexpected_cost"] is False
 
 
-def test_cost_observed_persisted_to_config(usage_server, tmp_path):
-    # First observation of a cost on a believed_free model is appended to the live
-    # config's cost_observed_free_tier (original-cased qualified id), exactly once.
+def test_cost_observed_persisted_to_the_sidecar(usage_server, tmp_path):
+    """A cost observed at runtime is something llmproxy LEARNED, so it goes to
+    the routing-metadata sidecar — never to the hand-edited config.json."""
+    before = json.loads((tmp_path / "config.json").read_text())
+
     usage_server._record_usage(
         "groq", "free-model",
         usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cost": 0.002},
         config=usage_server.load_config(),
     )
-    written = json.loads((tmp_path / "config.json").read_text())
-    assert written["cost_observed_free_tier"] == ["groq/free-model"]
+    sidecar = json.loads((tmp_path / "routing_metadata.json").read_text())
+    assert sidecar["by_provider"]["groq"]["cost_observed_free_tier"] == ["free-model"]
+
+    # The user's file is untouched — the whole point of the split.
+    assert json.loads((tmp_path / "config.json").read_text()) == before
 
     # A second hit must not duplicate the entry.
     usage_server._record_usage(
@@ -181,8 +186,8 @@ def test_cost_observed_persisted_to_config(usage_server, tmp_path):
         usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "cost": 0.003},
         config=usage_server.load_config(),
     )
-    written = json.loads((tmp_path / "config.json").read_text())
-    assert written["cost_observed_free_tier"] == ["groq/free-model"]
+    sidecar = json.loads((tmp_path / "routing_metadata.json").read_text())
+    assert sidecar["by_provider"]["groq"]["cost_observed_free_tier"] == ["free-model"]
 
 
 def test_flag_paid_free_reports_first_observation_only(usage_server):

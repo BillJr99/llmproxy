@@ -54,9 +54,16 @@ class _Captured(logging.Handler):
 
 @pytest.fixture
 def captured(monkeypatch):
-    def _attach(server):
+    """Attach a capturing handler, at DEBUG unless a test asks otherwise.
+
+    DEBUG by default because body-carrying records emit at that level — the
+    fixture stands in for an operator who set server.log_level to DEBUG.
+    Tests that care about the gating pass an explicit level.
+    """
+    def _attach(server, level=logging.DEBUG):
         h = _Captured()
         server.request_logger.handlers = [h]
+        server.request_logger.setLevel(level)
         return h
     return _attach
 
@@ -284,3 +291,37 @@ def test_every_request_is_recorded_not_just_the_proxy_surface(
     client.get("/v1/models")
     assert [r["path"] for r in h.records] == ["/health", "/v1/models"]
     assert all(r["model"] is None for r in h.records)
+
+
+# ── full bodies are DEBUG-tier ──────────────────────────────────────────────
+#
+# "full" puts prompts and completions wherever stdout goes, for as long as those
+# logs are kept. Emitting them at DEBUG means the mode alone is not enough:
+# server.log_level has to be DEBUG too, so content takes two deliberate
+# switches. A metadata-only audit trail still runs at INFO.
+
+def test_full_records_are_withheld_at_info(monkeypatch, tmp_path, captured):
+    s = _make_server(monkeypatch, tmp_path, {"request_log": "full"})
+    h = captured(s, logging.INFO)
+    monkeypatch.setattr(s.requests, "post", lambda *a, **k: _Json())
+    _chat(s)
+    assert h.records == [], "bodies must not reach the log at INFO"
+
+
+def test_full_records_appear_at_debug(monkeypatch, tmp_path, captured):
+    s = _make_server(monkeypatch, tmp_path, {"request_log": "full"})
+    h = captured(s, logging.DEBUG)
+    monkeypatch.setattr(s.requests, "post", lambda *a, **k: _Json())
+    _chat(s)
+    assert len(h.records) == 1
+    assert h.records[0]["request_body"]["messages"][0]["content"] == "2+2?"
+
+
+def test_metadata_records_still_emit_at_info(monkeypatch, tmp_path, captured):
+    """The audit trail must not need DEBUG — it carries no content."""
+    s = _make_server(monkeypatch, tmp_path, {"request_log": "metadata"})
+    h = captured(s, logging.INFO)
+    monkeypatch.setattr(s.requests, "post", lambda *a, **k: _Json())
+    _chat(s)
+    assert len(h.records) == 1
+    assert "request_body" not in h.records[0]

@@ -525,6 +525,62 @@ def save_flagship_state(state: dict, config_path: str | None = None) -> bool:
     )
 
 
+# --- Learned routing metadata (routing_metadata.json) ---
+#
+# The middle of three layers. Routing metadata — which models are free, what
+# they cost, what they can do, how fast you may call them — is DEPLOYMENT
+# specific and changes as providers add and withdraw models, so it cannot live
+# in the repo; and it is MACHINE maintained, so it must not live in the file the
+# user hand-edits. It sits here instead, refreshed on its own cadence:
+#
+#   config.json           overrides    (yours, and the admin UI's; always wins)
+#   routing_metadata.json learned      (this file; rewritten by the refresh)
+#   providers.json        defaults     (shipped with the repo, PR-able)
+#
+# Split by what each fact actually describes. A capability belongs to the
+# weights, so it is keyed by normalized model and one entry covers every
+# provider serving them. A rate limit belongs to the deployment, so it is keyed
+# per provider. Keying them the same way would either lose the cross-provider
+# join or invent per-provider capabilities that do not exist.
+#
+# Shape: {"last_refresh_at": iso8601,
+#         "by_model":    {model_key: {"capabilities": [...], "reasoning": str}},
+#         "by_provider": {provider: {"believed_free": [...],
+#                                    "cost_observed_free_tier": [...],
+#                                    "free_limits": {model: {...}}}},
+#         "models_considered": int}
+
+ROUTING_METADATA_DEFAULTS: dict = {
+    "enabled": True,
+    "refresh_frequency_days": 7,
+}
+
+
+def routing_metadata_cfg(config: dict | None = None) -> dict:
+    """The `routing_metadata` block with defaults filled in."""
+    raw = (config or {}).get("routing_metadata")
+    merged = dict(ROUTING_METADATA_DEFAULTS)
+    if isinstance(raw, dict):
+        merged.update({k: v for k, v in raw.items() if v is not None})
+    return merged
+
+
+def get_routing_metadata_path(config_path: str | None = None) -> Path:
+    return get_config_path(config_path).parent / "routing_metadata.json"
+
+
+def load_routing_metadata(config_path: str | None = None) -> dict:
+    return _load_state_file(
+        get_routing_metadata_path(config_path), "load_routing_metadata"
+    )
+
+
+def save_routing_metadata(state: dict, config_path: str | None = None) -> bool:
+    return _save_state_file(
+        state, get_routing_metadata_path(config_path), "save_routing_metadata"
+    )
+
+
 # --- PR state (pr_state.json) ---
 
 def get_pr_state_path(config_path: str | None = None) -> Path:

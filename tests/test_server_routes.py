@@ -140,9 +140,13 @@ def test_architecture_block(server):
     assert server._architecture_block(None, [])["modality"] == "text->text"
 
 
-def test_startup_sidecar_sync_reconciles_live_config(server, tmp_path, monkeypatch):
-    """The startup sync helper reconciles the live config.json from the bundled
-    sidecar, with no network and without writing the sidecar (read-only safe)."""
+def test_startup_sidecar_sync_no_longer_rewrites_the_user_config(
+        server, tmp_path, monkeypatch):
+    """The startup sync runs without touching config.json.
+
+    Copying the sidecar's sections in is what froze them at first run; the
+    runtime reads providers.json directly as the defaults layer instead.
+    """
     import json
 
     import scripts.update_free_models as ufm
@@ -165,8 +169,9 @@ def test_startup_sidecar_sync_reconciles_live_config(server, tmp_path, monkeypat
 
     ran = server._sync_believed_free_from_sidecar(str(p))
     assert ran is True
-    written = json.loads(p.read_text())
-    assert "google/added" in written["believed_free"]
+    # The user's config is left exactly as written. The sidecar's believed_free
+    # reaches routing through the defaults layer now, not by being copied here.
+    assert json.loads(p.read_text()) == cfg
 
 
 def test_supported_parameters_from_config(server):
