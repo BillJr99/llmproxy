@@ -197,9 +197,13 @@
       <label class="switch"><input type="checkbox" id="mt-probe_cost" /> Probe believed-free models for cost <span class="muted">(sends real requests using your keys)</span></label>
       <label class="switch"><input type="checkbox" id="mt-autoremove_believed_free" /> Auto-remove models that probe/price as paid</label>
       <div class="row">
-        <div><label>Probe frequency (days)</label><input type="number" id="mt-probe_frequency_days" min="0" /></div>
+        <div><label>Sweep every (days)</label><input type="number" id="mt-update_frequency_days" min="0" /></div>
+        <div><label>Cost-probe at most every (days)</label><input type="number" id="mt-probe_frequency_days" min="0" /></div>
+        <div><label>Probe timeout (sec)</label><input type="number" id="mt-probe_timeout_sec" min="1" /></div>
       </div>
-      <p class="muted">0 = probe every run · 1 = at most daily · 7 = weekly. Last-run time is cached in <code>probe_state.json</code> next to your config.</p>
+      <p class="muted"><b>Sweep every</b> is the cadence: how often the free-models updater runs at all (0 = every check, 7 = weekly). Last run is cached in <code>update_state.json</code>.</p>
+      <p class="muted"><b>Cost-probe at most every</b> only throttles the cost probe <i>within</i> a sweep, so it can never make it run more often than the sweep (0 = every sweep). Last run is cached in <code>cost_probe_state.json</code>. Set it slightly below the sweep cadence, or an equal value can slip a cycle and effectively double. The <code>:free</code>-discovery probe has no frequency of its own and runs on every sweep.</p>
+      <p class="muted"><b>Probe timeout</b> is the read timeout shared by both probes.</p>
     </div>
     <div class="card">
       <h3>Propose <code>providers.json</code> changes as a PR</h3>
@@ -302,9 +306,10 @@ $("#sv-save").addEventListener("click", async () => {
 // ---- Automation / maintenance ----
 const MT_BOOLS = ["sync_believed_free_on_startup","update_believed_free_on_startup","probe_cost","autoremove_believed_free","pr_providers_list"];
 const MT_STRS = ["pr_providers_repo","pr_providers_base","pr_providers_branch"];
+const MT_INTS = { probe_frequency_days: 0, update_frequency_days: 7, probe_timeout_sec: 10 };
 function fillMaintenance(m) {
   for (const k of MT_BOOLS) $("#mt-"+k).checked = !!m[k];
-  $("#mt-probe_frequency_days").value = m.probe_frequency_days ?? 0;
+  for (const [k, d] of Object.entries(MT_INTS)) $("#mt-"+k).value = m[k] ?? d;
   for (const k of MT_STRS) $("#mt-"+k).value = m[k] || "";
   const pill = $("#mt-token-pill");
   pill.textContent = m.pr_providers_token_is_env ? "· env ref set" : (m.pr_providers_token_set ? "· set" : "· not set");
@@ -312,7 +317,11 @@ function fillMaintenance(m) {
   $("#mt-pr_providers_token").placeholder = m.pr_providers_token_set ? "•••• (unchanged)  or  ${GITHUB_TOKEN}" : "ghp_…  or  ${GITHUB_TOKEN}";
 }
 $("#mt-save").addEventListener("click", async () => {
-  const body = { probe_frequency_days: Number($("#mt-probe_frequency_days").value || 0) };
+  const body = {};
+  for (const [k, d] of Object.entries(MT_INTS)) {
+    const raw = $("#mt-"+k).value;
+    body[k] = raw === "" ? d : Number(raw);
+  }
   for (const k of MT_BOOLS) body[k] = $("#mt-"+k).checked;
   for (const k of MT_STRS) body[k] = $("#mt-"+k).value.trim();
   const tok = $("#mt-pr_providers_token").value.trim();

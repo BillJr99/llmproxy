@@ -1082,7 +1082,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return _sync_user_config(load_data(), args.config, dry_run=args.dry_run)
 
-    # Read opt-in flags from the user config (cost_probe / endpoint_probe / autoremove).
+    # Read opt-in flags from the user config (cost probe, endpoint probe,
+    # autoremove) plus the sweep's shared probe timeout.
     try:
         user_cfg = load_user_config(args.config, force_reload=True)
     except Exception:  # noqa: BLE001 — a missing/broken config must not break scraping
@@ -1094,7 +1095,9 @@ def main(argv: list[str] | None = None) -> int:
     # One timeout governs both probes; free_tier.endpoint_probe.timeout_sec is
     # the pre-flattening spelling and is migrated by config._normalize_config.
     probe_timeout = int(free_tier_cfg.get("probe_timeout_sec") or 10)
-    ep_cfg = free_tier_cfg.get("endpoint_probe", {})
+    # The free_tier.endpoint_probe block is gone; this is read ONLY to warn
+    # about leftover keys in an old config, never to configure anything.
+    legacy_ep_cfg = free_tier_cfg.get("endpoint_probe", {})
     ep_enabled = bool(
         free_tier_cfg.get("sync_on_startup") or free_tier_cfg.get("update_on_startup")
     ) or args.endpoint_probe
@@ -1120,13 +1123,13 @@ def main(argv: list[str] | None = None) -> int:
     # per provider, spends no quota, and can only run as part of a sweep, so the
     # sweep's own update_frequency_days is the only limit it needs. (The cost
     # probe does keep a throttle, because it spends real quota.)
-    if ep_cfg.get("frequency_minutes") is not None:
+    if legacy_ep_cfg.get("frequency_minutes") is not None:
         print(_warn(
             "  ⚠  free_tier.endpoint_probe.frequency_minutes is obsolete and ignored. "
             "The endpoint probe now runs on every sweep; the sweep's own cadence is "
             "free_tier.update_frequency_days. You can delete the key."
         ))
-    if ep_cfg.get("timeout_sec") is not None and "probe_timeout_sec" not in free_tier_cfg:
+    if legacy_ep_cfg.get("timeout_sec") is not None and "probe_timeout_sec" not in free_tier_cfg:
         print(_dim(
             "  free_tier.endpoint_probe.timeout_sec has moved to "
             "free_tier.probe_timeout_sec (now shared with the cost probe); "

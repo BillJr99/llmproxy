@@ -82,6 +82,7 @@ from flask import (
 from . import __version__
 from . import fusion as _fusion
 from .config import (
+    DEFAULT_FREE_TIER_CONFIG,
     RESERVED_PROVIDER_NAMES,
     account_bound_cfg,
     flagship_tier_cfg,
@@ -1792,7 +1793,9 @@ def _maybe_fire_interval_probes(config_path: str | None = None) -> None:
     _maybe_fire_pr_if_due(config, config_path)
 
 
-DEFAULT_UPDATE_FREQUENCY_DAYS = 7
+# Canonical value lives in config.DEFAULT_FREE_TIER_CONFIG so the runtime
+# fallback and the generated config.example.json cannot drift apart.
+DEFAULT_UPDATE_FREQUENCY_DAYS = DEFAULT_FREE_TIER_CONFIG["update_frequency_days"]
 
 
 def _free_update_due(free_tier: dict, config_path: str | None) -> bool:

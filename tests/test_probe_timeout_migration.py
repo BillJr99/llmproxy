@@ -74,3 +74,37 @@ def test_both_probes_accept_the_shared_timeout():
     from scripts.sources.endpoint_probe import EndpointProbeSource
     assert CostProbeSource(timeout=42).timeout == (5, 42)
     assert EndpointProbeSource(timeout=42).timeout == 42
+
+
+# ── one source of truth for the free_tier defaults ──────────────────────────
+
+def test_runtime_defaults_match_the_generated_example_exactly():
+    """config.py defines the defaults; update_free_models.py writes them into
+    config.example.json. Two literals would drift, which is how
+    update_frequency_days ended up in the example but not the runtime."""
+    import json
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    example = json.loads((root / "config.example.json").read_text(encoding="utf-8"))
+    assert example["free_tier"] == DEFAULT_FREE_TIER_CONFIG
+
+
+def test_server_cadence_constant_comes_from_the_shared_default():
+    from llmproxy.server import DEFAULT_UPDATE_FREQUENCY_DAYS
+    assert DEFAULT_UPDATE_FREQUENCY_DAYS == DEFAULT_FREE_TIER_CONFIG["update_frequency_days"]
+
+
+def test_the_admin_api_exposes_the_cadence_and_the_timeout():
+    """The admin UI could previously set the cost-probe throttle but not the
+    cadence that actually governs the sweep."""
+    from llmproxy.admin import _maintenance_view
+    view = _maintenance_view({})
+    assert view["update_frequency_days"] == DEFAULT_FREE_TIER_CONFIG["update_frequency_days"]
+    assert view["probe_timeout_sec"] == DEFAULT_FREE_TIER_CONFIG["probe_timeout_sec"]
+
+
+def test_the_admin_api_reads_user_values_for_both():
+    from llmproxy.admin import _maintenance_view
+    view = _maintenance_view({"free_tier": {"update_frequency_days": 3, "probe_timeout_sec": 30}})
+    assert view["update_frequency_days"] == 3
+    assert view["probe_timeout_sec"] == 30

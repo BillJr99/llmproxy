@@ -155,10 +155,15 @@ DEFAULT_ADMIN_CONFIG = {
 # the cost-probe controls they drive. Replaces the former flat top-level keys
 # sync_believed_free_on_startup / update_believed_free_on_startup / probe_cost /
 # autoremove_believed_free / probe_frequency_days (still accepted on input via
-# _normalize_config below for backward compatibility).
+# _normalize_config below for backward compatibility), and the former
+# endpoint_probe block (flattened to probe_timeout_sec, also migrated there).
 DEFAULT_FREE_TIER_CONFIG = {
     "sync_on_startup": True,
     "update_on_startup": False,
+    # How often the free-models sweep runs at all. Everything else in this block
+    # is a per-source throttle subordinate to it: a source runs only as part of
+    # a sweep, so it can never run more often than this.
+    "update_frequency_days": 7,
     # Read timeout for BOTH probes. They differ in what they spend, not in how
     # long to wait for a slow provider, so one setting covers both. Replaces the
     # former free_tier.endpoint_probe block, which held nothing else once the
