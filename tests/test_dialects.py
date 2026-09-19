@@ -454,3 +454,60 @@ def test_legacy_adapter_prompt_and_response_roundtrip():
     # Upstream error bodies pass through untouched.
     err = b'{"error":{"message":"boom"}}'
     assert adapter.render_response(err) == err
+
+
+# --------------------------------------------------------------------------- #
+# route provenance survives dialect rendering
+# --------------------------------------------------------------------------- #
+# Rendering into a non-OpenAI dialect rebuilds the Response from scratch, which
+# used to discard every header stamped upstream of it. A client on /v1/messages
+# or /v1/responses could therefore never learn which candidate served a virtual
+# model. These pin the repair.
+
+def test_selected_model_header_survives_anthropic_rendering(monkeypatch, server):
+    _set_post(monkeypatch, server, lambda url, body, stream: _FakeResp(body=_OPENAI_RESP))
+    client = server.app.test_client()
+    r = client.post("/v1/messages",
+                    json={"model": "oai__gpt-x", "messages": [{"role": "user", "content": "hi"}],
+                          "max_tokens": 16})
+    assert r.status_code == 200
+    assert r.headers["X-LLMProxy-Selected-Model"] == "oai/gpt-x"
+    # The body really was rendered into the Anthropic dialect, so this is the
+    # rebuilt response and not an accidental passthrough.
+    assert json.loads(r.data)["type"] == "message"
+
+
+def test_selected_model_header_survives_responses_rendering(monkeypatch, server):
+    _set_post(monkeypatch, server, lambda url, body, stream: _FakeResp(body=_OPENAI_RESP))
+    client = server.app.test_client()
+    r = client.post("/v1/responses", json={"model": "oai__gpt-x", "input": "hi"})
+    assert r.status_code == 200
+    assert r.headers["X-LLMProxy-Selected-Model"] == "oai/gpt-x"
+    assert json.loads(r.data)["object"] == "response"
+
+
+def test_rendered_response_reports_its_own_length_and_type(monkeypatch, server):
+    """Only X-LLMProxy-* may be carried across the re-render.
+
+    Copying every header would hand the client the *canonical* body's
+    Content-Length while serving the rendered one.
+    """
+    _set_post(monkeypatch, server, lambda url, body, stream: _FakeResp(body=_OPENAI_RESP))
+    client = server.app.test_client()
+    r = client.post("/v1/messages",
+                    json={"model": "oai__gpt-x", "messages": [{"role": "user", "content": "hi"}],
+                          "max_tokens": 16})
+    assert r.status_code == 200
+    assert r.content_type.startswith("application/json")
+    assert int(r.headers["Content-Length"]) == len(r.data)
+    assert len(r.data) != len(_OPENAI_RESP)
+
+
+def test_selected_model_header_on_the_openai_identity_path(monkeypatch, server):
+    """The identity path has no re-render, but must still report provenance."""
+    _set_post(monkeypatch, server, lambda url, body, stream: _FakeResp(body=_OPENAI_RESP))
+    client = server.app.test_client()
+    r = client.post("/v1/chat/completions",
+                    json={"model": "oai__gpt-x", "messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 200
+    assert r.headers["X-LLMProxy-Selected-Model"] == "oai/gpt-x"

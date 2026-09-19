@@ -813,7 +813,10 @@ _cost_probe_lock = threading.Lock()
 # Keyed on SHA-256(endpoint + sorted JSON payload).  Only 2xx responses are
 # stored.  Entries expire after server.response_cache_ttl seconds (default 120).
 
-_response_cache: dict[str, tuple[bytes, int, str, float]] = {}
+# The entry carries the selected model alongside the body: a cache hit never
+# reaches an upstream, so it is the only way a replayed reply can still say
+# which model produced it.
+_response_cache: dict[str, tuple[bytes, int, str, str | None, float]] = {}
 _response_cache_lock = threading.Lock()
 _DEFAULT_RESPONSE_CACHE_TTL = 120
 
@@ -828,25 +831,33 @@ def _response_cache_key(endpoint: str, payload: dict, auth: str = "") -> str:
 def _response_cache_prune(ttl: int) -> None:
     """Evict all expired entries. Must be called with _response_cache_lock held."""
     now = time.monotonic()
-    expired = [k for k, (_, _, _, ts) in _response_cache.items() if now - ts > ttl]
+    expired = [k for k, (*_, ts) in _response_cache.items() if now - ts > ttl]
     for k in expired:
         del _response_cache[k]
 
 
-def _response_cache_get(key: str, ttl: int) -> tuple[bytes, int, str] | None:
+def _response_cache_get(key: str, ttl: int) -> tuple[bytes, int, str, str | None] | None:
+    """Return ``(content, status, content_type, selected_model)`` or None."""
     with _response_cache_lock:
         _response_cache_prune(ttl)
         entry = _response_cache.get(key)
     if entry is None:
         return None
-    content, status, content_type, _ = entry
-    return content, status, content_type
+    content, status, content_type, selected_model, _ = entry
+    return content, status, content_type, selected_model
 
 
-def _response_cache_put(key: str, content: bytes, status: int, content_type: str, ttl: int) -> None:
+def _response_cache_put(
+    key: str,
+    content: bytes,
+    status: int,
+    content_type: str,
+    ttl: int,
+    selected_model: str | None = None,
+) -> None:
     with _response_cache_lock:
         _response_cache_prune(ttl)
-        _response_cache[key] = (content, status, content_type, time.monotonic())
+        _response_cache[key] = (content, status, content_type, selected_model, time.monotonic())
 
 
 @app.before_request
@@ -867,7 +878,10 @@ def _log_request() -> None:
 def _log_response(response: Response) -> Response:
     elapsed_ms = (time.monotonic() - g._start_time) * 1000
     logger.info("← %s %s  %d  %.0fms", request.method, request.path, response.status_code, elapsed_ms)
-    return response
+    # Last stop before the bytes leave the app: apply the route provenance
+    # recorded at selection time. See _stamp_route_provenance for why the
+    # guarantee has to be enforced here rather than at each return site.
+    return _stamp_route_provenance(response)
 
 
 # ---------------------------------------------------------------------------
@@ -4334,6 +4348,101 @@ def _escalate_budget_if_starved(
     return resp
 
 
+ROUTE_HEADER_SELECTED_MODEL = "X-LLMProxy-Selected-Model"
+ROUTE_HEADER_ROUTE_REASON = "X-LLMProxy-Route-Reason"
+# Every provenance header shares this prefix, which is what lets a response
+# rebuild copy them forward without having to know their individual names.
+ROUTE_HEADER_PREFIX = "x-llmproxy-"
+
+
+def _route_reason_with_attempt(route_reason: str, attempt_index: int) -> str:
+    """Append the failover marker when *attempt_index* is not the ranked pick.
+
+    ``attempt_index`` is 0 for the first-ranked candidate; anything higher means
+    the ranked pick failed and this is a failover, which is appended to the
+    reason so the provenance alone distinguishes "chosen" from "settled for".
+    """
+    if attempt_index > 0:
+        return f"{route_reason},{ROUTE_SOURCE_FAILOVER}#{attempt_index}"
+    return route_reason
+
+
+def _note_selected_model(
+    provider_name: str,
+    upstream_model: str,
+    *,
+    route_reason: str | None = None,
+    attempt_index: int = 0,
+) -> None:
+    """Record which candidate served this request, for the after_request stamp.
+
+    Callers record at the moment of selection; ``_stamp_route_provenance`` then
+    applies the headers to whatever ``Response`` finally leaves the app. The two
+    halves together are what make the guarantee hold. A response object is
+    rebuilt several times downstream of selection — dialect rendering, error
+    wrapping, cache replay — and any rebuild that does not deliberately copy
+    headers drops them silently, which is exactly how the route headers came to
+    be missing from /v1/messages and /v1/responses. Stamping at the single exit
+    point all replies pass through means a future rebuild cannot reintroduce
+    that.
+
+    A no-op outside a request context, so the cycling engines remain directly
+    callable from unit tests.
+    """
+    if not has_request_context():
+        return
+    try:
+        g.llmproxy_selected_model = f"{provider_name}/{upstream_model}"
+        if route_reason is not None:
+            g.llmproxy_route_reason = _route_reason_with_attempt(route_reason, attempt_index)
+    except Exception as e:  # noqa: BLE001 — never fail a request over provenance
+        print(f"[server:_note_selected_model] {e}")
+        traceback.print_exc()
+
+
+def _stamp_route_provenance(resp: "Response") -> "Response":
+    """Apply the recorded route provenance to *resp* if it is not already there.
+
+    Called from the ``after_request`` hook, so it sees the final response object
+    however many times it was rebuilt on the way. Values already present win:
+    ``_stamp_route_headers`` stamps at the point of selection so a response
+    carries them the moment it is built, and this pass only fills the gaps.
+
+    Flask finalizes the response — running ``after_request`` — before the WSGI
+    server iterates the body, so streamed replies get their headers before any
+    bytes flow.
+    """
+    try:
+        selected = g.get("llmproxy_selected_model")
+        if selected and ROUTE_HEADER_SELECTED_MODEL not in resp.headers:
+            resp.headers[ROUTE_HEADER_SELECTED_MODEL] = selected
+        reason = g.get("llmproxy_route_reason")
+        if reason and ROUTE_HEADER_ROUTE_REASON not in resp.headers:
+            resp.headers[ROUTE_HEADER_ROUTE_REASON] = reason
+    except Exception as e:  # noqa: BLE001 — never fail a served response over a header
+        print(f"[server:_stamp_route_provenance] {e}")
+        traceback.print_exc()
+    return resp
+
+
+def _carry_route_headers(src: "Response", dst: "Response") -> "Response":
+    """Copy the ``X-LLMProxy-*`` headers from *src* onto *dst*.
+
+    For the places that deliberately rebuild a response and must not lose the
+    provenance stamped upstream of them. Only this prefix is copied: the rebuilt
+    body has its own length and content type, so carrying everything across
+    would hand the client a wrong ``Content-Length``.
+    """
+    try:
+        for key, value in src.headers.items():
+            if key.lower().startswith(ROUTE_HEADER_PREFIX):
+                dst.headers[key] = value
+    except Exception as e:  # noqa: BLE001 — never fail a served response over a header
+        print(f"[server:_carry_route_headers] {e}")
+        traceback.print_exc()
+    return dst
+
+
 def _stamp_route_headers(
     resp: "Response",
     route_reason: str | None,
@@ -4346,15 +4455,20 @@ def _stamp_route_headers(
     ``attempt_index`` is 0 for the first-ranked candidate; anything higher means
     the ranked pick failed and this is a failover, which is appended to the
     reason so a header alone distinguishes "chosen" from "settled for".
+
+    Also records the selection on the request context, so the after_request
+    stamp can restore the headers if a later rebuild drops them.
     """
+    _note_selected_model(
+        provider_name, upstream_model,
+        route_reason=route_reason, attempt_index=attempt_index,
+    )
     if route_reason is None:
         return resp
-    reason = route_reason
-    if attempt_index > 0:
-        reason = f"{reason},{ROUTE_SOURCE_FAILOVER}#{attempt_index}"
+    reason = _route_reason_with_attempt(route_reason, attempt_index)
     try:
-        resp.headers["X-LLMProxy-Route-Reason"] = reason
-        resp.headers["X-LLMProxy-Selected-Model"] = f"{provider_name}/{upstream_model}"
+        resp.headers[ROUTE_HEADER_ROUTE_REASON] = reason
+        resp.headers[ROUTE_HEADER_SELECTED_MODEL] = f"{provider_name}/{upstream_model}"
     except Exception:  # noqa: BLE001 — never fail a served response over a header
         logger.debug("could not stamp route headers", exc_info=True)
     return resp
@@ -4410,6 +4524,13 @@ def _proxy_cycling_non_streaming(
             break
         account_id = provider_account_id(provider_cfg)
         upstream_payload = {**payload, "model": upstream_model}
+        # Record the candidate before trying it, not only on success. When every
+        # candidate fails, the reply that says so is exactly the one where
+        # knowing the last model tried is most useful, and it has no other way
+        # to say. A success overwrites this with the same value.
+        _note_selected_model(
+            provider_name, upstream_model, route_reason=route_reason, attempt_index=idx,
+        )
         max_attempts = _candidate_max_attempts(idx, total)
         for attempt in range(max_attempts):
             logger.info("  [%s] trying %s/%s", label, provider_name, upstream_model)
@@ -4544,6 +4665,13 @@ def _proxy_cycling_streaming(
             break
         account_id = provider_account_id(provider_cfg)
         upstream_payload = {**payload, "model": upstream_model}
+        # Record the candidate before trying it, not only on success. When every
+        # candidate fails, the reply that says so is exactly the one where
+        # knowing the last model tried is most useful, and it has no other way
+        # to say. A success overwrites this with the same value.
+        _note_selected_model(
+            provider_name, upstream_model, route_reason=route_reason, attempt_index=idx,
+        )
         max_attempts = _candidate_max_attempts(idx, total)
         base_url = provider_base_url(provider_cfg)
         outbound = get_outbound(provider_cfg.get("protocol"))
@@ -6453,12 +6581,19 @@ def _proxy_fusion(
             stream_timeout, config=config, inbound=inbound_adapter,
         )
         if getattr(resp, "status_code", 200) < 400:
+            # Fusion has no single "selected" candidate, but the synthesizer is
+            # the model whose words reach the client, so that is what the
+            # provenance header names. The panel and judge stay in the fusion
+            # report, which is where the full picture belongs.
+            _note_selected_model(spn, suid)
             with contextlib.suppress(Exception):
                 resp.headers["X-LLMProxy-Fusion"] = header_report
             return resp
         # Synth failed to start: degrade to the first panel answer (non-streamed).
         logger.warning("  [fusion] synth %s failed to stream; falling back to panel answer", synth_id)
         body = panel_success[0][1]
+        fallback_pn, _fallback_cfg, fallback_um = panel_success[0][0]
+        _note_selected_model(fallback_pn, fallback_um)
         out = _fusion.inject_report(body, _report(True, with_analysis=True))
         if not inbound_adapter.is_identity:
             out = inbound_adapter.render_response(out)
@@ -6493,9 +6628,12 @@ def _proxy_fusion(
     if sresp is None:
         # Graceful fallback: return the first successful panel response, flagged.
         logger.warning("  [fusion] all synth candidates failed; falling back to panel answer")
+        fallback_pn, _fallback_cfg, fallback_um = panel_success[0][0]
+        _note_selected_model(fallback_pn, fallback_um)
         out = _fusion.inject_report(panel_success[0][1], _report(True, with_analysis=True))
     else:
         _record_usage(spn, suid, usage=extract_usage(sresp.get_data()), config=config, account_id=sacct)
+        _note_selected_model(spn, suid)
         out = _fusion.inject_report(sresp.get_data(), _report(False, with_analysis=True))
 
     header_report = json.dumps(_report(False, with_analysis=False), ensure_ascii=True)
@@ -6587,8 +6725,11 @@ def _proxy_endpoint(
             cache_key = _response_cache_key(endpoint, payload, request.headers.get("Authorization", ""))
             cached = _response_cache_get(cache_key, cache_ttl)
             if cached:
-                content, status, ct = cached
+                content, status, ct, cached_model = cached
                 logger.info("  [cache] HIT  key=%s…", cache_key[:12])
+                if cached_model:
+                    provider_part, _, model_part = cached_model.partition("/")
+                    _note_selected_model(provider_part, model_part)
                 return Response(content, status=status, content_type=ct)
 
     if _is_virtual_model(model_full):
@@ -6733,6 +6874,10 @@ def _proxy_endpoint(
             return err
 
         logger.info("  provider=%s  model=%s", provider_name, upstream_model)
+        # A pinned request names its own model, but reporting it anyway means a
+        # client never has to branch on whether it asked for a virtual or a real
+        # id to find out what answered.
+        _note_selected_model(provider_name, upstream_model)
         upstream_payload = {**payload, "model": upstream_model}
 
         if is_streaming:
@@ -6749,16 +6894,23 @@ def _proxy_endpoint(
 
     # Render the canonical response into the client's dialect (no-op for openai).
     if not inbound_adapter.is_identity and 200 <= resp.status_code < 300:
-        resp = Response(
+        # Rebuilding the Response drops every header stamped upstream of here,
+        # which is how /v1/messages and /v1/responses came to lose the route
+        # provenance. Carry the X-LLMProxy-* set across explicitly; Content-Length
+        # and Content-Type belong to the rendered body, so they are not copied.
+        resp = _carry_route_headers(resp, Response(
             inbound_adapter.render_response(resp.get_data()),
             status=resp.status_code,
             content_type="application/json",
-        )
+        ))
 
     # Store successful non-streaming responses in the short-lived cache (rendered
     # bytes, so a cache hit returns the correct dialect).
     if cache_key is not None and 200 <= resp.status_code < 300:
-        _response_cache_put(cache_key, resp.get_data(), resp.status_code, resp.content_type, cache_ttl)
+        _response_cache_put(
+            cache_key, resp.get_data(), resp.status_code, resp.content_type, cache_ttl,
+            selected_model=g.get("llmproxy_selected_model") if has_request_context() else None,
+        )
     return resp
 
 
