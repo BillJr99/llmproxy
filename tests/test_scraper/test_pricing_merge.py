@@ -32,7 +32,7 @@ def _sidecar(pricing=None):
 def _updates_with_live_price():
     ev = [Evidence(provider="p", model_id="p/m", is_free=False, source="openrouter",
                    confidence="high", url="u", pricing=_A)]
-    return aggregate(ev, _sidecar(), api_succeeded=set())
+    return aggregate(ev, _sidecar(), catalog_succeeded=set())
 
 
 def test_live_source_overrides_litellm_baseline(monkeypatch):

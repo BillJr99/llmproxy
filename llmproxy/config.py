@@ -430,6 +430,26 @@ def save_endpoint_probe_state(state: dict, config_path: str | None = None) -> bo
     )
 
 
+# --- Full-refresh state (update_state.json) ---
+#
+# Throttles the full free-models scrape (free_tier.update_frequency_days) so a
+# restart-heavy deployment does not re-scrape every provider on every boot, and
+# a long-lived process still refreshes on its configured cadence.
+
+def get_update_state_path(config_path: str | None = None) -> Path:
+    return get_config_path(config_path).parent / "update_state.json"
+
+
+def load_update_state(config_path: str | None = None) -> dict:
+    return _load_state_file(get_update_state_path(config_path), "load_update_state")
+
+
+def save_update_state(state: dict, config_path: str | None = None) -> bool:
+    return _save_state_file(
+        state, get_update_state_path(config_path), "save_update_state"
+    )
+
+
 # --- PR state (pr_state.json) ---
 
 def get_pr_state_path(config_path: str | None = None) -> Path:

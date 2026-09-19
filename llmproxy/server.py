@@ -783,8 +783,8 @@ _PROBE_INTERVAL_GATE_SEC = 60   # check state files at most once per minute
 _last_probe_interval_check: float = 0.0
 _probe_interval_check_lock = threading.Lock()
 
-_endpoint_probe_inflight: bool = False
-_endpoint_probe_lock = threading.Lock()
+_free_update_inflight: bool = False
+_free_update_lock = threading.Lock()
 _cost_probe_inflight: bool = False
 _cost_probe_lock = threading.Lock()
 
@@ -1734,13 +1734,15 @@ def _run_free_models_update(config: dict, config_path: str | None) -> bool:
 
 
 def _maybe_fire_interval_probes(config_path: str | None = None) -> None:
-    """Check frequency intervals for endpoint probe, cost probe, and PR creation.
+    """Check frequency intervals for the free-models refresh, the cost probe,
+    and PR creation.
 
     Fires each as a background daemon thread if its interval has elapsed.
     Gated by _PROBE_INTERVAL_GATE_SEC so state files are not read on every
-    single request — the actual probe frequency is set in config.json.
+    single request — the actual cadence is set in config.json.
 
-    Endpoint probe: gated by sync_on_startup OR update_on_startup.
+    Free-models refresh: gated by sync_on_startup OR update_on_startup, and
+      throttled by free_tier.update_frequency_days (default 7).
     Cost probe: gated by update_on_startup AND cost_probe.enabled.
     PR creation: checked independently of startup flags.
     """
@@ -1757,9 +1759,9 @@ def _maybe_fire_interval_probes(config_path: str | None = None) -> None:
         return
     free_tier = config.get("free_tier", {}) if isinstance(config.get("free_tier"), dict) else {}
 
-    # Endpoint probe — gated by sync_on_startup OR update_on_startup.
+    # Full free-models refresh — gated by sync_on_startup OR update_on_startup.
     if free_tier.get("sync_on_startup") or free_tier.get("update_on_startup"):
-        _maybe_fire_endpoint_probe(config, free_tier, config_path)
+        _maybe_fire_free_models_update(config, free_tier, config_path)
 
     # Cost probe — gated by update_on_startup + cost_probe.enabled.
     if free_tier.get("update_on_startup") and free_tier.get("cost_probe", {}).get("enabled"):
@@ -1769,48 +1771,70 @@ def _maybe_fire_interval_probes(config_path: str | None = None) -> None:
     _maybe_fire_pr_if_due(config, config_path)
 
 
-def _maybe_fire_endpoint_probe(
-    config: dict, free_tier: dict, config_path: str | None
-) -> None:
-    ep_cfg = free_tier.get("endpoint_probe", {})
-    freq_min = ep_cfg.get("frequency_minutes", 30)
-    freq_days = freq_min / 1440.0
+DEFAULT_UPDATE_FREQUENCY_DAYS = 7
+
+
+def _free_update_due(free_tier: dict, config_path: str | None) -> bool:
+    """Whether the full free-models refresh is due per update_frequency_days.
+
+    Returns False when the updater is not importable in this deployment, since
+    there is then nothing to run. A frequency of 0 or less means "every time",
+    matching the other throttles in this module.
+    """
     try:
         import os as _os
         import sys
         repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
         if repo_root not in sys.path:
             sys.path.insert(0, repo_root)
-        from llmproxy.config import load_endpoint_probe_state
+        from llmproxy.config import load_update_state
         from scripts.update_free_models import _probe_due
     except Exception:  # noqa: BLE001 — scripts/ may not be available
-        return
-    state = load_endpoint_probe_state(config_path)
-    due, _ = _probe_due(state.get("last_probe_at"), freq_days)
-    if not due:
+        return False
+    freq_days = free_tier.get("update_frequency_days", DEFAULT_UPDATE_FREQUENCY_DAYS)
+    state = load_update_state(config_path)
+    due, _ = _probe_due(state.get("last_update_at"), freq_days)
+    return due
+
+
+def _maybe_fire_free_models_update(
+    config: dict, free_tier: dict, config_path: str | None
+) -> None:
+    """Run the full free-models refresh in the background when its cadence is due.
+
+    This is the scheduled sweep: it re-scrapes every default source, so new free
+    models (including unsuffixed cloaked ones, which are detected by $0 pricing
+    rather than by a ":free" suffix) are picked up, repriced models lose the free
+    tag, and models withdrawn upstream are dropped. The cadence is
+    free_tier.update_frequency_days, default 7. The opt-in endpoint-probe source
+    is throttled separately inside the updater by
+    free_tier.endpoint_probe.frequency_minutes, and so cannot run more often than
+    this refresh does.
+    """
+    if not _free_update_due(free_tier, config_path):
         return
 
-    global _endpoint_probe_inflight
-    with _endpoint_probe_lock:
-        if _endpoint_probe_inflight:
+    global _free_update_inflight
+    with _free_update_lock:
+        if _free_update_inflight:
             return
-        _endpoint_probe_inflight = True
+        _free_update_inflight = True
 
     def _run() -> None:
-        global _endpoint_probe_inflight
+        global _free_update_inflight
         try:
-            logger.info("[endpoint-probe] interval due — running endpoint probe")
+            logger.info("[free-update] refresh interval due — running free-models update")
             _run_free_models_update(load_config(), config_path)
             with _models_list_cache_lock:
                 global _models_list_cache
                 _models_list_cache = None
         except Exception as exc:  # noqa: BLE001
-            logger.warning("[endpoint-probe] failed: %s", exc)
+            logger.warning("[free-update] failed: %s", exc)
         finally:
-            with _endpoint_probe_lock:
-                _endpoint_probe_inflight = False
+            with _free_update_lock:
+                _free_update_inflight = False
 
-    threading.Thread(target=_run, daemon=True, name="endpoint-probe-interval").start()
+    threading.Thread(target=_run, daemon=True, name="free-models-update-interval").start()
 
 
 def _maybe_fire_cost_probe(
@@ -1903,7 +1927,8 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
          live config.json's free-tier sections from the bundled providers.json
          sidecar (no network, safe on a read-only sidecar).
       3. When config['update_believed_free_on_startup'] is true, additionally runs
-         the full free-models updater (streaming its progress to the log).
+         the full free-models updater (streaming its progress to the log), as
+         long as free_tier.update_frequency_days has elapsed since the last run.
       4. Invalidates the cached /v1/models list after either step changes the
          config, so the synthetic 'free' virtual models are rebuilt from the
          updated believed_free data instead of the pre-update snapshot. (The route
@@ -1933,9 +1958,18 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
 
         # 3. Optionally run the full network updater (refreshes + persists the
         #    sidecar, then syncs the live config from the freshly-scraped data).
+        #    Throttled by update_frequency_days so a restart-heavy deployment
+        #    re-scrapes on its configured cadence rather than on every boot.
         ran = False
-        if config.get("free_tier", {}).get("update_on_startup") is True:
-            ran = _run_free_models_update(config, config_path)
+        startup_free_tier = config.get("free_tier", {})
+        if startup_free_tier.get("update_on_startup") is True:
+            if _free_update_due(startup_free_tier, config_path):
+                ran = _run_free_models_update(config, config_path)
+            else:
+                logger.info(
+                    "[startup] free-models update not due yet "
+                    "(free_tier.update_frequency_days); skipping"
+                )
 
         # 4. Drop the cached /v1/models list so the synthetic 'free' set is rebuilt
         #    from the updated believed_free on the next request.
@@ -1967,8 +2001,8 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
         except Exception as exc:  # noqa: BLE001 — warming must never crash the worker
             logger.warning("[startup] /v1/models cache warm failed: %s", exc)
 
-        # 6. Check frequency intervals for endpoint probe, cost probe, and PR
-        #    creation. Fires background threads for any that are due.
+        # 6. Check frequency intervals for the free-models refresh, cost probe,
+        #    and PR creation. Fires background threads for any that are due.
         _maybe_fire_interval_probes(config_path)
 
     threading.Thread(target=_run, daemon=True, name="startup-tasks").start()

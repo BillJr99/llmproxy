@@ -56,6 +56,14 @@ class Source(ABC):
 
     name: str = ""
 
+    # True when fetch() enumerates a provider's ENTIRE catalog, so a model's
+    # absence from the result is itself evidence that the model no longer
+    # exists and should leave believed_free. Sources that only scrape a
+    # free-tier docs page, or that report on a subset of models, must leave
+    # this False: their silence about a model means nothing, and trusting it
+    # would delete every model the source never had an opinion about.
+    enumerates_catalog: bool = False
+
     @abstractmethod
     def fetch(self) -> list[Evidence]:
         """Return a list of Evidence records.

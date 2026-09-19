@@ -2909,14 +2909,6 @@
       "input_cost_per_token": 7.5e-08,
       "output_cost_per_token": 3e-07
     },
-    "google/gemini-2.5-flash": {
-      "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 2.5e-06
-    },
-    "google/gemini-2.5-flash-lite": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 4e-07
-    },
     "google/gemini-2.5-flash-lite-preview-06-17": {
       "input_cost_per_token": 1e-07,
       "output_cost_per_token": 4e-07
@@ -2925,33 +2917,9 @@
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 2e-05
     },
-    "google/gemini-3-flash-preview": {
-      "input_cost_per_token": 5e-07,
-      "output_cost_per_token": 3e-06
-    },
-    "google/gemini-3.1-flash-lite": {
-      "input_cost_per_token": 2.5e-07,
-      "output_cost_per_token": 1.5e-06
-    },
-    "google/gemini-3.1-flash-lite-preview": {
-      "input_cost_per_token": 2.5e-07,
-      "output_cost_per_token": 1.5e-06
-    },
     "google/gemini-3.1-pro-preview-customtools": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1.2e-05
-    },
-    "google/gemini-3.5-flash-lite": {
-      "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 2.5e-06
-    },
-    "google/gemini-3.6-flash": {
-      "input_cost_per_token": 7.5e-07,
-      "output_cost_per_token": 3.75e-06
-    },
-    "google/gemini-3.8-flash": {
-      "input_cost_per_token": 7.5e-07,
-      "output_cost_per_token": 3.75e-06
     },
     "google/gemini-exp-1206": {
       "input_cost_per_token": 3e-07,
@@ -3044,14 +3012,6 @@
     "groq/openai/gpt-oss-120b": {
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 6e-07
-    },
-    "groq/openai/gpt-oss-20b": {
-      "input_cost_per_token": 7.5e-08,
-      "output_cost_per_token": 3e-07
-    },
-    "groq/openai/gpt-oss-safeguard-20b": {
-      "input_cost_per_token": 7.5e-08,
-      "output_cost_per_token": 3e-07
     },
     "groq/qwen/qwen3-32b": {
       "input_cost_per_token": 2.9e-07,

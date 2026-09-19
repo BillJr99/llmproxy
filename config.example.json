@@ -1194,6 +1194,7 @@
   "free_tier": {
     "sync_on_startup": true,
     "update_on_startup": false,
+    "update_frequency_days": 7,
     "endpoint_probe": {
       "frequency_minutes": 30,
       "timeout_sec": 10

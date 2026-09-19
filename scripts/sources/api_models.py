@@ -30,6 +30,8 @@ def _env_key(provider_key: str) -> str:
 
 class ApiModelsSource(Source):
     name = "api"
+    # Each provider's /v1/models listing is that provider's full catalog.
+    enumerates_catalog = True
 
     def __init__(self, providers: dict[str, str] | None = None):
         """providers maps provider_key -> base_url. If None, derived from

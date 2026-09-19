@@ -17,6 +17,10 @@ TIMEOUT = (5, 10)
 
 class OpenRouterSource(Source):
     name = "openrouter"
+    # /api/v1/models is the gateway's complete catalog, not a free-tier subset,
+    # so a model missing from the response has genuinely been withdrawn. This is
+    # what lets short-lived cloaked models age out of believed_free again.
+    enumerates_catalog = True
 
     def __init__(self, url: str = OPENROUTER_URL):
         self.url = url

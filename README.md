@@ -1527,6 +1527,13 @@ through the server log with a `[startup-update]` prefix (at `INFO` level), so se
 startup run includes the active cost probe (and, with `free_tier.probe.autoremove`,
 removes any model it finds is no longer free). Defaults to `false`.
 
+The startup run is throttled by
+[`free_tier.update_frequency_days`](#refresh-cadence) (default 7), so enabling
+this flag on a deployment that restarts often does not re-scrape every provider
+on every boot. Leaving it `false` does not mean the deployment never refreshes:
+the periodic check described under [Refresh cadence](#refresh-cadence) still
+runs on the same interval.
+
 > The scraper lives in the repo-root `scripts/` package. The Docker image ships
 > it, and the server adds its parent directory to `sys.path` so the import works
 > under gunicorn. If a slimmed-down deployment omits `scripts/`, the server logs
@@ -1534,6 +1541,56 @@ removes any model it finds is no longer free). Defaults to `false`.
 > rewrite is **ephemeral in a container** (it lives in the image layer) — the
 > durable effect is the `config.json` sync on your mounted volume. To land sidecar
 > changes back in the repo, use the [CI auto-update workflow](#automated-providersjson-updates-ci).
+
+<a name="refresh-cadence"></a>
+### Refresh cadence — `free_tier.update_frequency_days`
+
+The refresh is **not** a cron job and needs no scheduler. A running proxy checks
+whether a refresh is due, and runs one if so, at startup and then periodically
+while it serves traffic. `free_tier.update_frequency_days` sets how often that
+may happen, and defaults to weekly:
+
+```json
+{
+  "free_tier": {
+    "sync_on_startup": true,
+    "update_on_startup": false,
+    "update_frequency_days": 7
+  }
+}
+```
+
+The cadence is what makes the free-model list self-maintaining. Each refresh
+re-reads every default source, so within one interval:
+
+- a **newly free model is picked up**, including an unsuffixed cloaked or
+  "stealth" model. Detection keys on `$0` pricing in the provider catalog rather
+  than on a `:free` suffix, so a model does not have to be named `…:free` to be
+  found;
+- a model that is **no longer free loses the tag**, because a non-zero price is
+  high-confidence evidence against it; and
+- a model that has been **withdrawn upstream is dropped**, because a catalog
+  that no longer lists it is treated as authoritative about what exists.
+
+Set a smaller number to refresh more eagerly, or `0` to refresh every time the
+interval is checked. The last-run timestamp lives in `update_state.json` beside
+your `config.json`, not in the config itself, so restarting the server does not
+trigger a fresh scrape on every boot; a deployment that restarts constantly still
+scrapes about once per interval.
+
+Two related settings sit nearby and are easy to confuse:
+
+- `free_tier.sync_on_startup` (default `true`) is the **no-network** path. It
+  reconciles your `config.json` from the bundled `providers.json` sidecar at
+  boot. See [`sync_on_startup`](#sync-on-startup).
+- `free_tier.update_on_startup` (default `false`) additionally runs the network
+  scrape during startup itself rather than leaving it to the periodic check. It
+  honours `update_frequency_days` too. See
+  [`update_on_startup`](#update-on-startup).
+- `free_tier.endpoint_probe.frequency_minutes` throttles the opt-in
+  endpoint-probe **source** *within* a refresh. Because that source only runs as
+  part of a refresh, it cannot fire more often than `update_frequency_days`
+  allows.
 
 <a name="pr-providers-list"></a>
 ### Proposing `providers.json` changes as a PR — `providers_pr.enabled`
@@ -1804,13 +1861,18 @@ A scraper at `scripts/update_free_models.py` polls multiple sources, diffs the
 result against the sidecar, and prints proposed adds / removes / limit changes
 for human review.
 
+You rarely need to run it by hand. A running proxy runs the same scraper on the
+cadence set by [`free_tier.update_frequency_days`](#refresh-cadence), so its live
+view of what is free stays current on its own; the manual and CI paths exist to
+land those changes durably in the repository.
+
 ### Sources
 
 | Source       | Confidence | What it does |
 |--------------|------------|--------------|
-| `openrouter` | high       | Hits `https://openrouter.ai/api/v1/models` and flags any model with `pricing.prompt == 0` as free; also reports per-token prices for paid models into the sidecar `pricing` block. |
+| `openrouter` | high       | Hits `https://openrouter.ai/api/v1/models` and flags any model with `pricing.prompt == 0` as free, whether or not its id carries a `:free` suffix — this is what catches unsuffixed cloaked models. Also reports per-token prices for paid models into the sidecar `pricing` block, and, because the endpoint is the gateway's full catalog, drives removals for models withdrawn upstream. |
 | `docs`       | high       | Per-provider HTML scrapers for published rate-limit / free-tier pages (Google, Groq, Cerebras, Cohere, Token Harbor). Add more under `scripts/sources/docs/`. |
-| `api`        | medium     | Calls each provider's OpenAI-compatible `/v1/models` endpoint when `<PROVIDER>_API_KEY` is set in your environment. Used to detect *removals* (a believed-free model that's no longer listed). |
+| `api`        | medium     | Calls each provider's OpenAI-compatible `/v1/models` endpoint when `<PROVIDER>_API_KEY` is set in your environment. One of the sources that can detect *removals* — see [Removing withdrawn models](#removing-withdrawn-models). |
 | `litellm_cost_map` | medium | Reads the public [litellm](https://github.com/BerriAI/litellm) pricing map: flags zero-priced models as free **and** snapshots per-token prices for paid ones into the sidecar `pricing` block (used by the proxy to cost tokens offline — see [Token + cost accounting](#usage-accounting)). |
 | `together`   | high       | When `TOGETHER_API_KEY` is set, reads Together's `/v1/models` pricing — zero-priced models are free; paid models contribute per-token prices to the `pricing` block. |
 | `fireworks`  | high       | When `FIREWORKS_API_KEY` is set, reads Fireworks' `/inference/v1/models` and flags models marked `is_free`/`serverless_billing: free` or zero-priced as free. |
@@ -1826,6 +1888,35 @@ authoritative per-token prices. The result powers offline cost accounting and th
 [`llmproxy/loadbalanced`](#the-loadbalanced-virtual-model) paid-tier ranking, and
 is committed alongside `believed_free` in the same providers.json refresh (and the
 [automated PR](#keeping-the-free-models-list-current), when enabled).
+
+<a name="removing-withdrawn-models"></a>
+### Removing withdrawn models
+
+A model leaves `believed_free` for one of three reasons. The first two are
+straightforward: a high-confidence source reports a non-zero price for it, or the
+proxy observed it billing a real cost at runtime and recorded it in
+`cost_observed_free_tier` (see
+[Verifying free models are actually free](#cost-flags)).
+
+The third is absence. Short-lived models, cloaked previews especially, tend not
+to be repriced when they end; they simply stop being listed. A model that no
+source mentions produces no evidence at all, so absence is only treated as
+removal under two conditions:
+
+1. the model is missing from a source that enumerates the provider's **entire**
+   catalog, currently OpenRouter's `/api/v1/models` and any provider's
+   `/v1/models` listing via the `api` source. A docs scraper reads a free-tier
+   page rather than a catalog, so its silence about a model means nothing and
+   never removes anything; and
+2. that catalog response looks whole. A response is trusted when it either lists
+   a substantial number of models outright, or still accounts for at least half
+   of what is currently believed free for that provider. A truncated or degraded
+   fetch falls below that floor, and the run logs that it is skipping
+   absence-based removal for the provider rather than emptying the list.
+
+Together these mean a cloaked model that appears at `$0`, is used for a while,
+and then disappears will be added and later dropped without anyone editing
+`providers.json` by hand.
 
 ### Usage
 
@@ -1925,10 +2016,12 @@ COHERE_API_KEY=...          SAMBANOVA_API_KEY=...
 <a name="automated-providersjson-updates-ci"></a>
 ### Automated `providers.json` updates (CI → PR)
 
-A scheduled GitHub Actions workflow,
+A GitHub Actions workflow,
 [`.github/workflows/update-providers.yml`](.github/workflows/update-providers.yml),
 keeps the sidecar current **in the repository** without anyone running the
-scraper by hand. Once a week (and on demand via the Actions tab) it:
+scraper by hand. It is **manual only**: there is no schedule, so it runs exactly
+when you trigger it from the Actions tab (or with
+`gh workflow run update-providers.yml`). When it runs it:
 
 1. runs `python scripts/update_free_models.py` with the default, read-only
    sources — provider docs, `/models` catalogs, OpenRouter, the litellm cost
@@ -1941,20 +2034,29 @@ scraper by hand. Once a week (and on demand via the Actions tab) it:
    When nothing changed, no PR is created. The run logs the `git status` diff
    and the action logs whether a PR was opened.
 
-**Enabling / disabling.** A GitHub Action can't read your deployment's private
-`config.json`, so the on/off switch is a **repository variable** rather than a
-config flag: set `PROVIDERS_AUTOUPDATE` to `false` under *Settings → Secrets and
-variables → Actions → Variables* to disable the scheduled run (it is treated as
-enabled unless explicitly `false`). Manual `workflow_dispatch` runs always
-execute. The workflow needs `contents: write` and `pull-requests: write`
-permissions (already declared in the file); if your org disables PR creation by
+**Running it on a schedule (optional).** Most deployments do not need this: a
+running proxy already refreshes itself on its own cadence, as described in
+[Refresh cadence](#refresh-cadence) below, and the workflow exists to land those
+same updates in the repository as a reviewable PR. If you would rather the repo
+refresh itself without being asked, add a `schedule:` block to the workflow's
+`on:` section, for example weekly on Monday at 06:00 UTC:
+
+```yaml
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 6 * * 1"
+```
+
+The workflow needs `contents: write` and `pull-requests: write` permissions
+(already declared in the file); if your organization disables PR creation by
 `GITHUB_TOKEN`, enable it under *Settings → Actions → General → Workflow
 permissions*.
 
-> This repo-level workflow and the server-side
-> [`free_tier.update_on_startup`](#update-on-startup) flag are complementary:
-> the workflow lands durable updates in the repo via reviewable PRs, while the
-> startup flag refreshes a running deployment's live config.
+> This repo-level workflow and the server-side refresh are complementary: the
+> workflow lands durable updates in the repo via reviewable PRs, while the
+> running proxy refreshes its own live config on the cadence set by
+> [`free_tier.update_frequency_days`](#refresh-cadence).
 
 ---
 
