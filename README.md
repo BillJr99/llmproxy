@@ -1603,6 +1603,49 @@ Two related settings sit nearby and are easy to confuse:
   part of a refresh, it cannot fire more often than `update_frequency_days`
   allows.
 
+<a name="the-two-cadences"></a>
+#### There are two independent cadences
+
+llmproxy runs two scheduled background jobs. They are unrelated, have separate
+settings, and keep separate state files, so tuning one does not affect the
+other:
+
+| Job | What it refreshes | Setting | Default | State file |
+|-----|-------------------|---------|---------|------------|
+| **Free-models sweep** | `believed_free`, `free_limits`, `pricing` — which models are free and what their limits are | `free_tier.update_frequency_days` | 7 | `update_state.json` |
+| **Flagship recompute** | Which models are near the state of the art, for [`llmproxy/flagship`](#flagship-tier) | `flagship_tier.refresh_frequency_days` | 7 | `flagship_models.json` |
+
+Both default to weekly and both run at startup when due, but they are otherwise
+independent: the free-models sweep scrapes provider docs and catalogs, while the
+flagship recompute reads benchmark scores and re-ranks what you can reach.
+
+**Everything else is a throttle, not a cadence.** Within the free-models sweep,
+individual sources have their own frequency settings that limit how often *that
+source* may participate in a run. A source throttle can only ever make a source
+run **less** often than the sweep — never more, because a source only runs as
+part of a sweep:
+
+| Setting | Scope | Meaning |
+|---------|-------|---------|
+| `free_tier.update_frequency_days` | the whole sweep | **How often the sweep runs at all.** Everything below is subordinate to it. |
+| `free_tier.endpoint_probe.frequency_minutes` | one source | The `:free`-discovery probe runs at most this often. Below `update_frequency_days` it has no effect, since the sweep is the only thing that can invoke it. |
+| `free_tier.cost_probe.frequency_days` | one source | The billing probe (which spends real quota) runs at most this often. |
+
+A practical consequence: if a source throttle is set to the *same* period as
+`update_frequency_days`, the two can beat against each other. A sweep firing a
+few minutes before the source's period has fully elapsed will skip that source,
+which then waits a whole further period — so a 7-day source throttle under a
+7-day sweep can effectively become 14 days. Set source throttles a little
+**shorter** than the sweep (say 6 days under a 7-day sweep) if you want them to
+run on every sweep.
+
+> **Upgrading from an older version?** `endpoint_probe.frequency_minutes` used
+> to be the de-facto master cadence: the job that consumed it ran the *entire*
+> updater, so a stock config re-scraped every provider every 30 minutes as a
+> side effect of a probe setting. It is now only the source throttle its name
+> describes. If your config still sets it, it is almost certainly doing nothing,
+> and `update_frequency_days` is the setting you want.
+
 <a name="flagship-tier"></a>
 ### The flagship tier — `flagship_tier`
 
@@ -1775,6 +1818,15 @@ whenever `refresh_frequency_days` has elapsed, checked on the same interval
 tick as the other background jobs. The last-run timestamp lives in
 `flagship_models.json`, so restarting the server does not trigger a fresh
 recompute on every boot.
+
+**If `flagship_models.json` does not exist yet**, the tier is treated as never
+refreshed, which is always due — so a fresh deployment populates it on first
+boot regardless of `refresh_frequency_days`. You do not need to set the
+frequency to `0` to get a first run.
+
+This is a **separate cadence** from the free-models sweep
+(`free_tier.update_frequency_days`), with its own setting and its own state
+file. See [There are two independent cadences](#the-two-cadences).
 
 The candidate pool is everything this deployment can actually reach: every
 model of every configured provider, paid included. That is why the list is
