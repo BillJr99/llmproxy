@@ -60,10 +60,12 @@ import logging
 import math
 import random
 import re
+import sys
 import threading
 import time
 import traceback
 import urllib.parse
+import uuid
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -125,6 +127,27 @@ from .usage import (
 
 app = Flask(__name__)
 logger = logging.getLogger("llmproxy.server")
+
+# The per-request audit channel, deliberately separate from `logger`.
+#
+# It writes bare JSON — one object per line, no level, no timestamp prefix — to
+# **stdout**, while everything else llmproxy logs goes to stderr. That split is
+# the point: `docker logs` and every collector can tee the two apart, so a
+# machine-readable record stream never has to be grepped out of human log
+# chatter, and turning the audit on does not change the operational log at all.
+#
+# ``propagate = False`` keeps these lines out of the root handler that
+# ``logging.basicConfig`` installs, which would otherwise print each record a
+# second time on stderr with a level prefix, and ``_request_log_mode`` gates
+# emission rather than the log level, so the record stream is independent of
+# ``server.log_level``.
+request_logger = logging.getLogger("llmproxy.requests")
+request_logger.propagate = False
+if not request_logger.handlers:
+    _request_log_handler = logging.StreamHandler(sys.stdout)
+    _request_log_handler.setFormatter(logging.Formatter("%(message)s"))
+    request_logger.addHandler(_request_log_handler)
+    request_logger.setLevel(logging.INFO)
 
 
 class _StripApiPrefix:
@@ -248,6 +271,19 @@ _LOCAL_VIRTUAL_MODELS: frozenset[str] = frozenset({
     *(f"llmproxy__{lvl}/local" for lvl in _REASONING_LEVELS),
     *(f"llmproxy/{lvl}/local" for lvl in _REASONING_LEVELS),
 })
+# Virtual models backed by an overlay tier whose membership is computed from
+# benchmark scores (today: flagship). These are the only pools with a measured
+# per-model ranking, so they are ordered by it rather than rotated or
+# load-spread — see _flagship_ordered_candidates. Generated from
+# _OVERLAY_REASONING_LEVELS so a future overlay tier is picked up automatically.
+# The per-provider <provider>/flagship form is recognized separately, via
+# _split_per_provider_virtual in _is_flagship_virtual_model.
+_FLAGSHIP_VIRTUAL_MODELS: frozenset[str] = frozenset({
+    *(f"{pfx}{lvl}" for lvl in _OVERLAY_REASONING_LEVELS
+      for pfx in ("llmproxy__", "llmproxy/")),
+    *(f"{pfx}{lvl}/{dim}" for lvl in _OVERLAY_REASONING_LEVELS
+      for dim in ("free", "local") for pfx in ("llmproxy__", "llmproxy/")),
+})
 # The cost-tiered "just pick something sensible and cheap" virtual. It owns its
 # own ordering (free → local → paid waterfall, optimized per-prompt within each
 # tier) and is the ONLY virtual that crosses tiers, so it is deliberately NOT in
@@ -339,6 +375,48 @@ _QUOTA_STATUSES = frozenset({402, 429})
 # generic phrases (only trusted inside an error-shaped body).
 _QUOTA_CODES = ("resource_exhausted", "insufficient_quota", "rate_limit_exceeded")
 _QUOTA_PHRASES = ("quota", "rate limit", "too many requests")
+
+
+# Substrings that identify a read timeout arriving dressed as something else.
+# urllib3 raises ReadTimeoutError inside iter_content and requests re-raises it
+# as a ConnectionError, so the exception TYPE cannot be trusted to tell "the
+# upstream went quiet" from "the socket broke" — only the message can.
+_TIMEOUT_MARKERS: tuple[str, ...] = ("timed out", "timeout")
+
+# Attribute stamped on a synthesized 504 so the cycling loops can tell a timeout
+# apart from an upstream that genuinely returned 504. Carried on the Response
+# object rather than in a header or the body: a header would leak to the client
+# on the last candidate, and parsing our own error body back out would couple the
+# loops to its wording.
+_TIMEOUT_ATTR = "llmproxy_timed_out"
+
+
+def _looks_like_timeout(exc: BaseException) -> bool:
+    """True when *exc* is a timeout, however it is dressed.
+
+    ``requests.exceptions.Timeout`` covers the honest cases. The one that matters
+    here is the dishonest one: a mid-stream read timeout surfaces as a
+    ``ConnectionError`` whose message is "HTTPSConnectionPool(...): Read timed
+    out.", which is exactly the stall this is meant to catch.
+    """
+    if isinstance(exc, requests.exceptions.Timeout):
+        return True
+    text = str(exc).lower()
+    return any(marker in text for marker in _TIMEOUT_MARKERS)
+
+
+def _mark_timeout(resp: Response) -> Response:
+    """Stamp *resp* as a synthesized timeout and return it."""
+    try:
+        setattr(resp, _TIMEOUT_ATTR, True)
+    except Exception:  # noqa: BLE001 — a missing mark costs a cooldown, not a reply
+        pass
+    return resp
+
+
+def _is_timeout_response(resp: Response) -> bool:
+    """True for a response this proxy synthesized because a candidate timed out."""
+    return bool(getattr(resp, _TIMEOUT_ATTR, False))
 
 
 def _is_quota_error(status: int | None, body_bytes: bytes | None = None) -> bool:
@@ -861,9 +939,162 @@ def _response_cache_put(
         _response_cache[key] = (content, status, content_type, selected_model, time.monotonic())
 
 
+# ---------------------------------------------------------------------------
+# Per-request audit records
+# ---------------------------------------------------------------------------
+#
+# The human log says what llmproxy is doing; this says what it did. The two ``→``
+# / ``←`` lines cannot be paired under concurrency (no id), carry no model,
+# tokens or route reason, and — because Flask runs ``after_request`` before the
+# WSGI server iterates a streamed body — report time-to-headers rather than the
+# real duration of the request that matters most. One structured record per
+# request, emitted when the response has actually finished, fixes all three.
+#
+# Request headers are never recorded. They carry the client's Authorization, and
+# a record stream that must be handled as credential material is one nobody will
+# keep. The bodies are recorded in ``full`` mode, so prompts and completions do
+# land in the stream; that is the mode's whole purpose and is why it is off by
+# default and documented as a data-handling decision rather than a log level.
+
+
+def _body_capture_allowed(path: str) -> bool:
+    """False for paths whose bodies carry credentials rather than content.
+
+    The admin API takes API keys in the clear — that is how you set one — so in
+    ``full`` mode its request bodies would put plaintext provider keys into the
+    record stream. ``admin.py`` masks keys on the way *out* for exactly this
+    reason; this is the same rule applied on the way in. Admin requests are
+    still recorded, just without their bodies, so the audit trail keeps the fact
+    that a config change happened without becoming credential material.
+    """
+    return not path.startswith("/admin")
+
+
+def _json_or_text(raw: bytes | None, limit: int) -> object:
+    """Decode a body for the record: parsed JSON where possible, else text.
+
+    Parsing rather than escaping keeps a record one object instead of an object
+    wrapping a long JSON string, which is what makes ``jq`` useful over the
+    stream. A body that is not JSON (an SSE stream, a provider's HTML error
+    page) is kept as text so nothing is silently dropped.
+    """
+    if not raw:
+        return None
+    truncated = bool(limit) and len(raw) > limit
+    body = raw[:limit] if truncated else raw
+    text = body.decode("utf-8", "replace")
+    if not truncated:
+        try:
+            return json.loads(text)
+        except Exception:  # noqa: BLE001 — not JSON is normal, not an error
+            pass
+    return {"truncated": True, "bytes": len(raw), "text": text} if truncated else text
+
+
+def _emit_request_record(
+    status: int,
+    elapsed_ms: float,
+    *,
+    mode: str,
+    method: str,
+    path: str,
+    request_id: str,
+    requested_model: object = None,
+    request_body: bytes | None = None,
+    response_body: bytes | None = None,
+    streamed: bool = False,
+    selected_model: str | None = None,
+    route_reason: str | None = None,
+) -> None:
+    """Write one JSON record for a completed request. Never raises."""
+    try:
+        record: dict = {
+            "object": "request.record",
+            "id": request_id,
+            "ts": datetime.datetime.now(datetime.UTC).isoformat(),
+            "method": method,
+            "path": path,
+            "status": status,
+            "duration_ms": round(elapsed_ms, 1),
+            "streamed": streamed,
+            "model": requested_model,
+            "selected_model": selected_model,
+            "route_reason": route_reason,
+        }
+        # failed_over is the question anyone reading these actually asks, and it
+        # is already encoded in the reason; surfacing it saves parsing.
+        if route_reason:
+            record["failed_over"] = ROUTE_SOURCE_FAILOVER in route_reason
+        if mode == "full":
+            if _body_capture_allowed(path):
+                limit = _config_int("request_log_max_body_bytes",
+                                    _DEFAULT_REQUEST_LOG_MAX_BODY)
+                record["request_body"] = _json_or_text(request_body, limit)
+                record["response_body"] = _json_or_text(response_body, limit)
+            else:
+                record["bodies_omitted"] = "credential-bearing path"
+        request_logger.info(json.dumps(record, default=str))
+    except Exception as e:  # noqa: BLE001 — a record must never break a reply
+        print(f"[server:_emit_request_record] {e}")
+        traceback.print_exc()
+
+
+def _record_wrapped_stream(
+    iterable, on_done: Callable[[bytes], None]
+) -> Iterator[bytes]:
+    """Relay *iterable* unchanged, then hand the joined bytes to *on_done*.
+
+    This is what moves the record past the end of a streamed reply. Flask's
+    ``after_request`` fires before the WSGI server pulls a single chunk, so a
+    record written there would report the wrong duration and an empty body. The
+    ``finally`` covers the client hanging up mid-stream too, which is a real
+    outcome worth recording rather than a reason to lose the record.
+    """
+    chunks: list[bytes] = []
+    try:
+        for chunk in iterable:
+            if chunk:
+                chunks.append(chunk if isinstance(chunk, bytes) else bytes(chunk))
+            yield chunk
+    finally:
+        try:
+            on_done(b"".join(chunks))
+        except Exception as e:  # noqa: BLE001
+            print(f"[server:_record_wrapped_stream] {e}")
+            traceback.print_exc()
+
+
 @app.before_request
 def _log_request() -> None:
     g._start_time = time.monotonic()
+    # A correlation id, so the two human log lines and the audit record for one
+    # request can be tied together under concurrency — which the ``→``/``←``
+    # pair alone never could. Echoed back as X-LLMProxy-Request-Id so a client
+    # reporting a problem can name the exact request.
+    g.llmproxy_request_id = uuid.uuid4().hex
+    g.llmproxy_log_mode = _request_log_mode()
+    if g.llmproxy_log_mode != "off":
+        # Capture the requested model HERE, before the view canonicalises
+        # payload["model"] in place (llmproxy/flagship -> llmproxy__flagship, a
+        # slash form -> the internal one). The record's job is to say what was
+        # asked for; what it resolved to is selected_model. Read afterwards, the
+        # record would report the rewritten id instead.
+        try:
+            parsed = request.get_json(silent=True)
+            g.llmproxy_requested_model = (
+                parsed.get("model") if isinstance(parsed, dict) else None
+            )
+        except Exception:  # noqa: BLE001 — auditing never fails a request
+            g.llmproxy_requested_model = None
+    if g.llmproxy_log_mode == "full":
+        # Read the body here too, while it is certainly still readable. Flask
+        # caches it, so the view's own get_json() is unaffected, and a view that
+        # fails before parsing still leaves the record with what was actually
+        # sent.
+        try:
+            g.llmproxy_request_body = request.get_data(cache=True)
+        except Exception:  # noqa: BLE001
+            g.llmproxy_request_body = None
     # Fire the one-time startup tasks (warm the virtual-model route cache and,
     # if enabled, run the free-models updater). This is a fallback safety net for
     # deployments where the eager per-worker trigger in __main__ did not fire; it
@@ -882,7 +1113,66 @@ def _log_response(response: Response) -> Response:
     # Last stop before the bytes leave the app: apply the route provenance
     # recorded at selection time. See _stamp_route_provenance for why the
     # guarantee has to be enforced here rather than at each return site.
-    return _stamp_route_provenance(response)
+    response = _stamp_route_provenance(response)
+    return _attach_request_record(response, elapsed_ms)
+
+
+def _attach_request_record(response: Response, elapsed_ms: float) -> Response:
+    """Emit this request's audit record, or arrange for it to be emitted.
+
+    A buffered reply is complete right now, so its record goes out immediately.
+    A streamed one is not: ``after_request`` runs before the WSGI server pulls a
+    single chunk, so the record is deferred onto the end of the stream, where
+    the duration is the real one and the body exists. Everything the record
+    needs is captured into locals first, because the request context is gone by
+    the time that generator finishes.
+    """
+    mode = g.get("llmproxy_log_mode", "off")
+    request_id = g.get("llmproxy_request_id") or ""
+    if request_id:
+        response.headers["X-LLMProxy-Request-Id"] = request_id
+    if mode == "off":
+        return response
+    try:
+        common = {
+            "mode": mode,
+            "method": request.method,
+            "path": request.path,
+            "request_id": request_id,
+            "requested_model": _requested_model_for_record(),
+            "request_body": g.get("llmproxy_request_body"),
+            "selected_model": g.get("llmproxy_selected_model"),
+            "route_reason": g.get("llmproxy_route_reason"),
+        }
+        status = response.status_code
+        started = g._start_time
+        if response.is_streamed:
+            def _done(body: bytes, _s=status, _c=common, _t=started) -> None:
+                _emit_request_record(
+                    _s, (time.monotonic() - _t) * 1000,
+                    response_body=body, streamed=True, **_c,
+                )
+            response.response = _record_wrapped_stream(response.response, _done)
+            return response
+        _emit_request_record(
+            status, elapsed_ms,
+            response_body=response.get_data() if mode == "full" else None,
+            streamed=False, **common,
+        )
+    except Exception as e:  # noqa: BLE001 — a record must never break a reply
+        print(f"[server:_attach_request_record] {e}")
+        traceback.print_exc()
+    return response
+
+
+def _requested_model_for_record() -> object:
+    """The model id the client asked for, as the client wrote it.
+
+    Captured in ``before_request`` rather than read here, because by now the
+    proxy has canonicalised ``payload["model"]`` in place. Returns None for a
+    request that names no model, which is most of the non-proxy surface.
+    """
+    return g.get("llmproxy_requested_model")
 
 
 # ---------------------------------------------------------------------------
@@ -1914,6 +2204,12 @@ def _recompute_flagship_members(config: dict, config_path: str | None) -> dict |
         "last_refresh_at": datetime.datetime.now(datetime.UTC).isoformat(),
         "bar": selection.bar,
         "members": selection.members,
+        # The score that admitted each member, and the score of every model this
+        # deployment can see. `members` alone says who is in the tier but not how
+        # strong each one is, and the router needs the latter to walk the pool
+        # strongest-first. See _get_flagship_scores.
+        "scores": selection.scores,
+        "model_scores": selection.model_scores,
         "distinct_models": selection.distinct_models,
         "free_models": selection.free_models,
         "candidates_considered": len(candidates),
@@ -2689,6 +2985,15 @@ def get_model(model_id: str) -> Response:
     model_id = _canonicalize_model_id(model_id, load_config())
     if _is_virtual_model(model_id):
         candidates = _get_virtual_candidates(model_id)
+        # A flagship pool is walked in benchmark order, so report it in that
+        # order too: _candidates is the documented way to inspect a pool, and a
+        # list that did not match the actual failover sequence would be worse
+        # than none. Other virtuals order per request (capacity, request fit,
+        # rotation), so there is no single order to show for them.
+        if _is_flagship_virtual_model(model_id):
+            candidates = _flagship_ordered_candidates(
+                candidates, _get_flagship_scores(),
+                _get_normalized_free_limits(load_config()))
         return jsonify({
             "id": _display_id(model_id),
             "object": "model",
@@ -2834,11 +3139,24 @@ def _proxy_request(
                 out.headers["Retry-After"] = retry_after
         return out
     except requests.exceptions.Timeout:
-        return _error(
+        return _mark_timeout(_error(
             f"Upstream provider '{provider_name}' timed out after {timeout}s.",
             status=504,
             code="timeout",
-        )
+        ))
+    except requests.exceptions.ConnectionError as e:
+        # urllib3 re-raises a read timeout as a ConnectionError rather than a
+        # ReadTimeout, so the string is the only thing that separates "the
+        # upstream went quiet" from "the socket broke". Both are the candidate
+        # failing to produce bytes, but only the former is a timeout for the
+        # purposes of cooling it, so check before falling through to 502.
+        if _looks_like_timeout(e):
+            return _mark_timeout(_error(
+                f"Upstream provider '{provider_name}' timed out after {timeout}s.",
+                status=504,
+                code="timeout",
+            ))
+        return _upstream_error(provider_name, e)
     except Exception as e:
         return _upstream_error(provider_name, e)
 
@@ -2983,11 +3301,53 @@ def _mid_stream_frames(message: str, model: str, inbound) -> list[bytes]:
         return [b'data: {"error":{"message":"Upstream error."}}\n\n']
 
 
+def _cool_on_timeout(
+    exc: BaseException,
+    label: str,
+    provider_name: str,
+    provider_cfg: dict | None,
+    upstream_model: str,
+    account_id: str | None = None,
+) -> None:
+    """Cool a candidate that timed out, exactly as a 429 would.
+
+    A timeout and a rate limit say the same thing to the *next* request: this
+    candidate is not answering right now. Without a cooldown a timing-out model
+    keeps its place in the ordering and is picked first again, so every request
+    pays the full timeout before failing over. Health does not cover this on its
+    own — ``_health_score`` needs several samples before it moves at all, which
+    is several more wasted timeouts.
+
+    Only genuine timeouts are cooled. A connection reset or a DNS failure is a
+    different fault and already fails over on its own; cooling it too would take
+    a candidate out of rotation for a transient blip that cost nothing.
+    """
+    try:
+        if not _looks_like_timeout(exc):
+            return
+        logger.warning(
+            "  [%s] %s/%s timed out mid-stream (%s) — cooling it like a 429",
+            label, provider_name, upstream_model, exc,
+        )
+        if provider_cfg is not None:
+            _record_quota_saturation(provider_name, provider_cfg, upstream_model, None)
+        else:
+            # Post-commit teardown has no provider_cfg in scope. Cool the
+            # candidate itself; the provider-wide circuit needs the config to
+            # know whether a shared free allowance exists, and guessing wrong
+            # there would take every model of the provider out of rotation.
+            _mark_saturated(_usage_key(provider_name, upstream_model, account_id))
+    except Exception as e:  # noqa: BLE001 — never break a teardown over accounting
+        print(f"[server:_cool_on_timeout] {e}")
+        traceback.print_exc()
+
+
 def _demote_on_mid_stream_failure(
     provider_name: str,
     upstream_model: str,
     exc: BaseException,
     account_id: str | None = None,
+    label: str = "stream",
 ) -> None:
     """Count a post-commit stream failure against the provider's health.
 
@@ -3006,6 +3366,11 @@ def _demote_on_mid_stream_failure(
     try:
         if upstream_model and _is_upstream_failure(exc):
             _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+            # A stream that went quiet is the failure this cannot otherwise
+            # reach. The request itself is already lost — bytes have shipped, so
+            # there is nothing to fail over to — but cooling the candidate keeps
+            # the NEXT request off it, which is the only repair available here.
+            _cool_on_timeout(exc, label, provider_name, None, upstream_model, account_id)
     except Exception as e:  # noqa: BLE001
         # Health accounting must never be what breaks a stream's teardown.
         print(f"[server:_demote_on_mid_stream_failure] {e}")
@@ -3552,6 +3917,7 @@ def _wants_thinking(payload: dict) -> bool:
 ROUTE_SOURCE_CAPACITY = "capacity"
 ROUTE_SOURCE_LOADBALANCED = "loadbalanced"
 ROUTE_SOURCE_CYCLING = "cycling"
+ROUTE_SOURCE_FLAGSHIP_RANK = "flagship_rank"
 ROUTE_SOURCE_REQUEST_FIT = "request_fit"
 ROUTE_SOURCE_CAPABILITY = "capability"
 ROUTE_SOURCE_FAVORITE = "favorite"
@@ -3597,6 +3963,19 @@ _MIN_CANDIDATE_TIMEOUT_S: float = 5.0
 # small: the window exists to see past a role preamble, not to buffer an answer.
 _DEFAULT_PRECOMMIT_MAX_BYTES: int = 8192
 _DEFAULT_PRECOMMIT_MAX_SECONDS: float = 2.0
+# One patience setting for every virtual-model pool: how long a candidate may go
+# without producing bytes before it is abandoned and cooled. 0 disables it, which
+# is the default and today's behavior (the ordinary request/stream timeouts still
+# apply). See ``_virtual_timeout``.
+_DEFAULT_VIRTUAL_TIMEOUT_S: float = 0.0
+# Per-request audit records. "off" is the default, matching every other knob
+# here: an untouched config behaves exactly as it did before the knob existed.
+_REQUEST_LOG_MODES: tuple[str, ...] = ("off", "metadata", "full")
+_DEFAULT_REQUEST_LOG: str = "off"
+# 0 = no cap, which is what "full" means. A cap is offered because a record
+# holds the whole body in memory until the response completes, and a streamed
+# answer has no size known in advance.
+_DEFAULT_REQUEST_LOG_MAX_BODY: int = 0
 
 
 def _config_float(key: str, default: float, config: dict | None = None) -> float:
@@ -3630,6 +4009,54 @@ def _config_bool(key: str, default: bool, config: dict | None = None) -> bool:
         return bool(cfg.get("server", {}).get(key, default))
     except Exception:  # noqa: BLE001
         return default
+
+
+def _request_log_mode(config: dict | None = None) -> str:
+    """How much of each request to record: ``off``, ``metadata`` or ``full``.
+
+    ``off`` (the default) emits nothing, leaving only the human ``→``/``←``
+    lines. ``metadata`` emits one JSON object per request carrying everything
+    llmproxy knows *about* the request — which model was asked for, which
+    candidate answered, why it was ranked first, status, tokens, cost, timing —
+    and no message content. ``full`` adds the request and response bodies.
+
+    An unrecognised value reads as ``off`` rather than as an error: this decides
+    whether user content is written down, so a typo must fail closed.
+    """
+    try:
+        cfg = config if config is not None else load_config()
+        raw = cfg.get("server", {}).get("request_log", _DEFAULT_REQUEST_LOG)
+        if isinstance(raw, bool):
+            # `true` is the obvious thing to write when you just want records.
+            return "full" if raw else "off"
+        mode = str(raw).strip().lower()
+        return mode if mode in _REQUEST_LOG_MODES else _DEFAULT_REQUEST_LOG
+    except Exception:  # noqa: BLE001 — auditing must never fail a request
+        return _DEFAULT_REQUEST_LOG
+
+
+def _virtual_timeout(config: dict | None = None) -> float | None:
+    """Seconds of silence a virtual-model candidate is allowed, or None when off.
+
+    This is the one patience setting that covers every virtual pool —
+    ``llmproxy/free``, the reasoning tiers, flagship, loadbalanced, the
+    per-provider slices — rather than a per-endpoint knob, because "how long am I
+    willing to wait for an answer" is a property of the caller, not of the pool.
+
+    It is an **idle** bound, not a total one: it limits how long a candidate may
+    go without sending anything, at every stage of a request. Before a stream
+    commits that means connect and first byte; after it commits it means the gap
+    between chunks, which is the only bound that can catch a stream that starts
+    normally and then stops. A long but steadily-producing generation is never
+    cut off, however long it runs, which a total budget would get wrong.
+
+    Default 0 (disabled), so an untouched config keeps the existing
+    ``request_timeout``/``stream_timeout`` behavior exactly. A negative value is
+    treated as disabled rather than as an instant timeout, since that is the
+    harmless reading of a typo.
+    """
+    budget = _config_float("virtual_timeout_seconds", _DEFAULT_VIRTUAL_TIMEOUT_S, config)
+    return budget if budget > 0 else None
 
 
 def _cycle_deadline(config: dict | None = None) -> float | None:
@@ -4563,8 +4990,8 @@ def _proxy_cycling_non_streaming(
     ``on_success`` is invoked as ``on_success(provider, model, body)`` with the
     successful response bytes so the caller can record token + cost usage.
     """
-    candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
-    deadline = _cycle_deadline()
+    candidate_timeout = min(timeout, _virtual_timeout(config) or _VIRTUAL_CANDIDATE_TIMEOUT)
+    deadline = _cycle_deadline(config)
     total = len(candidates)
     last: Response | None = None
     for idx, (provider_name, provider_cfg, upstream_model) in enumerate(candidates):
@@ -4656,7 +5083,20 @@ def _proxy_cycling_non_streaming(
                 resp, route_reason, provider_name, upstream_model, idx,
                 virtual_model=virtual_model, config=config,
             )
-        if _is_quota_error(resp.status_code, resp.get_data()):
+        # A timeout is cooled exactly like a 429. Both mean the same thing to the
+        # next request — this candidate is not currently answering — and without
+        # a cooldown a timing-out model keeps its place in the order and is
+        # picked first again, costing another full timeout every time. Health
+        # alone does not cover it: it needs several samples to move, so a model
+        # that has started timing out stays ranked first for the several requests
+        # it takes to notice.
+        if _is_timeout_response(resp):
+            logger.warning(
+                "  [%s] %s/%s timed out after %ss — cooling it like a 429",
+                label, provider_name, upstream_model, attempt_timeout,
+            )
+            _record_quota_saturation(provider_name, provider_cfg, upstream_model, None)
+        elif _is_quota_error(resp.status_code, resp.get_data()):
             _record_quota_saturation(
                 provider_name, provider_cfg, upstream_model, resp.headers.get("Retry-After")
             )
@@ -4703,7 +5143,8 @@ def _proxy_cycling_streaming(
     count the request for load balancing; token + cost totals are recorded
     post-stream.
     """
-    candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
+    virtual_timeout = _virtual_timeout(config)
+    candidate_timeout = min(timeout, virtual_timeout or _VIRTUAL_CANDIDATE_TIMEOUT)
     deadline = _cycle_deadline(config)
     inbound = inbound or get_inbound("openai")
     total = len(candidates)
@@ -4744,6 +5185,15 @@ def _proxy_cycling_streaming(
         # *before committing*; left at the full stream_timeout, one silent
         # upstream could eat the entire deadline inside a single post().
         read_timeout = timeout if deadline is None else min(timeout, max(attempt_timeout, 1.0))
+        if virtual_timeout is not None:
+            # This is a socket-level read timeout, so it stays in force for the
+            # life of the connection — including inside iter_content, after the
+            # stream has committed. That is deliberate and is the only thing that
+            # can catch a stream which starts normally and then goes quiet: by
+            # then the bytes belong to the client and no failover is possible, so
+            # a bound on the gap between chunks is all that is left. It measures
+            # silence, never total duration, so a long steady generation is safe.
+            read_timeout = min(read_timeout, virtual_timeout)
 
         # Open the upstream. Transient failures fail over to the next candidate
         # immediately unless this is the last one (then same-candidate retries).
@@ -4763,6 +5213,7 @@ def _proxy_cycling_streaming(
                     continue
                 logger.warning("  [%s] %s/%s error: %s, trying next", label, provider_name, upstream_model, e)
                 _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+                _cool_on_timeout(e, label, provider_name, provider_cfg, upstream_model)
                 resp = None
                 break
             except Exception as e:
@@ -4854,6 +5305,7 @@ def _proxy_cycling_streaming(
                 continue
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
             _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+            _cool_on_timeout(e, label, provider_name, provider_cfg, upstream_model)
             logger.warning("  [%s] %s/%s error mid-peek: %s, trying next", label, provider_name, upstream_model, e)
             resp.close()
             continue
@@ -5429,6 +5881,103 @@ def _quality_ordered_candidates(
     return [c for c, _ in viable] + [c for c, _ in exhausted]
 
 
+# — flagship (benchmark-ranked) ordering —
+#
+# Flagship is the one tier whose membership is decided by a measured score, so
+# it is also the one tier that can be ORDERED by one. Everywhere else the router
+# spreads load (free) or rotates (the rest), because it has no basis to call one
+# member better than another. Here it does, so the pool is walked strongest-first
+# and failover descends it in rank order.
+
+
+def _flagship_candidate_score(
+    provider_name: str, upstream_id: str, scores: dict[str, float]
+) -> float | None:
+    """This candidate's combined benchmark percentile, or None if nothing scores it.
+
+    Tries the provider's own entry first, then the normalised model key, because
+    a score describes the weights rather than the provider serving them: a pinned
+    provider that no leaderboard names still ranks correctly when the same model
+    was scored under another provider's listing.
+    """
+    from .flagship import normalize_model_id
+
+    qualified = f"{provider_name}/{upstream_id}".lower()
+    if qualified in scores:
+        return scores[qualified]
+    return scores.get(normalize_model_id(upstream_id))
+
+
+# Sorts below every real percentile (which live in [0, 1]), so an unscored
+# candidate follows every scored one instead of being guessed at.
+_FLAGSHIP_UNSCORED: float = -1.0
+
+
+def _flagship_ordered_candidates(
+    candidates: list[tuple[str, dict, str]],
+    scores: dict[str, float],
+    free_limits: dict[str, dict],
+) -> list[tuple[str, dict, str]]:
+    """Order a flagship pool strictly best-first by combined benchmark percentile.
+
+    The tier exists to reach the strongest model available, so the highest-ranked
+    candidate is tried first and failover walks the rest in descending order. The
+    score is the *primary* key and nothing continuous is folded into it: capacity
+    and health only break ties, since letting them scale the score would quietly
+    turn a strict ranking back into a weighted preference.
+
+    Two departures from a pure sort, both deliberate:
+
+    * A candidate cooling after a recent 402/429, or one with no headroom left,
+      is demoted to the back of the list — still reachable, so a saturated top
+      pick never causes an avoidable 503, but not re-attempted first on every
+      request until its window clears.
+    * An unscored candidate (an unscraped pin, or a model whose weights no source
+      covers) sorts after every scored one. Nothing can rank it on evidence, and
+      promoting it would let one pin preempt a measured top-of-the-field model on
+      every request.
+
+    Ties are common — cross-provider duplicates share one model key and therefore
+    one score — so remaining capacity breaks them first and the provider/model
+    name breaks what is left, which keeps the order deterministic rather than
+    dependent on route-cache iteration order.
+
+    Returns *candidates* unchanged when nothing in the pool carries a score, so a
+    cache written before scores were persisted keeps today's behaviour instead of
+    collapsing into an arbitrary order.
+    """
+    if not candidates:
+        return candidates
+    if not any(_flagship_candidate_score(pn, um, scores) is not None
+               for pn, _pc, um in candidates):
+        return candidates
+
+    scored: list[tuple[tuple[str, dict, str], float, float]] = []
+    for pn, pc, um in candidates:
+        account_id = provider_account_id(pc)
+        key = _usage_key(pn, um, account_id)
+        limits = free_limits.get(key, {}) or free_limits.get(f"{pn}/{um}".lower(), {})
+        if _is_candidate_saturated(pn, um, account_id):
+            viability = 0.0  # cooling after a recent 402/429 — demote, keep reachable
+        else:
+            used_min, used_day = _get_usage_snapshot(key)
+            used_tok_min, used_tok_day = _get_token_snapshot(key)
+            viability = _capacity_score(
+                used_min, used_day, limits, used_tok_min, used_tok_day)
+            viability *= _health_score(pn, um, account_id)
+        rank = _flagship_candidate_score(pn, um, scores)
+        scored.append(((pn, pc, um), rank if rank is not None else _FLAGSHIP_UNSCORED,
+                       viability))
+
+    def _key(item: tuple[tuple[str, dict, str], float, float]):
+        (pn, _pc, um), rank, viability = item
+        return (-rank, -viability, pn.lower(), um.lower())
+
+    viable = sorted((it for it in scored if it[2] > 0.0), key=_key)
+    exhausted = sorted((it for it in scored if it[2] == 0.0), key=_key)
+    return [c for c, _r, _v in viable] + [c for c, _r, _v in exhausted]
+
+
 # — "free" candidate selector —
 
 def _normalized_believed_free(config: dict) -> set[str]:
@@ -5701,6 +6250,55 @@ def _get_flagship_models(config: dict | None = None,
     if isinstance(exclude, list):
         members -= {m.lower() for m in exclude if isinstance(m, str)}
     return members
+
+
+def _get_flagship_scores(config_path: str | None = None) -> dict[str, float]:
+    """Combined benchmark percentile per flagship routing target, from the cache.
+
+    Keyed by BOTH the lowercased qualified ``provider/model`` id and the
+    normalised model key, mirroring the dual lookup ``_get_flagship_models``'
+    callers already do. The two key spaces cannot collide: ``normalize_model_id``
+    strips everything outside ``[a-z0-9]``, so a model key never contains a "/".
+
+    The model-key entries are what let a pinned provider, or a routing target
+    that appeared after the last refresh, inherit the score of the same weights
+    scored elsewhere. A score is a property of the *model*, not of the provider
+    serving it, so the same weights rank identically wherever they are served.
+
+    Returns ``{}`` for a cache file written before scores were persisted, which
+    is what makes a stale cache degrade to the previous ordering rather than
+    sorting every candidate as unscored.
+    """
+    state = load_flagship_state(config_path)
+    out: dict[str, float] = {}
+
+    def _coerce(raw) -> float | None:
+        # Two shapes are accepted per entry: the {"combined": float, ...} the
+        # refresh writes, and a bare number, so a hand-edited or future cache
+        # file costs an ordering rather than a request.
+        if isinstance(raw, dict):
+            raw = raw.get("combined")
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return None
+        return float(raw)
+
+    for key in ("model_scores", "scores"):
+        block = state.get(key)
+        if block is None:
+            continue
+        if not isinstance(block, dict):
+            logger.warning(
+                "flagship_models.json: %r must be a dict; got %s — ignoring.",
+                key, type(block).__name__,
+            )
+            continue
+        for ident, raw in block.items():
+            if not isinstance(ident, str):
+                continue
+            value = _coerce(raw)
+            if value is not None:
+                out[ident.lower()] = value
+    return out
 
 
 def _get_reasoning_model_candidates(level: str) -> list[tuple[str, dict, str]]:
@@ -6047,6 +6645,20 @@ def _is_local_virtual_model(model_full: str) -> bool:
     membership in _LOCAL_VIRTUAL_MODELS is the complete test.
     """
     return model_full in _LOCAL_VIRTUAL_MODELS
+
+
+def _is_flagship_virtual_model(model_full: str) -> bool:
+    """True for any virtual backed by a benchmark-ranked overlay tier.
+
+    Covers the global forms (``llmproxy__flagship`` and its ``/free`` and
+    ``/local`` sub-virtuals, in both the new and legacy spellings) and the
+    per-provider ``llmproxy__<provider>/flagship`` slice, which is a flagship
+    pool narrowed to one provider and wants the same ordering.
+    """
+    if model_full in _FLAGSHIP_VIRTUAL_MODELS:
+        return True
+    split = _split_per_provider_virtual(model_full)
+    return split is not None and split[1] in _OVERLAY_REASONING_LEVELS
 
 
 def _get_provider_virtual_candidates(provider_name: str, dimension: str) -> list[tuple[str, dict, str]]:
@@ -6830,6 +7442,12 @@ def _proxy_endpoint(
         # virtual stays in the local list.
         is_free_virtual = _is_free_virtual_model(model_full)
         is_local_virtual = _is_local_virtual_model(model_full)
+        is_flagship_virtual = _is_flagship_virtual_model(model_full)
+        # True once the pool has actually been ranked by benchmark score, which
+        # is what licenses suppressing the soft ordering passes below. It stays
+        # False when the membership cache carries no scores yet, so a fresh or
+        # pre-upgrade deployment keeps its previous behaviour untouched.
+        flagship_ranked = False
         # Every pass that reorders the pool records itself here, so the pick can
         # be explained afterwards instead of reconstructed from log archaeology.
         decisions: list[str] = []
@@ -6839,6 +7457,32 @@ def _proxy_endpoint(
             # passes below are stable no-ops over it.
             ordered = _loadbalanced_ordered_candidates(candidates, payload, config)
             decisions.append(ROUTE_SOURCE_LOADBALANCED)
+        elif is_flagship_virtual:
+            # Tested BEFORE is_free_virtual: llmproxy__flagship/free belongs to
+            # both sets, and the benchmark ranking is the stronger signal — it
+            # is the only one measured per model rather than inferred from quota
+            # or a name. Checked after loadbalanced, which crosses tiers and owns
+            # its own waterfall.
+            flagship_scores = _get_flagship_scores()
+            free_limits = _get_normalized_free_limits(config)
+            ranked = sum(
+                1 for pn, _pc, um in candidates
+                if _flagship_candidate_score(pn, um, flagship_scores) is not None
+            )
+            flagship_ranked = ranked > 0
+            if flagship_ranked:
+                ordered = _flagship_ordered_candidates(
+                    candidates, flagship_scores, free_limits)
+                decisions.append(
+                    f"{ROUTE_SOURCE_FLAGSHIP_RANK}={ranked}/{len(candidates)}")
+            elif is_free_virtual:
+                # No scores cached — fall back to what this pool did before, and
+                # report that honestly rather than claiming a ranking we lack.
+                ordered = _capacity_ordered_candidates(candidates, free_limits)
+                decisions.append(ROUTE_SOURCE_CAPACITY)
+            else:
+                ordered = _cycling_candidates(candidates)
+                decisions.append(ROUTE_SOURCE_CYCLING)
         elif is_free_virtual:
             free_limits = _get_normalized_free_limits(config)
             ordered = _capacity_ordered_candidates(candidates, free_limits)
@@ -6868,7 +7512,13 @@ def _proxy_endpoint(
         # (which still wins for forced tools/vision/JSON). Within a constrained
         # sub-virtual like deep/free the tier term is constant, so the size term
         # picks the right-sized model from what's available. Never crosses tiers.
-        if is_free_virtual or is_local_virtual:
+        #
+        # Skipped on a ranked flagship pool. Inside flagship the tier term is
+        # constant too, which leaves _param_count — billions guessed from the
+        # model id — as the effective key, and that is precisely the crude proxy
+        # the benchmark score replaces. Letting it run would invert the ranking
+        # whenever a large model scores below a smaller one.
+        if (is_free_virtual or is_local_virtual) and not flagship_ranked:
             ordered = _order_by_request_fit(ordered, payload, _get_model_reasoning(config))
             tier, tier_source = _target_reasoning_tier_explained(payload)
             decisions.append(f"{ROUTE_SOURCE_REQUEST_FIT}={tier}({tier_source})")
@@ -6890,7 +7540,10 @@ def _proxy_endpoint(
         if needed:
             ordered = _order_by_capability(ordered, needed, _model_capabilities(config))
             decisions.append(f"{ROUTE_SOURCE_CAPABILITY}={'+'.join(sorted(needed))}")
-        if is_free_virtual:
+        # favorite_free_models is a soft preference over an otherwise unranked
+        # free pool. Flagship is ranked on measured capability, which is the
+        # stronger claim, so a favorite does not reorder it.
+        if is_free_virtual and not flagship_ranked:
             before = ordered[0] if ordered else None
             ordered = _apply_favorite_free_ordering(ordered, config)
             if ordered and ordered[0] is not before:
@@ -6898,7 +7551,10 @@ def _proxy_endpoint(
         # Model-level stickiness for free pools, opt-in. Runs after favorites so
         # an explicitly ranked favorite still wins; among the rest, one
         # conversation keeps landing on the same model instead of being spread.
-        if is_free_virtual and _free_tier_cache_affinity_enabled(config):
+        # Not on a ranked flagship pool: pinning a conversation to whichever
+        # member it first landed on directly contradicts best-first.
+        if (is_free_virtual and not flagship_ranked
+                and _free_tier_cache_affinity_enabled(config)):
             akey = _affinity_key(payload)
             if akey and len(ordered) > 1:
                 pinned = ordered[0] if ordered else None

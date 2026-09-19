@@ -439,3 +439,183 @@ def test_a_pinned_stream_gets_no_route_frame(server, monkeypatch):
                         lambda *a, **k: FakeStreamResp(200, [TEXT, DONE]))
     resp = _run_stream(server, cands=CANDS[:1])
     assert b"".join(resp.response) == TEXT + DONE
+
+# ── a timeout is a 429 ──────────────────────────────────────────────────────
+#
+# A timeout and a rate limit tell the *next* request the same thing: this
+# candidate is not answering. Only 429 used to be remembered, so a model that
+# had started timing out kept its place in the order and cost a full timeout on
+# every request. These pin the cooldown down at each point one can occur —
+# before the stream opens, during the pre-commit peek, and after commit, which
+# is the one the read timeout is the only possible guard for.
+
+def _cooling(server, provider="p1", model="m1"):
+    return server._is_candidate_saturated(provider, model, None)
+
+
+@pytest.fixture
+def cool_server(monkeypatch, tmp_path: Path):
+    s = _make_server(monkeypatch, tmp_path, {"virtual_timeout_seconds": 90})
+    s._reset_usage()
+    yield s
+    s._reset_usage()
+
+
+def test_the_knob_is_off_by_default(server):
+    """An untouched config keeps the existing request/stream timeouts exactly."""
+    assert server._virtual_timeout({"server": {}}) is None
+    assert server._virtual_timeout({"server": {"virtual_timeout_seconds": 0}}) is None
+    assert server._virtual_timeout({"server": {"virtual_timeout_seconds": 90}}) == 90.0
+
+
+@pytest.mark.parametrize("bad", [-1, "ninety", None, True, [], {}])
+def test_a_malformed_value_disables_rather_than_breaks(server, bad):
+    """config.json is hand-edited; a typo must not fail every request. A
+    negative reads as 'off' rather than as an instant timeout, which is the
+    harmless reading."""
+    assert server._virtual_timeout({"server": {"virtual_timeout_seconds": bad}}) is None
+
+
+def test_only_a_synthesized_timeout_carries_the_marker(server):
+    """The non-streaming loop cannot distinguish a timeout from an upstream 504
+    by status alone, so the marker is what carries it out of _proxy_request."""
+    with server.app.test_request_context():
+        plain = server._error("upstream said 504", status=504)
+        assert not server._is_timeout_response(plain)
+        assert server._is_timeout_response(server._mark_timeout(plain))
+
+
+def test_a_read_timeout_wearing_a_connectionerror_is_still_a_timeout(server):
+    """urllib3 re-raises a mid-stream read timeout as ConnectionError, so the
+    type cannot be trusted — only the message can."""
+    import requests as _rq
+    assert server._looks_like_timeout(_rq.exceptions.ReadTimeout("x"))
+    assert server._looks_like_timeout(_rq.exceptions.ConnectTimeout("x"))
+    assert server._looks_like_timeout(
+        _rq.exceptions.ConnectionError("HTTPSConnectionPool(host='a'): Read timed out."))
+    # A genuinely different fault must NOT be cooled: it fails over on its own,
+    # and cooling it would pull a candidate for a transient blip that cost nothing.
+    assert not server._looks_like_timeout(_rq.exceptions.ConnectionError("Connection reset by peer"))
+    assert not server._looks_like_timeout(ValueError("nope"))
+
+
+def test_a_connect_timeout_cools_the_candidate(cool_server, monkeypatch):
+    import requests as _rq
+
+    calls = []
+
+    def _post(url, **kw):
+        calls.append(url)
+        if "p1" in url:
+            raise _rq.exceptions.Timeout("timed out")
+        return FakeStreamResp(200, [TEXT, DONE])
+
+    monkeypatch.setattr(cool_server.requests, "post", _post)
+    with cool_server.app.test_request_context():
+        cool_server._proxy_cycling_streaming(
+            "chat/completions", "t", CANDS, {"messages": []}, 5, config=None)
+    assert len(calls) == 2                      # failed over, as before
+    assert _cooling(cool_server, "p1", "m1")    # and is now remembered
+    assert not _cooling(cool_server, "p2", "m2")
+
+
+def test_a_stream_that_dies_mid_flight_cools_the_candidate(cool_server, monkeypatch):
+    """The reported symptom: upstream 200, a first chunk, then silence. The
+    request is already lost — bytes have shipped — so cooling the candidate for
+    the NEXT request is the only repair available."""
+    import requests as _rq
+
+    stall = _rq.exceptions.ConnectionError(
+        "HTTPSConnectionPool(host='p1.example', port=443): Read timed out.")
+    monkeypatch.setattr(cool_server.requests, "post",
+                        lambda url, **kw: FakeStreamResp(200, [TEXT], die=stall))
+    with cool_server.app.test_request_context():
+        resp = cool_server._proxy_cycling_streaming(
+            "chat/completions", "t", CANDS, {"messages": []}, 5, config=None)
+        body = b"".join(resp.response)
+
+    # The client gets a cleanly terminated stream, not a truncated one.
+    assert b"Upstream stream timed out." in body
+    assert b"HTTPSConnectionPool" not in body     # no internals leaked
+    assert body.rstrip().endswith(b"data: [DONE]")
+    assert _cooling(cool_server, "p1", "m1")
+
+
+def test_a_client_disconnect_still_does_not_cool_anything(cool_server, monkeypatch):
+    """Ctrl-C is not the provider's fault; it must not pull a healthy model."""
+    monkeypatch.setattr(cool_server.requests, "post",
+                        lambda url, **kw: FakeStreamResp(
+                            200, [TEXT], die=RuntimeError("client disconnected")))
+    with cool_server.app.test_request_context():
+        resp = cool_server._proxy_cycling_streaming(
+            "chat/completions", "t", CANDS, {"messages": []}, 5, config=None)
+        b"".join(resp.response)
+    assert not _cooling(cool_server, "p1", "m1")
+
+
+def test_a_non_streaming_timeout_cools_the_candidate(cool_server, monkeypatch):
+    import requests as _rq
+
+    def _post(url, **kw):
+        if "p1" in url:
+            raise _rq.exceptions.Timeout("timed out")
+        r = type("R", (), {})()
+        r.status_code, r.headers = 200, {"Content-Type": "application/json"}
+        r.content = b'{"choices":[{"message":{"content":"hi"}}]}'
+        r.get_data = lambda: r.content
+        return r
+
+    monkeypatch.setattr(cool_server.requests, "post", _post)
+    with cool_server.app.test_request_context():
+        cool_server._proxy_cycling_non_streaming(
+            "chat/completions", "t", CANDS, {"messages": []}, 5, config=None)
+    assert _cooling(cool_server, "p1", "m1")
+
+
+def test_an_ordinary_upstream_502_is_not_cooled(cool_server, monkeypatch):
+    """Only timeouts are cooled. A plain 5xx already fails over, and cooling it
+    would take a candidate out of rotation for a one-off blip."""
+    def _post(url, **kw):
+        r = type("R", (), {})()
+        r.status_code, r.headers = 502, {"Content-Type": "application/json"}
+        r.content = b'{"error":{"message":"bad gateway"}}'
+        r.get_data = lambda: r.content
+        return r
+
+    monkeypatch.setattr(cool_server.requests, "post", _post)
+    with cool_server.app.test_request_context():
+        cool_server._proxy_cycling_non_streaming(
+            "chat/completions", "t", CANDS, {"messages": []}, 5, config=None)
+    assert not _cooling(cool_server, "p1", "m1")
+
+
+def test_the_timeout_bounds_the_gap_between_chunks_not_the_total(monkeypatch, tmp_path):
+    """The bound has to be an idle one. A total budget would kill a long but
+    healthy generation, which is exactly what flagship-tier reasoning produces."""
+    seen = {}
+    s = _make_server(monkeypatch, tmp_path, {"virtual_timeout_seconds": 90,
+                                             "stream_timeout": 300})
+
+    def _post(url, **kw):
+        seen["timeout"] = kw.get("timeout")
+        return FakeStreamResp(200, [TEXT, DONE])
+
+    monkeypatch.setattr(s.requests, "post", _post)
+    with s.app.test_request_context():
+        s._proxy_cycling_streaming("chat/completions", "t", CANDS,
+                                   {"messages": []}, 300, config=None)
+    connect, read = seen["timeout"]
+    assert read == 90       # the idle bound, in force for the life of the socket
+    assert connect <= 90
+
+
+def test_without_the_knob_the_socket_timeout_is_unchanged(monkeypatch, tmp_path):
+    seen = {}
+    s = _make_server(monkeypatch, tmp_path, {"stream_timeout": 300})
+    monkeypatch.setattr(s.requests, "post",
+                        lambda url, **kw: (seen.__setitem__("timeout", kw.get("timeout")),
+                                           FakeStreamResp(200, [TEXT, DONE]))[1])
+    with s.app.test_request_context():
+        s._proxy_cycling_streaming("chat/completions", "t", CANDS,
+                                   {"messages": []}, 300, config=None)
+    assert seen["timeout"][1] == 300     # the pre-existing stream_timeout

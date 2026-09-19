@@ -251,11 +251,21 @@ per-candidate timeout is 60s, so a long pool of slow upstreams can keep a client
 waiting for minutes. Set [`server.cycle_deadline_seconds`](#cycle_deadline_seconds)
 to bound the candidate walk as a whole.
 
+**A slow candidate can be given a deadline of its own, and is remembered.** Set
+[`server.virtual_timeout_seconds`](#virtual_timeout_seconds) to say how long any
+virtual-pool candidate may go without producing bytes — including the gap between
+chunks once a stream is running, which is the only bound that catches a reply
+that starts normally and then stops. A timeout is then treated as a `429`: the
+candidate is cooled and the next request rotates off it, rather than paying the
+same timeout again.
+
 **A stream that dies after it starts is not silent.** Once bytes have reached the
 client there is nothing to fail over to, but the stream is still terminated
 properly — an `error` frame, a final chunk carrying `finish_reason`, and `[DONE]` —
 so a client accumulating a partial `tool_calls` argument string learns that no more
-fragments are coming instead of hanging or parsing truncated JSON. The provider is
+fragments are coming instead of hanging or parsing truncated JSON. A stream that
+stops because the upstream went quiet also cools the candidate, so the next
+request avoids it. The provider is
 also **demoted** for it: a candidate is credited with a success when its stream
 commits, and a later mid-stream death revokes that credit, so an upstream that
 reliably dies four fifths of the way through a generation stops being ranked first.
@@ -272,6 +282,12 @@ rotation is accounts-first (same model, fresh credential) before moving on.
 When **every** candidate has failed, llmproxy returns the last upstream response
 (so you still see the real diagnostic body and status) rather than a synthesized
 error; if no candidate was even reachable it returns a `503`.
+
+The order the walk follows is the pool's own: capacity headroom for the `/free`
+virtuals, the cost waterfall for `loadbalanced`, a random rotation elsewhere, and
+for [flagship](#flagship-ordering) a strict descending benchmark ranking, so a
+flagship failover steps down to the next-strongest model rather than to an
+arbitrary one.
 
 Two boundaries are worth stating outright, because both are deliberate. The walk
 **never widens past its own pool**: an exhausted `llmproxy/flagship` does not
@@ -495,7 +511,13 @@ additionally capacity-aware. The `__free` and `__local` variants are also
 [request-fit triaged](#request-fit-triage-every-free-and-local-virtual): within
 a single-tier pool (all `deep`, all `exploratory`, …) the proxy still prefers the
 right-*sized* model for the request — a smaller one for a light prompt, the
-largest for heavy reasoning. The `llmproxy/...` slash form (e.g. `llmproxy/deep`, `llmproxy/deep__free`) and the
+largest for heavy reasoning.
+
+The three `flagship` endpoints are the exception to both. They are the only
+pools with a measured per-model ranking, so they are walked
+[strictly best-first by benchmark score](#flagship-ordering), with capacity and
+health demoting a saturated candidate rather than reordering the rest, and
+neither capacity sampling nor request-fit triage applies. The `llmproxy/...` slash form (e.g. `llmproxy/deep`, `llmproxy/deep__free`) and the
 three-part slash form (e.g. `llmproxy/deep/free`) are also accepted on input.
 
 ```bash
@@ -922,9 +944,14 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "request_timeout": 120,
     "stream_timeout": 300,
     "response_cache_ttl": 120,
+    "models_cache_ttl": 60,
     "stream_include_usage": true,
+    "report_route": true,
     "allow_implicit_paid": false,
     "saturation_cooldown_seconds": 60,
+    "virtual_timeout_seconds": 0,
+    "request_log": "off",
+    "request_log_max_body_bytes": 0,
     "tool_signal_routing": true,
     "workers": 1,
     "cycle_deadline_seconds": 0,
@@ -1219,6 +1246,19 @@ adjusted by tool signals, the log line also records the evidence behind it —
 severity, turn depth, recent read/write/edit counts and the resulting score —
 rather than just the verdict.
 
+A [flagship](#flagship-tier) pool reports `flagship_rank=<ranked>/<total>`
+instead of `capacity` or `cycling`, naming how much of the pool the benchmark
+ranking actually covered:
+
+```
+X-LLMProxy-Route-Reason: flagship_rank=4/5,capability=tools
+```
+
+`4/5` says four of the five candidates carried a score and one did not — an
+unscorable pin, sorted last. A flagship pool whose membership cache holds no
+scores at all reports the ordering it genuinely used (`cycling` or `capacity`)
+rather than claiming a ranking, so the header never overstates what is known.
+
 The headers are not confined to virtual models or to the OpenAI surface. A pinned
 `provider__model` request reports itself, so a client never has to branch on what
 kind of id it asked for; `/v1/messages`, `/v1/responses` and the Gemini route
@@ -1226,6 +1266,11 @@ carry them through dialect translation; a fusion reply names its synthesizer, th
 model whose words actually reach you; a cached reply names the model that
 originally produced it; and when *every* candidate fails, the error reply still
 names the last one tried, which is precisely when you most want to know.
+
+For a durable record rather than a per-reply signal, see
+[`server.request_log`](#request_log), which emits one structured JSON object per
+request to stdout — including the route reason above, the real duration of a
+streamed reply, and a request id echoed back as `X-LLMProxy-Request-Id`.
 
 **A body field, on virtual models.** Most SDK clients surface a parsed body and
 never expose response headers to their callers, so a virtual-model reply also
@@ -1319,6 +1364,151 @@ asymmetric on purpose: overestimating costs one suboptimal but working pick, whi
 underestimating costs a `400` and a walk down the pool.
 
 When the pass fires it appends `context_fit=~Ntok` to `X-LLMProxy-Route-Reason`.
+
+<a name="request_log"></a>
+### `server.request_log` — one structured record per request
+
+llmproxy logs two human lines per request, `→ POST /v1/chat/completions` and
+`← POST /v1/chat/completions 200 412ms`. They are fine for watching it work and
+useless for reconstructing anything afterwards: there is no id joining them, so
+under concurrency you cannot tell which `←` belongs to which `→`; the `←` line
+names no model, provider, route reason or token count, though all of those are
+known by then; and because Flask runs `after_request` before the WSGI server
+iterates a streamed body, every streamed request reports time-to-headers rather
+than its real duration.
+
+`server.request_log` adds one JSON object per request, written to **stdout** —
+while every other log line goes to stderr, so a collector can tee the record
+stream apart from human log chatter without grepping. Three settings:
+
+| Value | What it emits |
+|---|---|
+| `"off"` (default) | Nothing. Only the `→`/`←` lines, exactly as before. |
+| `"metadata"` | One record per request, with everything llmproxy knows *about* it and **no message content**. |
+| `"full"` | The same record plus the complete request and response bodies. |
+
+```json
+"server": {
+  "request_log": "full"
+}
+```
+
+A record looks like this (`full` mode, a streamed reply):
+
+```json
+{
+  "object": "request.record",
+  "id": "af018083d96e4b83a1812eed19972f67",
+  "ts": "2026-09-19T21:38:04.432781+00:00",
+  "method": "POST", "path": "/v1/chat/completions",
+  "status": 200, "duration_ms": 101.6, "streamed": true,
+  "model": "llmproxy/flagship",
+  "selected_model": "groq/llama-3.3-70b-versatile",
+  "route_reason": "flagship_rank=4/5,capability=tools",
+  "failed_over": false,
+  "request_body": { "model": "llmproxy/flagship", "messages": [ ... ] },
+  "response_body": "data: {\"choices\": ...}\n\ndata: [DONE]\n\n"
+}
+```
+
+Four details worth knowing:
+
+- **`model` is what the client asked for; `selected_model` is what answered.**
+  The proxy rewrites `payload["model"]` in place while routing, so the record
+  captures the requested id before that happens.
+- **A streamed record is emitted when the stream ends**, not when the headers
+  go out, so `duration_ms` is the real duration and `response_body` is the whole
+  stream. A client that hangs up mid-stream still produces a record.
+- **`X-LLMProxy-Request-Id`** is returned on every response and is the record's
+  `id`, so a user reporting a bad answer can name the exact request.
+- Bodies are parsed into the record where they are JSON, rather than embedded as
+  an escaped string, so `jq` works on them directly.
+
+**What is never recorded, in any mode.** Request headers, which carry the
+caller's `Authorization` — a record stream that must itself be handled as
+credential material is one nobody will keep. And the bodies of `/admin/*`
+requests, because the admin API takes provider API keys in the clear (that is
+how you set one); admin requests still produce a record, marked
+`"bodies_omitted"`, so the audit trail keeps the fact that a config change
+happened without becoming a key dump.
+
+**`full` mode is a data-handling decision, not a log level.** It writes every
+prompt and every completion to stdout, so wherever your container logs go, user
+content goes too, for as long as they are retained. That is why it is off by
+default. `metadata` answers almost every operational question — what was slow,
+what timed out, what it cost, which model actually served it, how often the
+ranked pick failed over — with no content at all, and is the better default for
+a deployment carrying anyone's data but your own.
+
+`request_log_max_body_bytes` caps each captured body, with the record marking
+`"truncated": true` and the original length. `0` (the default) means no cap,
+which is what `full` means. Consider setting one: a record holds the whole body
+in memory until the response completes, and a streamed answer has no size known
+in advance.
+
+**Note:** the first 200 bytes of every streamed reply's first chunk are also
+logged at `INFO` on the ordinary (stderr) log, independently of this setting.
+That line predates the record stream and is useful for spotting a provider
+returning an error frame; be aware it puts a little generated text in the normal
+log even with `request_log` off.
+
+<a name="virtual_timeout_seconds"></a>
+### `server.virtual_timeout_seconds` — one patience setting for every pool
+
+`request_timeout` and `stream_timeout` are what `requests` calls timeouts, which
+means they bound a single socket read rather than the request. A streamed reply
+that arrives normally and then stops is the case that exposes the difference: the
+socket is not dead, it is merely quiet, so nothing fires until `stream_timeout`
+(300s by default) has elapsed — and because the bound is per-read, an upstream
+that emits one byte every 299s can hold the connection open indefinitely without
+ever tripping it. The symptom is a `200`, a first chunk, and then nothing.
+
+`server.virtual_timeout_seconds` is a single **idle** bound covering every
+virtual pool — `llmproxy/free`, the reasoning tiers, flagship, `loadbalanced`,
+the per-provider slices — because "how long am I willing to wait" is a property
+of the caller, not of the pool. `0` (the default) disables it and leaves the
+existing timeouts exactly as they were.
+
+```json
+"server": {
+  "virtual_timeout_seconds": 90
+}
+```
+
+It bounds **silence, never total duration**, at every stage of a request:
+connect, first byte, and — the case nothing else reaches — the gap between chunks
+*after* a stream has committed. A long but steadily-producing generation is never
+cut off, however long it runs, which is the thing a total budget gets wrong and
+why this is not simply a deadline.
+
+**A timeout is then treated as a `429`.** Both tell the next request the same
+thing: this candidate is not answering. The candidate is cooled for
+`server.saturation_cooldown_seconds` (60s by default) and demoted to the
+back of its pool, so the following request rotates off it instead of paying the
+same timeout again. It stays reachable as a last resort, exactly like a
+rate-limited model. This part is not conditional on the knob: a timeout is cooled
+whenever one happens.
+
+Only genuine timeouts are cooled. A connection reset or a DNS failure already
+fails over on its own, and cooling it too would pull a candidate out of rotation
+over a blip that cost nothing. Because urllib3 re-raises a mid-stream read
+timeout as a `ConnectionError` rather than a `ReadTimeout`, the message is what
+distinguishes them, not the exception type.
+
+Two limits worth knowing:
+
+- **A committed stream cannot fail over.** Once bytes have reached the client
+  there is nothing to fail over to, so a stall is terminated cleanly (a real
+  `finish_reason` and `[DONE]`, not a truncated stream) and the candidate is
+  cooled for next time. To get genuine mid-generation failover you need
+  [`server.stream_buffer_full`](#stream_buffer_full), which trades away
+  time-to-first-byte for it.
+- **Pinned `provider/model` requests are unaffected.** They have no pool to
+  rotate within, so they keep using `stream_timeout`; lower that if you want
+  them bounded too.
+
+Pick a value above your slowest legitimate inter-chunk gap and below your
+client's own read timeout. `90` is a reasonable starting point for agent traffic.
 
 <a name="cycle_deadline_seconds"></a>
 ### `server.cycle_deadline_seconds` — bound the whole candidate walk
@@ -1782,6 +1972,56 @@ Four rules, in this order:
 4. **Pins and excludes win.** A pin bypasses both the bar and the spec veto.
    An exclude is applied last and beats everything, including a pin.
 
+<a name="flagship-ordering"></a>
+#### How the pool is ordered
+
+Flagship is the only tier with a measured per-model ranking, so it is the only
+one that is *ordered* rather than rotated or load-spread. The combined
+percentile from rule 1 is not discarded once membership is settled: it is
+written into `flagship_models.json` beside the member list, and the router
+walks the pool **strictly best-first**, so failover descends the ranking rather
+than sampling it. Every flagship entry point does this — `llmproxy/flagship`,
+`flagship__free`, `flagship__local`, and the per-provider
+`llmproxy/<provider>__flagship` slice.
+
+The score is the *primary* key, and nothing continuous is folded into it.
+Remaining quota and provider health break ties only; letting them scale the
+score would quietly turn a strict ranking back into a weighted preference.
+Ties are common, because cross-provider duplicates share one score, so
+remaining capacity breaks them first and the provider name breaks what is left,
+which keeps the order deterministic rather than dependent on iteration order.
+
+Two departures from a pure sort, both deliberate:
+
+- A candidate cooling after a recent `402`/`429`, or one with no headroom left,
+  is demoted to the **back** of the list. It stays reachable, so a saturated top
+  pick never causes an avoidable `503`, but a strict order would otherwise
+  re-attempt a rate-limited leader first on every request until its window
+  cleared.
+- An **unscored** candidate sorts after every scored one. Nothing can rank it on
+  evidence, and promoting it would let one pin preempt a measured
+  top-of-the-field model on every request.
+
+Because the ranking is measured capability, it outranks the softer ordering
+passes, which are suppressed for a ranked flagship pool: [request-fit
+triage](#request-fit-triage-every-free-and-local-virtual) (whose effective key
+inside a single tier is a parameter count guessed from the model id — precisely
+the crude proxy the benchmark score replaces),
+[`favorite_free_models`](#favorite_free_models), and free-tier cache affinity.
+The *hard* passes still win, because they predict an outright failure rather
+than a preference: forced tool/vision/JSON capability ordering, and
+[context fit](#context_aware_routing).
+
+One consequence is worth stating plainly: **`flagship__free` no longer spreads
+load.** It walks the ranking instead of sampling by remaining quota, so the
+top-scored free model absorbs every request until it saturates and drops to the
+back. That is the point of asking for flagship, but it is a real change from how
+the other `/free` virtuals behave.
+
+If the membership cache carries no scores yet — a first run, or a file written
+by an older build — the pool falls back to its previous ordering and says so in
+the route reason, rather than claiming a ranking it does not have.
+
 #### Free is per-provider
 
 The same weights can be free on one provider and paid on another, so free
@@ -1881,6 +2121,16 @@ list is the intended answer:
 A pin bypasses the spec veto too, since an unscraped provider has no
 capability data to check. The refresh logs a warning naming any pinned id it
 could not verify, so an unnoticed typo does not silently do nothing.
+
+**A pin buys membership, not rank.** Scores belong to the model rather than to
+the provider serving it, so a pinned provider whose weights *are* scored under
+some other provider's listing inherits that score and takes its rightful place
+in the [ordering](#flagship-ordering) — which is the common case, since the join
+is on normalised model names. Only a pin whose weights nothing scores at all is
+unrankable, and that one sorts last, behind every measured member. It is still
+reached by failover; it is simply not chosen ahead of a model that was actually
+measured. To make such a model a first pick, address it by name, or use its
+per-provider virtual `llmproxy/<provider>__flagship`.
 
 Where a provider does not publish capability data but serves the same weights
 as a provider that does, the specs and score are carried across by matching

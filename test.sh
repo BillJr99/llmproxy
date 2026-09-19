@@ -423,6 +423,43 @@ else
   rm -f "$PHDRS"
 fi
 
+# ── flagship is ranked, and says so ─────────────────────────────────────────
+hdr "Flagship ranking (benchmark order)"
+if ! has_model llmproxy/flagship; then
+  skip "llmproxy/flagship not advertised (membership not computed yet)"
+else
+  FHDRS="$(mktemp)"
+  code=$(curl -sS -o "$BODY" -D "$FHDRS" -w '%{http_code}' -X POST \
+    "${BASE_URL}/v1/chat/completions" -H 'Content-Type: application/json' "${AUTH[@]}" \
+    -d '{"model":"llmproxy/flagship","messages":[{"role":"user","content":"hi"}],"max_tokens":8}')
+  if ok2xx "$code"; then
+    rr=$(grep -i '^x-llmproxy-route-reason:' "$FHDRS" | tr -d '\r' | cut -d' ' -f2-)
+    case "$rr" in
+      flagship_rank=*) pass "ranked by benchmark score ${DIM}(${rr})${RST}" ;;
+      capacity*|cycling*) warn "flagship served unranked ${DIM}(${rr})${RST} — no scores cached yet; recompute is due on its own cadence" ;;
+      "") warn "no X-LLMProxy-Route-Reason header (server.report_route off, or older build)" ;;
+      *) fail "unexpected route reason on a flagship reply: $rr" ;;
+    esac
+    # The pool listing must agree with the order failover will actually take.
+    if [ "$HAVE_JQ" -eq 1 ]; then
+      first=$(curl -sS "${BASE_URL}/v1/models/llmproxy/flagship" "${AUTH[@]}" \
+        | jq -r '._candidates[0] // "absent"' 2>/dev/null)
+      sel=$(grep -i '^x-llmproxy-selected-model:' "$FHDRS" | tr -d '\r' | cut -d' ' -f2-)
+      if [ "$first" = "absent" ] || [ -z "$first" ]; then
+        warn "no _candidates on the flagship model object"
+      elif [ -z "$sel" ]; then
+        warn "no X-LLMProxy-Selected-Model to compare the ranking against"
+      elif [ "$first" = "$sel" ]; then
+        pass "top-ranked candidate is the one that answered ${DIM}(${sel})${RST}"
+      else
+        # Legitimate when the leader was saturated or failed over; not a failure.
+        warn "answered by ${sel}, ranked first was ${first} (failover or a cooling leader)"
+      fi
+    fi
+  else warn "flagship chat → $code (pool may be unreachable right now)"; fi
+  rm -f "$FHDRS"
+fi
+
 # ── input-aware first-pick on the general virtuals ──────────────────────────
 hdr "Input-aware routing (llmproxy/free)"
 if ! has_model llmproxy/free; then
