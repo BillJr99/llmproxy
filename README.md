@@ -1598,10 +1598,8 @@ Two related settings sit nearby and are easy to confuse:
   scrape during startup itself rather than leaving it to the periodic check. It
   honours `update_frequency_days` too. See
   [`update_on_startup`](#update-on-startup).
-- `free_tier.endpoint_probe.frequency_minutes` throttles the opt-in
-  endpoint-probe **source** *within* a refresh. Because that source only runs as
-  part of a refresh, it cannot fire more often than `update_frequency_days`
-  allows.
+- `free_tier.probe_timeout_sec` is the read timeout for both probes. It is not
+  a cadence at all.
 
 <a name="the-two-cadences"></a>
 #### There are two independent cadences
@@ -1628,8 +1626,12 @@ part of a sweep:
 | Setting | Scope | Meaning |
 |---------|-------|---------|
 | `free_tier.update_frequency_days` | the whole sweep | **How often the sweep runs at all.** Everything below is subordinate to it. |
-| `free_tier.endpoint_probe.frequency_minutes` | one source | The `:free`-discovery probe runs at most this often. Below `update_frequency_days` it has no effect, since the sweep is the only thing that can invoke it. |
-| `free_tier.cost_probe.frequency_days` | one source | The billing probe (which spends real quota) runs at most this often. |
+| `free_tier.cost_probe.frequency_days` | one source | The billing probe (which spends real quota) runs at most this often. It is the only source with a throttle of its own, because it is the only one that costs money. |
+
+The `:free`-discovery endpoint probe has **no** frequency setting: it only
+issues `GET /models` per provider and spends no quota, so it simply runs on
+every sweep. Both probes share one read timeout,
+`free_tier.probe_timeout_sec`.
 
 A practical consequence: if a source throttle is set to the *same* period as
 `update_frequency_days`, the two can beat against each other. A sweep firing a
@@ -1639,12 +1641,15 @@ which then waits a whole further period — so a 7-day source throttle under a
 **shorter** than the sweep (say 6 days under a 7-day sweep) if you want them to
 run on every sweep.
 
-> **Upgrading from an older version?** `endpoint_probe.frequency_minutes` used
-> to be the de-facto master cadence: the job that consumed it ran the *entire*
-> updater, so a stock config re-scraped every provider every 30 minutes as a
-> side effect of a probe setting. It is now only the source throttle its name
-> describes. If your config still sets it, it is almost certainly doing nothing,
-> and `update_frequency_days` is the setting you want.
+> **Upgrading from an older version?** The `free_tier.endpoint_probe` block is
+> gone. `frequency_minutes` used to be the de-facto master cadence — the job
+> that consumed it ran the *entire* updater, so a stock config re-scraped every
+> provider every 30 minutes as a side effect of a probe setting. The endpoint
+> probe now has no frequency of its own, so the key is obsolete and ignored;
+> `update_frequency_days` is the setting you want. Its sibling `timeout_sec`
+> moved to `free_tier.probe_timeout_sec` and is now shared with the cost probe.
+> Old configs are migrated automatically on load and the sweep prints a notice,
+> but you can delete the `endpoint_probe` block once you see it.
 
 <a name="flagship-tier"></a>
 ### The flagship tier — `flagship_tier`

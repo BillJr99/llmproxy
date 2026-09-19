@@ -37,7 +37,10 @@ from llmproxy.usage import compute_cost, extract_usage, load_pricing_map
 
 from .base import Evidence, Source
 
-TIMEOUT = (5, 30)
+# (connect, read). The read half is configurable via free_tier.probe_timeout_sec,
+# shared with the endpoint probe so one setting covers both.
+CONNECT_TIMEOUT = 5
+DEFAULT_READ_TIMEOUT = 30
 DEFAULT_CONCURRENCY = 3
 
 
@@ -71,11 +74,13 @@ class CostProbeSource(Source):
         max_models: int | None = None,
         provider_filter: str | None = None,
         concurrency: int | None = None,
+        timeout: int | None = None,
     ) -> None:
         self.config_path = config_path
         self.max_models = max_models
         self.provider_filter = provider_filter
         self.concurrency = max(1, concurrency or DEFAULT_CONCURRENCY)
+        self.timeout = (CONNECT_TIMEOUT, timeout or DEFAULT_READ_TIMEOUT)
 
     def _believed_free_models(self, sidecar: dict) -> list[str]:
         """Collect qualified ``provider/model`` ids from the sidecar believed_free."""
@@ -176,7 +181,7 @@ class CostProbeSource(Source):
                     "Content-Type": "application/json",
                 },
                 json={**_PROBE_BODY, "model": model},
-                timeout=TIMEOUT,
+                timeout=self.timeout,
             )
             if resp.status_code >= 400:
                 return None

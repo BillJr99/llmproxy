@@ -159,10 +159,11 @@ DEFAULT_ADMIN_CONFIG = {
 DEFAULT_FREE_TIER_CONFIG = {
     "sync_on_startup": True,
     "update_on_startup": False,
-    "endpoint_probe": {
-        "frequency_minutes": 30,
-        "timeout_sec": 10,
-    },
+    # Read timeout for BOTH probes. They differ in what they spend, not in how
+    # long to wait for a slow provider, so one setting covers both. Replaces the
+    # former free_tier.endpoint_probe block, which held nothing else once the
+    # endpoint probe stopped needing a frequency of its own.
+    "probe_timeout_sec": 10,
     "cost_probe": {
         "enabled": False,
         "autoremove": False,
@@ -348,9 +349,10 @@ def save_config(config: dict, config_path: str | None = None) -> bool:
 # Probe state (machine-managed caches, kept out of the user-edited config)
 # ---------------------------------------------------------------------------
 #
-# Each probe (cost_probe, endpoint_probe) and PR creation is throttled via its
-# own frequency setting. The last-run timestamps live in small sibling cache
-# files rather than in config.json so we don't churn the hand-edited config.
+# The cost probe and PR creation are each throttled via their own frequency
+# setting; the endpoint probe has none, because it spends no quota and runs on
+# every sweep. The last-run timestamps live in small sibling cache files rather
+# than in config.json so we don't churn the hand-edited config.
 
 def _load_state_file(path: Path, label: str) -> dict:
     if not path.exists():
@@ -426,20 +428,10 @@ def save_probe_state(state: dict, config_path: str | None = None) -> bool:
     return save_cost_probe_state(state, config_path)
 
 
-# --- Endpoint probe state (endpoint_probe_state.json) ---
-
-def get_endpoint_probe_state_path(config_path: str | None = None) -> Path:
-    return get_config_path(config_path).parent / "endpoint_probe_state.json"
-
-
-def load_endpoint_probe_state(config_path: str | None = None) -> dict:
-    return _load_state_file(get_endpoint_probe_state_path(config_path), "load_endpoint_probe_state")
-
-
-def save_endpoint_probe_state(state: dict, config_path: str | None = None) -> bool:
-    return _save_state_file(
-        state, get_endpoint_probe_state_path(config_path), "save_endpoint_probe_state"
-    )
+# NOTE: there is no endpoint_probe_state.json. The endpoint probe has no
+# throttle to remember a last-run time for — it runs on every sweep. An
+# endpoint_probe_state.json left over from an older version is inert and can be
+# deleted.
 
 
 # --- Full-refresh state (update_state.json) ---
@@ -966,6 +958,20 @@ def _normalize_config(raw: dict) -> dict:
     ft = normalized.get("free_tier")
     if isinstance(ft, dict) and "probe" in ft and "cost_probe" not in ft:
         ft["cost_probe"] = ft.pop("probe")
+
+    # Migrate free_tier.endpoint_probe.{timeout_sec} → free_tier.probe_timeout_sec.
+    # The endpoint_probe block was flattened once it held nothing but a timeout,
+    # and that timeout is now shared with the cost probe. frequency_minutes is
+    # dropped rather than migrated: the endpoint probe no longer throttles
+    # itself, so there is no new key for it to become.
+    if isinstance(ft, dict) and isinstance(ft.get("endpoint_probe"), dict):
+        ep = ft["endpoint_probe"]
+        if "timeout_sec" in ep and "probe_timeout_sec" not in ft:
+            ft["probe_timeout_sec"] = ep["timeout_sec"]
+        ep.pop("timeout_sec", None)
+        ep.pop("frequency_minutes", None)
+        if not ep:
+            ft.pop("endpoint_probe")
 
     if not any(k in normalized for k in _LEGACY_KEY_MIGRATIONS):
         return normalized
