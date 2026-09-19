@@ -169,6 +169,7 @@ The families are:
 | Cost-tiered (default)     | `llmproxy/loadbalanced`                              | The whole pool, walked free → local → paid |
 | General                   | `llmproxy/free`, `llmproxy/local`                    | All free / all localhost-served models |
 | Reasoning level           | `llmproxy/exploratory`, `llmproxy/standard`, `llmproxy/deep` (+ `/free`, `/local`) | Models tagged at that reasoning tier |
+| Flagship (computed)       | `llmproxy/flagship` (+ `/free`, `/local`)            | The models nearest the state of the art, [selected automatically](#flagship-tier) |
 | Capability                | `llmproxy/tools`, `llmproxy/vision` (+ `/free`)     | Models tagged with that capability |
 | Per-provider              | `llmproxy/<provider>` (+ `/<dimension>`)            | One provider's models, optionally sliced |
 | Fusion (deliberation)     | `llmproxy/fusion`, `llmproxy/fusion__free`           | A panel of models, judged + synthesized |
@@ -444,7 +445,14 @@ is exposed to virtual routing.
 You can optionally tag individual models in the config with a **reasoning
 level** — `exploratory`, `standard`, or `deep` — to group them by how much
 thinking effort they are expected to apply.  When at least one model is tagged
-with a given level, llmproxy exposes corresponding virtual endpoints:
+with a given level, llmproxy exposes corresponding virtual endpoints.
+
+There is a fourth tier, [`flagship`](#flagship-tier), which sits above `deep`.
+It works differently in one important way: you do not tag models with it.
+Membership is computed from benchmark data and refreshed automatically, and it
+is an *overlay* rather than a fourth exclusive level, so a flagship model keeps
+whatever `deep` or `standard` tag it already carries and `llmproxy/deep` does
+not lose its strongest models.
 
 | Virtual model name           | Selects                                                       |
 |------------------------------|---------------------------------------------------------------|
@@ -457,6 +465,9 @@ with a given level, llmproxy exposes corresponding virtual endpoints:
 | `llmproxy/standard__local`   | Models tagged `standard` **and** served on localhost          |
 | `llmproxy/deep__free`        | Models tagged `deep` **and** qualifying as free-tier          |
 | `llmproxy/deep__local`       | Models tagged `deep` **and** served on localhost              |
+| `llmproxy/flagship`          | [Computed](#flagship-tier) — the models nearest the state of the art |
+| `llmproxy/flagship__free`    | Flagship models **and** free on that provider                 |
+| `llmproxy/flagship__local`   | Flagship models **and** served on localhost                   |
 
 Each endpoint cycles through its pool using the
 [shared failover rules](#how-cycling--failover-works); the `/free` variants are
@@ -1591,6 +1602,166 @@ Two related settings sit nearby and are easy to confuse:
   endpoint-probe **source** *within* a refresh. Because that source only runs as
   part of a refresh, it cannot fire more often than `update_frequency_days`
   allows.
+
+<a name="flagship-tier"></a>
+### The flagship tier — `flagship_tier`
+
+`llmproxy/flagship` routes only to models near the current state of the art:
+the ones actually capable of driving a long agentic loop. It sits above `deep`
+in the tier order, so a flagship model outranks everything else when the proxy
+picks a candidate.
+
+Three things make it different from the other tiers.
+
+**You never tag models with it.** Membership is computed from benchmark data
+and refreshed on a schedule. `flagship` is rejected if you try to set it in
+`model_reasoning`, and it is not offered in the setup wizard's level picker.
+
+**It is an overlay, not a fourth exclusive level.** A flagship model keeps its
+existing `deep` or `standard` tag and appears in both places. Promoting your
+best models therefore does not empty out `llmproxy/deep`, which is what a
+fourth exclusive tier would have done.
+
+**Nothing about it is shipped or committed.** Which models qualify depends
+entirely on which providers *you* have configured and what each of them
+currently serves, so the list is different for every install. It is computed
+locally into `flagship_models.json` beside your `config.json`, alongside the
+other machine-managed state files. Your config holds only policy — the pin and
+exclude lists.
+
+A prompt's size never drifts into flagship, either. The request-fit heuristic
+tops out at `deep`; flagship is reachable only by asking for it by name.
+
+#### How membership is decided
+
+Four rules, in this order:
+
+1. **Benchmarks rank.** Sources use incompatible scales, so each is
+   rank-normalised to a percentile over the models it covers and the
+   percentiles are combined with a median. Raw scores are never averaged. A
+   model missing from one source is ranked on the sources that do cover it
+   rather than penalised for the gap.
+2. **Spec gates veto.** Tool-calling support and a context-window floor. These
+   are a veto rather than a selector: on their own they admit almost
+   everything, but they correctly reject a model that cannot call tools, which
+   cannot drive an agent loop whatever it scores. A model whose capabilities
+   cannot be determined fails the gate.
+3. **The bar floats.** Starting from `start_percentile`, the bar is lowered
+   until at least `min_flagship_free_models` **distinct** free models qualify.
+   There is no lower bound, so a thin free tier produces a smaller tier rather
+   than an error.
+4. **Pins and excludes win.** A pin bypasses both the bar and the spec veto.
+   An exclude is applied last and beats everything, including a pin.
+
+#### Free is per-provider
+
+The same weights can be free on one provider and paid on another, so free
+status is a property of the *routing target*, not of the model. Every
+provider's instance of a flagship model is its own candidate in
+`llmproxy/flagship`, and only the free ones appear in `flagship/free`.
+
+Cross-provider duplicates count **once** toward `min_flagship_free_models`,
+because three providers serving the same weights is one model's worth of
+capability. They remain separate routing targets, though, since each has its
+own quota, rate limits and outage profile — which is exactly what failover
+needs.
+
+#### Configuration
+
+Paste this block at the top level of `config.json`, beside `free_tier`. Every
+key is optional; a config without the block behaves as if it contained these
+values, so upgrading needs no edit.
+
+```json
+"flagship_tier": {
+  "enabled": true,
+  "min_flagship_free_models": 5,
+  "start_percentile": 0.9,
+  "min_context": 200000,
+  "require_tools": true,
+  "max_models": null,
+  "pin": [],
+  "exclude": [],
+  "sources": ["openrouter_aa", "epoch"],
+  "refresh_frequency_days": 7
+}
+```
+
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `enabled` | `true` | Master switch. When false, no recompute runs and no network calls are made for the tier. |
+| `min_flagship_free_models` | `5` | Lower the bar until at least this many **distinct** free models qualify. Cross-provider duplicates count once. Best-effort: if the free pool is smaller, you get what there is. |
+| `start_percentile` | `0.9` | Where the bar starts before floating downward. Raise it for a stricter tier; the free floor may still pull it below this. |
+| `min_context` | `200000` | Spec veto: minimum context window. `0` disables the check. |
+| `require_tools` | `true` | Spec veto: the model must support tool calling. Set false at your own risk — a model that cannot call tools cannot run an agent loop. |
+| `max_models` | `null` | Optional hard cap on distinct models. `null` means uncapped. |
+| `pin` | `[]` | Qualified `provider/model` ids always admitted, bypassing both the bar and the spec veto. |
+| `exclude` | `[]` | Qualified ids never admitted. Applied last, so it beats a pin. |
+| `sources` | `["openrouter_aa", "epoch"]` | Which benchmark sources to combine. |
+| `refresh_frequency_days` | `7` | How often membership is recomputed. `0` recomputes every time the interval is checked. |
+
+Pins and excludes take effect immediately, when membership is read, rather
+than waiting for the next refresh.
+
+#### Benchmark sources
+
+| Source | What it is | Licence position |
+|--------|------------|------------------|
+| `openrouter_aa` | Artificial Analysis indices embedded in OpenRouter's model catalog, under `benchmarks.artificial_analysis`. The `agentic_index` is used, being the closest published measure of tool-loop capability. | Arrives with a listing already fetched each sweep; no extra key, and ids match by construction. |
+| `epoch` | [Epoch AI](https://epoch.ai/) benchmark data, via the optional `epochai` client. Not installed by default; without it the tier simply ranks on the remaining sources. | Published under CC-BY. Attribution: Epoch AI, https://epoch.ai/, used under the Creative Commons Attribution licence. |
+
+Two leaderboards are deliberately **not** used. LLM Stats forbids
+redistribution on every tier, including paid ones, stating that "technical
+access is not a redistribution license". BenchLM publishes no licence at all,
+which is an absence of any grant rather than a restrictive one. Neither is
+wired up regardless of data quality.
+
+Nothing fetched from any source is committed to the repository; scores live
+only in your local `flagship_models.json`.
+
+#### Coverage, and when to use a pin
+
+Benchmark coverage stops at the major labs. A small or direct provider —
+`atria-asi`, for example — appears on no leaderboard, so nothing can score it
+and it will never be admitted automatically no matter how good it is. The pin
+list is the intended answer:
+
+```json
+"flagship_tier": {
+  "pin": ["atria-asi/Atria-Dawn-Preview"]
+}
+```
+
+A pin bypasses the spec veto too, since an unscraped provider has no
+capability data to check. The refresh logs a warning naming any pinned id it
+could not verify, so an unnoticed typo does not silently do nothing.
+
+Where a provider does not publish capability data but serves the same weights
+as a provider that does, the specs and score are carried across by matching
+normalised model names. That join is a heuristic and can be wrong; a pin or an
+exclude is the way to overrule it.
+
+#### When the tier is empty
+
+Until the first refresh completes — or if nothing qualifies — `llmproxy/flagship`
+is hidden from `GET /v1/models`, and requesting it directly returns `503` with a
+message explaining that membership is computed and pointing at the pin list.
+
+It deliberately does **not** fall back to `deep`. Silently serving a weaker
+model would defeat the purpose of asking for flagship, and would be impossible
+to notice.
+
+#### Refresh cadence
+
+Membership is recomputed automatically: once at startup, and thereafter
+whenever `refresh_frequency_days` has elapsed, checked on the same interval
+tick as the other background jobs. The last-run timestamp lives in
+`flagship_models.json`, so restarting the server does not trigger a fresh
+recompute on every boot.
+
+The candidate pool is everything this deployment can actually reach: every
+model of every configured provider, paid included. That is why the list is
+deployment-specific, and why it changes when you add a provider.
 
 <a name="pr-providers-list"></a>
 ### Proposing `providers.json` changes as a PR — `providers_pr.enabled`

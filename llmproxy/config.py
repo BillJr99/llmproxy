@@ -38,7 +38,19 @@ Schema:
     "<upstream_model_id>": "exploratory",         // models with a reasoning
     "<provider>/<upstream_model_id>": "standard", // level so they appear under
     "another-model": "deep"                       // the exploratory/standard/deep
-  },                                              // virtual endpoints
+  },                                              // virtual endpoints.
+                                                  // 'flagship' is NOT settable
+                                                  // here: it is a computed
+                                                  // overlay above deep — see
+                                                  // flagship_tier below
+  "flagship_tier": { ... },                       // optional; policy for the
+                                                  // computed llmproxy/flagship
+                                                  // tier. The membership list
+                                                  // itself is deployment-
+                                                  // specific and cached in
+                                                  // flagship_models.json, not
+                                                  // stored here. See the README
+                                                  // section "The flagship tier"
   "model_capabilities": {                         // optional; tag individual models
     "<upstream_model_id>": ["tools", "vision"],   // with the capabilities they
     "<provider>/<upstream_model_id>": ["json"]    // support. Drives capability-aware
