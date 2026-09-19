@@ -1488,7 +1488,7 @@ Two opt-in, top-level config flags (both default `false`) let you keep
 **On by default.** On every boot, the server reconciles your **live `config.json`**'s
 `believed_free` / `free_limits` / `model_reasoning` / `model_capabilities` from the
 bundled `providers.json` sidecar — the same data that ships with the package and is
-refreshed by the [weekly CI PR](#automated-providersjson-updates-ci). This is the
+refreshed by the [providers PR workflow](#automated-providersjson-updates-ci). This is the
 piece that makes merged/`pip install -U` updates actually reach a running proxy:
 
 - It does **no network scraping** and **never writes the sidecar or
