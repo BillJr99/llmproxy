@@ -387,6 +387,22 @@ def test_score_beats_size_which_is_the_signal_it_replaces(ranked_server):
     assert order[-1] == ("alpha", "huge-405b-dud")
 
 
+def test_tied_distinct_models_interleave_rather_than_group_by_provider(ranked_server, monkeypatch):
+    """Two different models on the same score must not cluster by whose provider
+    name sorts first — the tier is walked model by model, and provider grouping
+    is the shape this ordering exists to get away from."""
+    _seed_routes(ranked_server, {
+        "alpha__zeta": ("alpha", "zeta"), "beta__alpha-model": ("beta", "alpha-model"),
+    })
+    monkeypatch.setattr(ranked_server, "_get_flagship_models",
+                        lambda *a, **k: {"alpha/zeta", "beta/alpha-model"})
+    monkeypatch.setattr(ranked_server, "_get_flagship_scores",
+                        lambda *a, **k: {"zeta": 0.8, "alphamodel": 0.8})
+    # Equal scores: the MODEL name decides, so beta's "alpha-model" leads even
+    # though "alpha" would win on provider name.
+    assert _order(ranked_server)[0] == ("beta", "alpha-model")
+
+
 def test_a_cross_provider_tie_is_broken_deterministically(ranked_server):
     """The same weights share one score, so nothing about the ranking separates
     them — the order must still be stable rather than route-cache-dependent."""
@@ -571,3 +587,80 @@ def test_the_models_endpoint_shows_the_real_failover_order(ranked_server):
         "/v1/models/llmproxy__flagship").get_json()
     assert body["_candidates"][0] == "alpha/small-ace"
     assert body["_candidates"][-1] == "alpha/huge-405b-dud"
+
+
+# ── the ranking has to actually engage after an upgrade ─────────────────────
+#
+# Scores reach the router only through flagship_models.json, and only the
+# refresh writes them. The refresh is gated on a staleness clock — but the
+# reason scores are missing after an upgrade is a schema change, not staleness,
+# so every existing deployment kept its pre-ranking order for a week. These pin
+# the trigger that fixes it, and the guard that stops it becoming a refresh loop.
+
+def _state(tmp_path: Path, **over) -> Path:
+    (tmp_path / "config.json").write_text(json.dumps({"providers": {}}), encoding="utf-8")
+    (tmp_path / "flagship_models.json").write_text(json.dumps(over), encoding="utf-8")
+    return tmp_path / "config.json"
+
+
+def _now() -> str:
+    import datetime as _dt
+    return _dt.datetime.now(_dt.UTC).isoformat()
+
+
+def _stale() -> str:
+    import datetime as _dt
+    return (_dt.datetime.now(_dt.UTC) - _dt.timedelta(days=99)).isoformat()
+
+
+TIER = {"enabled": True, "refresh_frequency_days": 7}
+
+
+def test_a_cache_predating_scores_is_due_however_fresh(server, tmp_path, monkeypatch):
+    """The regression: an upgraded deployment must not wait out the cadence
+    before its tier can be ranked."""
+    cfg = _state(tmp_path, last_refresh_at=_now(), members=["a/b"])
+    assert server._flagship_refresh_due(TIER, str(cfg)) is True
+
+
+def test_an_uncovered_deployment_does_not_refresh_on_every_tick(server, tmp_path):
+    """model_scores == {} is legitimate — no benchmark source covers these
+    models. A truthiness check here would re-fetch the catalog every minute,
+    forever, so the trigger must test for the KEY."""
+    cfg = _state(tmp_path, last_refresh_at=_now(), members=["a/b"], model_scores={})
+    assert server._flagship_refresh_due(TIER, str(cfg)) is False
+
+
+def test_a_scored_cache_still_honours_the_cadence(server, tmp_path):
+    cfg = _state(tmp_path, last_refresh_at=_now(), members=["a/b"],
+                 model_scores={"b": 0.9})
+    assert server._flagship_refresh_due(TIER, str(cfg)) is False
+
+
+@pytest.mark.parametrize("extra", [{}, {"model_scores": {"b": 0.9}}])
+def test_a_stale_cache_is_due_either_way(server, tmp_path, extra):
+    cfg = _state(tmp_path, last_refresh_at=_stale(), members=["a/b"], **extra)
+    assert server._flagship_refresh_due(TIER, str(cfg)) is True
+
+
+def test_an_empty_cache_is_due(server, tmp_path):
+    cfg = _state(tmp_path)
+    assert server._flagship_refresh_due(TIER, str(cfg)) is True
+
+
+def test_a_disabled_tier_is_never_due_whatever_the_cache_holds(server, tmp_path):
+    cfg = _state(tmp_path, last_refresh_at=_now(), members=["a/b"])
+    assert server._flagship_refresh_due({"enabled": False}, str(cfg)) is False
+
+
+def test_serving_unranked_says_so_once(ranked_server, monkeypatch, caplog):
+    """Silent correct degradation is how this survived a deploy. It must be
+    visible — but once per process, not once per request."""
+    monkeypatch.setattr(ranked_server, "_get_flagship_scores", lambda *a, **k: {})
+    monkeypatch.setattr(ranked_server, "_flagship_unranked_warned", False)
+    with caplog.at_level("WARNING"):
+        for _ in range(3):
+            _dispatch(ranked_server, monkeypatch, "llmproxy__flagship")
+    warnings = [r for r in caplog.records if "UNRANKED" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "refresh_frequency_days" in warnings[0].getMessage()

@@ -251,6 +251,10 @@ per-candidate timeout is 60s, so a long pool of slow upstreams can keep a client
 waiting for minutes. Set [`server.cycle_deadline_seconds`](#cycle_deadline_seconds)
 to bound the candidate walk as a whole.
 
+**A candidate that rejected a request as too large is remembered**, by the size
+it refused rather than by a cooldown, so requests at least that big
+[route around it](#oversized-requests) while smaller ones still prefer it.
+
 **A slow candidate can be given a deadline of its own, and is remembered.** Set
 [`server.virtual_timeout_seconds`](#virtual_timeout_seconds) to say how long any
 virtual-pool candidate may go without producing bytes — including the gap between
@@ -1458,6 +1462,60 @@ That line predates the record stream and is useful for spotting a provider
 returning an error frame; be aware it puts a little generated text in the normal
 log even with `request_log` off.
 
+<a name="oversized-requests"></a>
+### Oversized requests — routing around a model that returned `413`
+
+A `413 Payload Too Large` means this *request* was too big for this endpoint. It
+says nothing about whether the model is healthy, and nothing about the next
+request, which may be a tenth the size.
+
+Cycling past it already worked: `413` is not a transient status, so the pool
+fails straight over to the next candidate with no same-candidate retry. What was
+missing was memory. Unlike a `429`, a `413` left no trace, so the candidate kept
+its rank and was tried first again on the very next request. Under the old random
+rotation that cost one wasted call in N; under the
+[benchmark ranking](#flagship-ordering) it costs one on *every* request, because
+a deterministic order re-picks the same leader every time.
+
+llmproxy now remembers **the smallest request each routing target has ever
+rejected**, and routes requests at least that large around it. Requests below
+that size still prefer it, exactly as before.
+
+This is deliberately not a cooldown. Cooling the model for a minute, the way a
+`429` does, would also divert the small requests it would happily have accepted —
+and the failure being described is a property of the request, not of the model's
+availability.
+
+Four things worth knowing:
+
+- **Nothing is persisted.** The watermarks live in memory, per process, and start
+  empty on every restart. A body limit is cheap to relearn — the first oversized
+  request after a restart rediscovers it, at the cost of one failover — so
+  writing it to disk would buy a schema and a staleness problem and nothing else.
+  There is no config to set and no file to clean up.
+- **The limit only ever tightens.** A later, smaller rejection lowers the
+  watermark; a larger one never raises it. The limit can only be bounded from
+  above by what was actually refused.
+- **A candidate is demoted, never dropped.** It moves to the back of the pool and
+  stays reachable, so a pool where everything has been rejected still serves and
+  you get the upstream's real `413` rather than a `503` the proxy invented. It is
+  also what lets a watermark be disproved: if the candidate is reached as a last
+  resort and *accepts* a request that size, the recorded limit was wrong and is
+  forgotten, so one spurious rejection cannot sideline a model until restart.
+- **The limit belongs to the endpoint, not the credential.** Every account on a
+  provider shares one watermark, so one account's `413` informs the rest. This is
+  the one place that deliberately differs from the per-account scoping used for
+  quota and rate limits.
+
+When the pass moves anything, the route reason says so:
+
+```
+X-LLMProxy-Route-Reason: flagship_rank=5/5,oversize=1
+```
+
+Until some candidate has actually returned a `413`, the pass is an exact no-op
+and does not even measure the request.
+
 <a name="virtual_timeout_seconds"></a>
 ### `server.virtual_timeout_seconds` — one patience setting for every pool
 
@@ -2068,6 +2126,29 @@ the other `/free` virtuals behave.
 If the membership cache carries no scores yet — a first run, or a file written
 by an older build — the pool falls back to its previous ordering and says so in
 the route reason, rather than claiming a ranking it does not have.
+
+**Checking whether the ranking is live.** The route reason tells you outright:
+
+```bash
+curl -sS -i localhost:8080/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"llmproxy/flagship","messages":[{"role":"user","content":"hi"}],"max_tokens":8}' \
+  | grep -i 'x-llmproxy-\(route-reason\|selected-model\)'
+```
+
+`flagship_rank=4/5` means the pool was walked in benchmark order, and that four
+of its five candidates carried a score. `cycling` or `capacity` means it was
+not: no scores are cached yet, and the tier is serving in its pre-ranking order.
+The server also logs that once, naming the cause, the first time it happens.
+
+**Upgrading rewrites the cache on the next interval tick.** Membership is
+recomputed on its own [cadence](#refresh-cadence), but a cache that predates the
+scores is not a staleness problem — it is a schema one, and waiting out
+`refresh_frequency_days` would leave the tier unranked for up to a week after an
+upgrade. So a cached membership with no scores in it is recomputed regardless of
+its timestamp, once, and the ordinary cadence resumes afterwards. A deployment
+whose models no benchmark source covers is not caught by this: it records an
+empty score set, which is a real answer rather than a missing one, and is left
+on its normal schedule.
 
 #### Free is per-provider
 

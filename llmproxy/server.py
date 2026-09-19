@@ -366,6 +366,125 @@ _DEFAULT_SATURATION_COOLDOWN_S = 60.0
 _MAX_SATURATION_COOLDOWN_S = 3600.0
 _PROVIDER_CIRCUIT_MODEL = "__provider__"  # sentinel model for a provider-wide circuit
 
+# --- oversized-request memory ---
+#
+# A 413 says this request was too big for this endpoint. Cycling past it already
+# works (413 is not transient, so the loop fails straight over), but nothing was
+# remembered, so the same candidate kept its rank and was tried first again next
+# request. Under a random rotation that cost one wasted call in N; under the
+# deterministic flagship ranking it costs one on every single request.
+#
+# Cooling it like a 429 would overshoot: a 413 is a property of *this request's
+# size*, not of the candidate's availability, so a blanket cooldown would also
+# divert small requests the model would have accepted. Instead remember the
+# smallest body each target has ever rejected, and skip it only for requests at
+# least that large.
+#
+# Deliberately in memory and per process. A body limit is cheap to relearn — the
+# first oversized request after a restart rediscovers it, at the cost of one
+# failover — so persisting it would buy a schema and a staleness problem and
+# nothing else. The dict is bounded by the number of routing targets.
+_oversize_registry: dict[str, int] = {}  # provider/model -> smallest 413'd body, bytes
+_oversize_lock = threading.Lock()
+
+
+def _oversize_key(provider_name: str, upstream_model: str) -> str:
+    """Registry key for a routing target's body limit.
+
+    Deliberately NOT account-scoped, which is the one place this differs from
+    ``_usage_key``: a request-size limit belongs to the endpoint, not to the
+    credential presented to it, so every account of a provider shares one
+    watermark and one account's 413 informs the rest.
+    """
+    return _usage_key(provider_name, upstream_model, None)
+
+
+def _payload_size_bytes(payload: dict) -> int:
+    """Serialized size of the upstream body, in bytes.
+
+    Bytes rather than ``_estimate_payload_tokens``, which counts only message
+    text: a 413 is about what goes on the wire, and the tool definitions, base64
+    images and attachments that text estimate ignores are exactly what push a
+    request over a byte limit.
+
+    Always measure the CLIENT's payload, never the per-candidate upstream body.
+    The upstream body substitutes the model id and, on a non-OpenAI surface, is
+    dialect-rendered — so its size varies by candidate. Recording one measure
+    and comparing against another would make the watermark wrong by however much
+    those differ. A consistent proxy for the wire size answers the only question
+    asked of it, which is whether this request is at least as large as one that
+    was already refused.
+
+    Returns 0 when the payload cannot be serialized, which disables the check
+    rather than guessing.
+    """
+    try:
+        return len(json.dumps(payload, default=str).encode("utf-8"))
+    except Exception:  # noqa: BLE001 — routing must never fail on a payload shape
+        return 0
+
+
+def _record_oversize(provider_name: str, upstream_model: str, size_bytes: int) -> None:
+    """Remember the smallest request *this* target has rejected as too large.
+
+    Keeps the minimum, so a later, smaller rejection tightens the watermark and
+    a larger one never loosens it — the limit can only be bounded from above by
+    what we have actually observed being refused.
+    """
+    if size_bytes <= 0:
+        return
+    key = _oversize_key(provider_name, upstream_model)
+    with _oversize_lock:
+        prev = _oversize_registry.get(key)
+        if prev is None or size_bytes < prev:
+            _oversize_registry[key] = size_bytes
+
+
+def _is_oversize_for(provider_name: str, upstream_model: str, size_bytes: int) -> bool:
+    """True when this request is at least as large as one this target refused."""
+    if size_bytes <= 0:
+        return False
+    with _oversize_lock:
+        limit = _oversize_registry.get(_oversize_key(provider_name, upstream_model))
+    return limit is not None and size_bytes >= limit
+
+
+def _note_accepted_size(provider_name: str, upstream_model: str, size_bytes: int) -> None:
+    """Drop a target's watermark when it accepts a request that large.
+
+    A demoted candidate is never dropped, so it is still reached as a last
+    resort — which means a watermark set by a one-off 413 (a gateway hiccup, a
+    limit since raised) can be disproved by an actual success. Without this, one
+    spurious rejection would sideline a model for large requests until the
+    process restarted.
+
+    Only a success at or above the watermark is evidence: a smaller request
+    succeeding says nothing about the limit, so it leaves the watermark alone.
+    """
+    if size_bytes <= 0:
+        return
+    key = _oversize_key(provider_name, upstream_model)
+    with _oversize_lock:
+        limit = _oversize_registry.get(key)
+        if limit is not None and size_bytes >= limit:
+            del _oversize_registry[key]
+            cleared = True
+        else:
+            cleared = False
+    if cleared:
+        logger.info(
+            "  %s/%s accepted a %d-byte request after refusing one that size — "
+            "forgetting its size limit",
+            provider_name, upstream_model, size_bytes,
+        )
+
+
+def _reset_oversize() -> None:
+    """Drop every watermark. For tests."""
+    with _oversize_lock:
+        _oversize_registry.clear()
+
+
 # HTTP statuses that mean "out of quota / rate limited": 402 Payment Required
 # (out of credits) and 429 Too Many Requests. Both mark the model unavailable
 # until its reset; a plain 5xx is transient and retried without a cooldown.
@@ -882,6 +1001,11 @@ _probe_interval_check_lock = threading.Lock()
 _free_update_inflight: bool = False
 _free_update_lock = threading.Lock()
 _flagship_refresh_inflight: bool = False
+# Latched the first time a flagship pool is served without a ranking, so the
+# explanation is logged once rather than on every request. The route reason
+# already carries the fact, but nobody reads a header until something looks
+# wrong — which is exactly how an inert ranking survived a deploy unnoticed.
+_flagship_unranked_warned: bool = False
 _flagship_refresh_lock = threading.Lock()
 _cost_probe_inflight: bool = False
 _cost_probe_lock = threading.Lock()
@@ -2144,6 +2268,24 @@ def _flagship_refresh_due(tier_cfg: dict, config_path: str | None) -> bool:
     except Exception:  # noqa: BLE001
         return False
     state = load_flagship_state(config_path)
+    # A cache written before scores were persisted carries membership but no
+    # ranking, and the router silently falls back to the old ordering until it
+    # is rewritten. That is a schema upgrade, not a staleness question, so the
+    # cadence must not gate it: every existing deployment already holds a recent
+    # last_refresh_at, and would otherwise keep the pre-ranking behaviour for up
+    # to refresh_frequency_days after upgrading — a week, by default.
+    #
+    # Test for the KEY, not a truthy value. A deployment no benchmark source
+    # covers legitimately has `model_scores: {}`, and a falsiness check would
+    # make it due on every interval tick — a catalog re-fetch every minute,
+    # forever. Absence of the key is true only of a genuinely pre-upgrade file,
+    # so this fires once and the ordinary cadence resumes.
+    if state.get("members") and "model_scores" not in state:
+        logger.info(
+            "[flagship] cached membership predates benchmark scores — recomputing "
+            "so the tier can be ranked"
+        )
+        return True
     due, _ = _probe_due(state.get("last_refresh_at"),
                         tier_cfg.get("refresh_frequency_days", 7))
     return due
@@ -3923,6 +4065,7 @@ ROUTE_SOURCE_CAPABILITY = "capability"
 ROUTE_SOURCE_FAVORITE = "favorite"
 ROUTE_SOURCE_AFFINITY = "cache_affinity"
 ROUTE_SOURCE_CONTEXT_FIT = "context_fit"
+ROUTE_SOURCE_OVERSIZE = "oversize"
 ROUTE_SOURCE_FAILOVER = "failover"
 
 TIER_SOURCE_EXPLICIT = "explicit_reasoning_effort"
@@ -4273,6 +4416,41 @@ def _order_by_request_fit(
         return (tier_d, size_d)
 
     return sorted(candidates, key=rank)
+
+
+def _demote_oversize_candidates(
+    candidates: list[tuple[str, dict, str]],
+    payload: dict,
+) -> tuple[list[tuple[str, dict, str]], int]:
+    """Move candidates that have refused a request this large to the back.
+
+    Returns ``(ordered, demoted_count)``. Demote rather than drop, matching the
+    discipline the saturation path already keeps: a pool where every candidate
+    has 413'd still serves, and the client gets the upstream's real 413 instead
+    of a 503 this proxy invented. It is also what makes the watermark
+    self-correcting, since a demoted candidate reached as a last resort can
+    still prove the limit wrong by succeeding.
+
+    Stable within each group, so every ordering decision made before this one —
+    benchmark rank, capacity, request fit — survives among the candidates that
+    are still plausible.
+
+    Costs nothing until a 413 has actually happened: with an empty registry it
+    returns immediately, without serializing the payload.
+    """
+    if not candidates:
+        return candidates, 0
+    with _oversize_lock:
+        if not _oversize_registry:
+            return candidates, 0
+    size = _payload_size_bytes(payload)
+    if size <= 0:
+        return candidates, 0
+    fits = [c for c in candidates if not _is_oversize_for(c[0], c[2], size)]
+    too_big = [c for c in candidates if _is_oversize_for(c[0], c[2], size)]
+    if not too_big:
+        return candidates, 0
+    return fits + too_big, len(too_big)
 
 
 def _capability_failed(payload: dict, body_bytes: bytes) -> bool:
@@ -5077,6 +5255,9 @@ def _proxy_cycling_non_streaming(
                 continue
             _record_outcome(provider_name, upstream_model, True,
                             latency_ms=_elapsed_ms, account_id=account_id)
+            # A success at or above a recorded size limit disproves it.
+            _note_accepted_size(provider_name, upstream_model,
+                                _payload_size_bytes(payload))
             if on_success is not None:
                 on_success(provider_name, upstream_model, body, account_id)
             return _stamp_route_headers(
@@ -5090,6 +5271,18 @@ def _proxy_cycling_non_streaming(
         # alone does not cover it: it needs several samples to move, so a model
         # that has started timing out stays ranked first for the several requests
         # it takes to notice.
+        if resp.status_code == 413:
+            # Not cooled and not counted against health: the candidate is fine,
+            # this request was simply too big for it. Remember the size so the
+            # ordering can route requests at least that large around it, and
+            # leave everything smaller untouched.
+            _oversize = _payload_size_bytes(payload)
+            _record_oversize(provider_name, upstream_model, _oversize)
+            logger.warning(
+                "  [%s] %s/%s rejected a %d-byte request as too large; "
+                "requests at least that size will route around it",
+                label, provider_name, upstream_model, _oversize,
+            )
         if _is_timeout_response(resp):
             logger.warning(
                 "  [%s] %s/%s timed out after %ss — cooling it like a 429",
@@ -5235,6 +5428,17 @@ def _proxy_cycling_streaming(
         if resp is None:
             continue
         if resp.status_code >= 400:
+            if resp.status_code == 413:
+                # As on the non-streaming path: remember the size rather than
+                # cooling the candidate, so only requests at least this large
+                # route around it. See the oversize registry.
+                _oversize = _payload_size_bytes(payload)
+                _record_oversize(provider_name, upstream_model, _oversize)
+                logger.warning(
+                    "  [%s] %s/%s rejected a %d-byte request as too large; "
+                    "requests at least that size will route around it",
+                    label, provider_name, upstream_model, _oversize,
+                )
             if _is_quota_error(resp.status_code, resp.content):
                 _record_quota_saturation(
                     provider_name, provider_cfg, upstream_model, resp.headers.get("Retry-After")
@@ -5369,6 +5573,9 @@ def _proxy_cycling_streaming(
         # having returned a byte. A failure *after* this point is caught by the
         # generator below and demoted through ``_demote_on_mid_stream_failure``.
         _record_outcome(provider_name, upstream_model, True, account_id=account_id)
+        # A stream that survived the pre-commit window was accepted, so a size
+        # limit recorded for this target at or below this request is wrong.
+        _note_accepted_size(provider_name, upstream_model, _payload_size_bytes(payload))
         if on_success is not None:
             on_success(provider_name, upstream_model, None, account_id)
         logger.info(
@@ -5938,9 +6145,11 @@ def _flagship_ordered_candidates(
       every request.
 
     Ties are common — cross-provider duplicates share one model key and therefore
-    one score — so remaining capacity breaks them first and the provider/model
-    name breaks what is left, which keeps the order deterministic rather than
-    dependent on route-cache iteration order.
+    one score — so remaining capacity breaks them first and the model name breaks
+    what is left, which keeps the order deterministic rather than dependent on
+    route-cache iteration order. The model leads that last tiebreak so a tied
+    block interleaves by model rather than clustering by provider; instances of
+    one model still land together, ordered among themselves by provider.
 
     Returns *candidates* unchanged when nothing in the pool carries a score, so a
     cache written before scores were persisted keeps today's behaviour instead of
@@ -5971,7 +6180,14 @@ def _flagship_ordered_candidates(
 
     def _key(item: tuple[tuple[str, dict, str], float, float]):
         (pn, _pc, um), rank, viability = item
-        return (-rank, -viability, pn.lower(), um.lower())
+        # Model before provider in the final tiebreak. Two DISTINCT models that
+        # happen to tie should interleave by model rather than cluster by whose
+        # provider name sorts first — the tier is meant to be walked model by
+        # model. Leading with the provider would group a tied block by provider,
+        # which is exactly the shape this ordering exists to get away from. The
+        # same weights on several providers share one model id, so they still
+        # sort adjacently and order among themselves by provider.
+        return (-rank, -viability, um.lower(), pn.lower())
 
     viable = sorted((it for it in scored if it[2] > 0.0), key=_key)
     exhausted = sorted((it for it in scored if it[2] == 0.0), key=_key)
@@ -6250,6 +6466,29 @@ def _get_flagship_models(config: dict | None = None,
     if isinstance(exclude, list):
         members -= {m.lower() for m in exclude if isinstance(m, str)}
     return members
+
+
+def _warn_flagship_unranked(model_full: str) -> None:
+    """Say once that a flagship pool is being served without its ranking.
+
+    Serving unranked is a correct degradation, not a failure, so it must not
+    warn per request. But it is also invisible: the only other signal is the
+    route reason on the response, and an operator has no reason to look at that
+    until something already seems wrong. One line naming the cause and the cure
+    turns a silent week of the old ordering into something noticed on the first
+    request.
+    """
+    global _flagship_unranked_warned
+    if _flagship_unranked_warned:
+        return
+    _flagship_unranked_warned = True
+    logger.warning(
+        "[flagship] %s is being served UNRANKED: no benchmark scores in "
+        "flagship_models.json yet, so the pool falls back to its previous "
+        "ordering. The refresh recomputes them on its own cadence; set "
+        "flagship_tier.refresh_frequency_days to 0 to force it now.",
+        model_full,
+    )
 
 
 def _get_flagship_scores(config_path: str | None = None) -> dict[str, float]:
@@ -7475,14 +7714,16 @@ def _proxy_endpoint(
                     candidates, flagship_scores, free_limits)
                 decisions.append(
                     f"{ROUTE_SOURCE_FLAGSHIP_RANK}={ranked}/{len(candidates)}")
-            elif is_free_virtual:
+            else:
                 # No scores cached — fall back to what this pool did before, and
                 # report that honestly rather than claiming a ranking we lack.
-                ordered = _capacity_ordered_candidates(candidates, free_limits)
-                decisions.append(ROUTE_SOURCE_CAPACITY)
-            else:
-                ordered = _cycling_candidates(candidates)
-                decisions.append(ROUTE_SOURCE_CYCLING)
+                _warn_flagship_unranked(model_full)
+                if is_free_virtual:
+                    ordered = _capacity_ordered_candidates(candidates, free_limits)
+                    decisions.append(ROUTE_SOURCE_CAPACITY)
+                else:
+                    ordered = _cycling_candidates(candidates)
+                    decisions.append(ROUTE_SOURCE_CYCLING)
         elif is_free_virtual:
             free_limits = _get_normalized_free_limits(config)
             ordered = _capacity_ordered_candidates(candidates, free_limits)
@@ -7578,6 +7819,18 @@ def _proxy_endpoint(
                 decisions.append(
                     f"{ROUTE_SOURCE_CONTEXT_FIT}=~{_required_context_tokens(payload, config)}tok"
                 )
+        # Route around anything that has already refused a request this large.
+        # Runs after every other model-level pass and before accounts are
+        # expanded: a body limit is a hard fact about the endpoint, so it should
+        # outrank a preference, but it says nothing about which credential to
+        # use. A no-op until some candidate has actually returned a 413.
+        ordered, _demoted = _demote_oversize_candidates(ordered, payload)
+        if _demoted:
+            decisions.append(f"{ROUTE_SOURCE_OVERSIZE}={_demoted}")
+            logger.info(
+                "  [%s] %d candidate(s) demoted: they have refused a request this large",
+                model_full, _demoted,
+            )
         # Expand accounts LAST: each model's credentials become adjacent
         # candidates in its ranked slot, so cycling rotates accounts-first then
         # models. A no-op for single-credential providers.
