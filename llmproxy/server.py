@@ -98,6 +98,7 @@ from .config import (
     provider_base_url,
     resolve_env_refs,
     save_config,
+    save_flagship_state,
 )
 from .dialects import get_inbound, get_outbound
 from .dialects.responses import UnknownPreviousResponse
@@ -798,6 +799,8 @@ _probe_interval_check_lock = threading.Lock()
 
 _free_update_inflight: bool = False
 _free_update_lock = threading.Lock()
+_flagship_refresh_inflight: bool = False
+_flagship_refresh_lock = threading.Lock()
 _cost_probe_inflight: bool = False
 _cost_probe_lock = threading.Lock()
 
@@ -1776,6 +1779,9 @@ def _maybe_fire_interval_probes(config_path: str | None = None) -> None:
     if free_tier.get("sync_on_startup") or free_tier.get("update_on_startup"):
         _maybe_fire_free_models_update(config, free_tier, config_path)
 
+    # Flagship membership — independent cadence, gated by flagship_tier.enabled.
+    _maybe_fire_flagship_refresh(config, flagship_tier_cfg(config), config_path)
+
     # Cost probe — gated by update_on_startup + cost_probe.enabled.
     if free_tier.get("update_on_startup") and free_tier.get("cost_probe", {}).get("enabled"):
         _maybe_fire_cost_probe(config, free_tier, config_path)
@@ -1808,6 +1814,133 @@ def _free_update_due(free_tier: dict, config_path: str | None) -> bool:
     state = load_update_state(config_path)
     due, _ = _probe_due(state.get("last_update_at"), freq_days)
     return due
+
+
+def _flagship_refresh_due(tier_cfg: dict, config_path: str | None) -> bool:
+    """Whether the flagship membership recompute is due.
+
+    Mirrors _free_update_due. A frequency of 0 or less means "every time", and
+    a disabled tier is never due.
+    """
+    if not tier_cfg.get("enabled", True):
+        return False
+    try:
+        import os as _os
+        import sys
+        repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from scripts.update_free_models import _probe_due
+    except Exception:  # noqa: BLE001
+        return False
+    state = load_flagship_state(config_path)
+    due, _ = _probe_due(state.get("last_refresh_at"),
+                        tier_cfg.get("refresh_frequency_days", 7))
+    return due
+
+
+def _recompute_flagship_members(config: dict, config_path: str | None) -> dict | None:
+    """Recompute flagship membership against everything this deployment sees.
+
+    The candidate pool is the whole route cache — every model of every
+    configured provider, paid included — not just believed_free and not just
+    one gateway's catalog. Free status is evaluated per candidate, so the same
+    weights can be free on one provider and paid on another.
+
+    Capability specs come from the provider's own listing where the sidecar has
+    them and from the benchmark profile otherwise, joined on the normalised
+    model key. That join is heuristic, which is why a pin exists to override it.
+
+    Returns the state written to flagship_models.json, or None if the refresh
+    could not run.
+    """
+    from .flagship import (
+        Candidate,
+        fetch_profiles,
+        normalize_model_id,
+        select_flagship,
+    )
+
+    tier_cfg = flagship_tier_cfg(config)
+    profiles = fetch_profiles(tier_cfg.get("sources"))
+    if not profiles:
+        logger.warning("[flagship] no benchmark source returned data; keeping previous membership")
+        return None
+
+    candidates: list[Candidate] = []
+    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+        provider_cfg = get_provider(config, provider_name)
+        if not provider_cfg or not _provider_exposes_to_virtual_models(provider_cfg):
+            continue
+        profile = profiles.get(normalize_model_id(upstream_id), {})
+        candidates.append(Candidate(
+            provider=provider_name,
+            upstream_id=upstream_id,
+            is_free=(not _is_local_url(provider_base_url(provider_cfg))
+                     and _is_model_free(provider_name, upstream_id, config)),
+            context_length=profile.get("context_length"),
+            supports_tools=profile.get("supports_tools"),
+            scores=dict(profile.get("scores") or {}),
+        ))
+
+    selection = select_flagship(candidates, tier_cfg)
+    if selection.unverified_pins:
+        logger.warning(
+            "[flagship] pinned but not found among this deployment's models "
+            "(admitted anyway, and unverifiable against the spec gate): %s",
+            ", ".join(selection.unverified_pins),
+        )
+    state = {
+        "last_refresh_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        "bar": selection.bar,
+        "members": selection.members,
+        "distinct_models": selection.distinct_models,
+        "free_models": selection.free_models,
+        "candidates_considered": len(candidates),
+    }
+    save_flagship_state(state, config_path)
+    logger.info(
+        "[flagship] %d routing target(s) across %d distinct model(s), "
+        "%d of them free, from %d candidate(s)",
+        len(selection.members), len(selection.distinct_models),
+        len(selection.free_models), len(candidates),
+    )
+    return state
+
+
+def _maybe_fire_flagship_refresh(
+    config: dict, tier_cfg: dict, config_path: str | None
+) -> None:
+    """Recompute flagship membership in the background when its cadence is due.
+
+    Modelled on _maybe_fire_free_models_update: the tier has to maintain itself
+    without anyone running anything, since the whole point is that models enter
+    as they ship and leave as the field moves past them.
+    """
+    if not _flagship_refresh_due(tier_cfg, config_path):
+        return
+
+    global _flagship_refresh_inflight
+    with _flagship_refresh_lock:
+        if _flagship_refresh_inflight:
+            return
+        _flagship_refresh_inflight = True
+
+    def _run() -> None:
+        global _flagship_refresh_inflight
+        try:
+            logger.info("[flagship] refresh interval due — recomputing membership")
+            if _recompute_flagship_members(load_config(), config_path):
+                with _models_list_cache_lock:
+                    global _models_list_cache
+                    _models_list_cache = None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[flagship] refresh failed: %s", exc)
+        finally:
+            with _flagship_refresh_lock:
+                _flagship_refresh_inflight = False
+
+    threading.Thread(target=_run, daemon=True, name="flagship-refresh").start()
 
 
 def _maybe_fire_free_models_update(
@@ -2014,8 +2147,12 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
         except Exception as exc:  # noqa: BLE001 — warming must never crash the worker
             logger.warning("[startup] /v1/models cache warm failed: %s", exc)
 
-        # 6. Check frequency intervals for the free-models refresh, cost probe,
-        #    and PR creation. Fires background threads for any that are due.
+        # 6. Check frequency intervals for the free-models refresh, the
+        #    flagship recompute, cost probe, and PR creation. Fires background
+        #    threads for any that are due. The flagship pass runs here rather
+        #    than earlier because it reads the route cache, which steps 1 and 5
+        #    have just warmed — a fresh deployment would otherwise compute
+        #    membership from an empty candidate pool.
         _maybe_fire_interval_probes(config_path)
 
     threading.Thread(target=_run, daemon=True, name="startup-tasks").start()

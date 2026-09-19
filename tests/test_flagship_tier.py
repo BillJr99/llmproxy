@@ -205,3 +205,101 @@ def test_config_example_matches_the_code_defaults():
     root = Path(__file__).resolve().parent.parent
     example = json.loads((root / "config.example.json").read_text(encoding="utf-8"))
     assert example["flagship_tier"] == FLAGSHIP_TIER_DEFAULTS
+
+
+# ── refresh cadence ─────────────────────────────────────────────────────────
+
+def _iso(days_ago: float) -> str:
+    from datetime import UTC, datetime, timedelta
+    return (datetime.now(UTC) - timedelta(days=days_ago)).isoformat()
+
+
+def test_fresh_deployment_is_due(server, tmp_path):
+    """No cache yet, so the tier populates on first boot rather than staying
+    empty until a week has passed."""
+    fresh = tmp_path / "fresh" / "config.json"
+    fresh.parent.mkdir(parents=True, exist_ok=True)
+    fresh.write_text("{}", encoding="utf-8")
+    from llmproxy.config import FLAGSHIP_TIER_DEFAULTS
+    assert server._flagship_refresh_due(FLAGSHIP_TIER_DEFAULTS, str(fresh)) is True
+
+
+def test_recent_refresh_is_throttled(server, tmp_path):
+    """A restart inside the window must not re-scrape every provider."""
+    from llmproxy.config import FLAGSHIP_TIER_DEFAULTS, save_flagship_state
+    cfg = str(tmp_path / "throttled" / "config.json")
+    (tmp_path / "throttled").mkdir(parents=True, exist_ok=True)
+    save_flagship_state({"last_refresh_at": _iso(1.0)}, cfg)
+    assert server._flagship_refresh_due(FLAGSHIP_TIER_DEFAULTS, cfg) is False
+
+
+def test_stale_refresh_is_due(server, tmp_path):
+    from llmproxy.config import FLAGSHIP_TIER_DEFAULTS, save_flagship_state
+    cfg = str(tmp_path / "stale" / "config.json")
+    (tmp_path / "stale").mkdir(parents=True, exist_ok=True)
+    save_flagship_state({"last_refresh_at": _iso(9.0)}, cfg)
+    assert server._flagship_refresh_due(FLAGSHIP_TIER_DEFAULTS, cfg) is True
+
+
+def test_zero_frequency_always_refreshes(server, tmp_path):
+    from llmproxy.config import flagship_tier_cfg, save_flagship_state
+    cfg = str(tmp_path / "always" / "config.json")
+    (tmp_path / "always").mkdir(parents=True, exist_ok=True)
+    save_flagship_state({"last_refresh_at": _iso(0.0)}, cfg)
+    tier = flagship_tier_cfg({"flagship_tier": {"refresh_frequency_days": 0}})
+    assert server._flagship_refresh_due(tier, cfg) is True
+
+
+def test_disabled_tier_never_refreshes(server, tmp_path):
+    """enabled: false is a master switch — no network, no recompute."""
+    from llmproxy.config import flagship_tier_cfg
+    cfg = str(tmp_path / "off" / "config.json")
+    (tmp_path / "off").mkdir(parents=True, exist_ok=True)
+    tier = flagship_tier_cfg({"flagship_tier": {"enabled": False}})
+    assert server._flagship_refresh_due(tier, cfg) is False
+
+
+# ── end-to-end recompute ────────────────────────────────────────────────────
+
+def test_recompute_writes_membership_from_the_route_cache(server, cfg, monkeypatch):
+    """The candidate pool is every model of every configured provider, and the
+    result lands in the cache file rather than the user's config."""
+    import json as _json
+
+    from llmproxy import flagship as _flagship
+    from llmproxy.config import get_flagship_state_path, load_flagship_state
+
+    # Two providers serve the same weights; only cheapo's is free.
+    monkeypatch.setattr(_flagship, "fetch_profiles", lambda sources=None: {
+        _flagship.normalize_model_id("glm-5.3"): {
+            "scores": {"openrouter_aa": 53.4},
+            "context_length": 1_310_720, "supports_tools": True,
+        },
+        _flagship.normalize_model_id("tiny"): {
+            "scores": {"openrouter_aa": 1.0},
+            "context_length": 8192, "supports_tools": False,
+        },
+    })
+    state = server._recompute_flagship_members(server.load_config(), str(cfg))
+
+    assert state is not None
+    assert set(state["members"]) == {"cheapo/glm-5.3", "pricey/glm-5.3"}
+    assert state["candidates_considered"] == 3
+    # tiny is vetoed on both context and tools despite being in the pool.
+    assert not any("tiny" in m for m in state["members"])
+    # Written to the sibling cache, not the config.
+    assert get_flagship_state_path(str(cfg)).exists()
+    assert "flagship_models" not in _json.loads(cfg.read_text(encoding="utf-8"))
+    assert load_flagship_state(str(cfg))["members"] == state["members"]
+
+
+def test_recompute_keeps_previous_membership_when_every_source_fails(server, cfg, monkeypatch):
+    """One unreachable leaderboard must degrade the ranking, never empty the
+    tier — a 503 on llmproxy/flagship is worse than a slightly stale list."""
+    from llmproxy import flagship as _flagship
+    from llmproxy.config import load_flagship_state
+
+    before = load_flagship_state(str(cfg))["members"]
+    monkeypatch.setattr(_flagship, "fetch_profiles", lambda sources=None: {})
+    assert server._recompute_flagship_members(server.load_config(), str(cfg)) is None
+    assert load_flagship_state(str(cfg))["members"] == before

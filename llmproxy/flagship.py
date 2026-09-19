@@ -240,3 +240,128 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
         pinned=sorted(pin),
         unverified_pins=sorted(pin - verified_pins),
     )
+
+
+# ---------------------------------------------------------------------------
+# Score sources
+# ---------------------------------------------------------------------------
+#
+# Only sources whose terms permit this use are wired up. LLM Stats forbids
+# redistribution on every tier ("Technical access is not a redistribution
+# license"), and BenchLM states no licence at all, which is no grant rather
+# than a restrictive one; neither is used. Nothing fetched here is committed:
+# scores live only in the local flagship_models.json cache.
+
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+_FETCH_TIMEOUT = (5, 15)
+
+
+def fetch_openrouter_profiles(url: str = OPENROUTER_MODELS_URL) -> dict[str, dict]:
+    """Benchmark scores and capability specs, keyed by join key.
+
+    OpenRouter's catalog embeds Artificial Analysis indices under
+    ``benchmarks.artificial_analysis``, so the scores arrive with the model
+    listing we already fetch each sweep: no second scraper, no extra API key,
+    and ids that match by construction. ``agentic_index`` is used because it is
+    the closest published measure of what this tier is for — driving a tool
+    loop — where chat-arena style ratings measure conversational preference.
+
+    Returns ``{model_key: {"scores": {...}, "context_length": int|None,
+    "supports_tools": bool}}``. Specs come from the same entry so a provider
+    that publishes no capability data of its own can still be gated on the
+    same weights served elsewhere.
+    """
+    import requests
+
+    resp = requests.get(url, timeout=_FETCH_TIMEOUT)
+    resp.raise_for_status()
+    out: dict[str, dict] = {}
+    for model in resp.json().get("data", []):
+        mid = model.get("id")
+        if not mid:
+            continue
+        key = normalize_model_id(mid)
+        bench = (model.get("benchmarks") or {}).get("artificial_analysis") or {}
+        score = bench.get("agentic_index")
+        supported = model.get("supported_parameters") or []
+        profile = out.setdefault(key, {"scores": {}, "context_length": None,
+                                       "supports_tools": False})
+        if score is not None:
+            prev = profile["scores"].get("openrouter_aa")
+            if prev is None or score > prev:
+                profile["scores"]["openrouter_aa"] = float(score)
+        ctx = model.get("context_length")
+        if ctx and (profile["context_length"] or 0) < ctx:
+            profile["context_length"] = ctx
+        if "tools" in supported:
+            profile["supports_tools"] = True
+    return out
+
+
+def fetch_epoch_profiles() -> dict[str, dict]:
+    """Epoch AI benchmark scores, keyed by join key.
+
+    Epoch publishes under CC-BY, so this is the one source we could cache and
+    redistribute with credit; we still keep it local. The ``epochai`` client is
+    an optional dependency — a deployment without it simply ranks on the
+    remaining sources rather than failing the refresh.
+
+    Attribution, required by CC-BY: Epoch AI, https://epoch.ai/, used under
+    the Creative Commons Attribution licence.
+    """
+    try:
+        import epochai  # type: ignore[import-not-found]
+    except ImportError:
+        return {}
+
+    out: dict[str, dict] = {}
+    try:
+        rows = epochai.benchmarks()  # pragma: no cover - optional dependency
+    except Exception:  # noqa: BLE001 — an unavailable source must not fail the run
+        return {}
+    for row in rows or []:  # pragma: no cover - optional dependency
+        name = row.get("model") if isinstance(row, dict) else None
+        score = row.get("score") if isinstance(row, dict) else None
+        if not name or score is None:
+            continue
+        key = normalize_model_id(str(name))
+        profile = out.setdefault(key, {"scores": {}, "context_length": None,
+                                       "supports_tools": False})
+        prev = profile["scores"].get("epoch")
+        if prev is None or float(score) > prev:
+            profile["scores"]["epoch"] = float(score)
+    return out
+
+
+_SOURCE_FETCHERS = {
+    "openrouter_aa": fetch_openrouter_profiles,
+    "epoch": fetch_epoch_profiles,
+}
+
+
+def fetch_profiles(sources: list[str] | None = None) -> dict[str, dict]:
+    """Merge every enabled source into one ``{model_key: profile}`` map.
+
+    A source that fails is skipped rather than failing the refresh, so one
+    unreachable leaderboard degrades the ranking instead of emptying the tier.
+    Returns the merged map and leaves the caller to log per-source outcomes.
+    """
+    merged: dict[str, dict] = {}
+    for name in (sources or list(_SOURCE_FETCHERS)):
+        fetcher = _SOURCE_FETCHERS.get(name)
+        if fetcher is None:
+            continue
+        try:
+            profiles = fetcher()
+        except Exception:  # noqa: BLE001 — see docstring
+            continue
+        for key, profile in profiles.items():
+            slot = merged.setdefault(key, {"scores": {}, "context_length": None,
+                                           "supports_tools": False})
+            slot["scores"].update(profile.get("scores") or {})
+            ctx = profile.get("context_length")
+            if ctx and (slot["context_length"] or 0) < ctx:
+                slot["context_length"] = ctx
+            if profile.get("supports_tools"):
+                slot["supports_tools"] = True
+    return merged
