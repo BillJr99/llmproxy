@@ -251,11 +251,21 @@ per-candidate timeout is 60s, so a long pool of slow upstreams can keep a client
 waiting for minutes. Set [`server.cycle_deadline_seconds`](#cycle_deadline_seconds)
 to bound the candidate walk as a whole.
 
+**A slow candidate can be given a deadline of its own, and is remembered.** Set
+[`server.virtual_timeout_seconds`](#virtual_timeout_seconds) to say how long any
+virtual-pool candidate may go without producing bytes — including the gap between
+chunks once a stream is running, which is the only bound that catches a reply
+that starts normally and then stops. A timeout is then treated as a `429`: the
+candidate is cooled and the next request rotates off it, rather than paying the
+same timeout again.
+
 **A stream that dies after it starts is not silent.** Once bytes have reached the
 client there is nothing to fail over to, but the stream is still terminated
 properly — an `error` frame, a final chunk carrying `finish_reason`, and `[DONE]` —
 so a client accumulating a partial `tool_calls` argument string learns that no more
-fragments are coming instead of hanging or parsing truncated JSON. The provider is
+fragments are coming instead of hanging or parsing truncated JSON. A stream that
+stops because the upstream went quiet also cools the candidate, so the next
+request avoids it. The provider is
 also **demoted** for it: a candidate is credited with a success when its stream
 commits, and a later mid-stream death revokes that credit, so an upstream that
 reliably dies four fifths of the way through a generation stops being ranked first.
@@ -937,6 +947,7 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "stream_include_usage": true,
     "allow_implicit_paid": false,
     "saturation_cooldown_seconds": 60,
+    "virtual_timeout_seconds": 0,
     "tool_signal_routing": true,
     "workers": 1,
     "cycle_deadline_seconds": 0,
@@ -1344,6 +1355,64 @@ asymmetric on purpose: overestimating costs one suboptimal but working pick, whi
 underestimating costs a `400` and a walk down the pool.
 
 When the pass fires it appends `context_fit=~Ntok` to `X-LLMProxy-Route-Reason`.
+
+<a name="virtual_timeout_seconds"></a>
+### `server.virtual_timeout_seconds` — one patience setting for every pool
+
+`request_timeout` and `stream_timeout` are what `requests` calls timeouts, which
+means they bound a single socket read rather than the request. A streamed reply
+that arrives normally and then stops is the case that exposes the difference: the
+socket is not dead, it is merely quiet, so nothing fires until `stream_timeout`
+(300s by default) has elapsed — and because the bound is per-read, an upstream
+that emits one byte every 299s can hold the connection open indefinitely without
+ever tripping it. The symptom is a `200`, a first chunk, and then nothing.
+
+`server.virtual_timeout_seconds` is a single **idle** bound covering every
+virtual pool — `llmproxy/free`, the reasoning tiers, flagship, `loadbalanced`,
+the per-provider slices — because "how long am I willing to wait" is a property
+of the caller, not of the pool. `0` (the default) disables it and leaves the
+existing timeouts exactly as they were.
+
+```json
+"server": {
+  "virtual_timeout_seconds": 90
+}
+```
+
+It bounds **silence, never total duration**, at every stage of a request:
+connect, first byte, and — the case nothing else reaches — the gap between chunks
+*after* a stream has committed. A long but steadily-producing generation is never
+cut off, however long it runs, which is the thing a total budget gets wrong and
+why this is not simply a deadline.
+
+**A timeout is then treated as a `429`.** Both tell the next request the same
+thing: this candidate is not answering. The candidate is cooled for
+`server.saturation_cooldown_seconds` (60s by default) and demoted to the
+back of its pool, so the following request rotates off it instead of paying the
+same timeout again. It stays reachable as a last resort, exactly like a
+rate-limited model. This part is not conditional on the knob: a timeout is cooled
+whenever one happens.
+
+Only genuine timeouts are cooled. A connection reset or a DNS failure already
+fails over on its own, and cooling it too would pull a candidate out of rotation
+over a blip that cost nothing. Because urllib3 re-raises a mid-stream read
+timeout as a `ConnectionError` rather than a `ReadTimeout`, the message is what
+distinguishes them, not the exception type.
+
+Two limits worth knowing:
+
+- **A committed stream cannot fail over.** Once bytes have reached the client
+  there is nothing to fail over to, so a stall is terminated cleanly (a real
+  `finish_reason` and `[DONE]`, not a truncated stream) and the candidate is
+  cooled for next time. To get genuine mid-generation failover you need
+  [`server.stream_buffer_full`](#stream_buffer_full), which trades away
+  time-to-first-byte for it.
+- **Pinned `provider/model` requests are unaffected.** They have no pool to
+  rotate within, so they keep using `stream_timeout`; lower that if you want
+  them bounded too.
+
+Pick a value above your slowest legitimate inter-chunk gap and below your
+client's own read timeout. `90` is a reasonable starting point for agent traffic.
 
 <a name="cycle_deadline_seconds"></a>
 ### `server.cycle_deadline_seconds` — bound the whole candidate walk

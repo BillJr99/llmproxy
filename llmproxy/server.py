@@ -354,6 +354,48 @@ _QUOTA_CODES = ("resource_exhausted", "insufficient_quota", "rate_limit_exceeded
 _QUOTA_PHRASES = ("quota", "rate limit", "too many requests")
 
 
+# Substrings that identify a read timeout arriving dressed as something else.
+# urllib3 raises ReadTimeoutError inside iter_content and requests re-raises it
+# as a ConnectionError, so the exception TYPE cannot be trusted to tell "the
+# upstream went quiet" from "the socket broke" — only the message can.
+_TIMEOUT_MARKERS: tuple[str, ...] = ("timed out", "timeout")
+
+# Attribute stamped on a synthesized 504 so the cycling loops can tell a timeout
+# apart from an upstream that genuinely returned 504. Carried on the Response
+# object rather than in a header or the body: a header would leak to the client
+# on the last candidate, and parsing our own error body back out would couple the
+# loops to its wording.
+_TIMEOUT_ATTR = "llmproxy_timed_out"
+
+
+def _looks_like_timeout(exc: BaseException) -> bool:
+    """True when *exc* is a timeout, however it is dressed.
+
+    ``requests.exceptions.Timeout`` covers the honest cases. The one that matters
+    here is the dishonest one: a mid-stream read timeout surfaces as a
+    ``ConnectionError`` whose message is "HTTPSConnectionPool(...): Read timed
+    out.", which is exactly the stall this is meant to catch.
+    """
+    if isinstance(exc, requests.exceptions.Timeout):
+        return True
+    text = str(exc).lower()
+    return any(marker in text for marker in _TIMEOUT_MARKERS)
+
+
+def _mark_timeout(resp: Response) -> Response:
+    """Stamp *resp* as a synthesized timeout and return it."""
+    try:
+        setattr(resp, _TIMEOUT_ATTR, True)
+    except Exception:  # noqa: BLE001 — a missing mark costs a cooldown, not a reply
+        pass
+    return resp
+
+
+def _is_timeout_response(resp: Response) -> bool:
+    """True for a response this proxy synthesized because a candidate timed out."""
+    return bool(getattr(resp, _TIMEOUT_ATTR, False))
+
+
 def _is_quota_error(status: int | None, body_bytes: bytes | None = None) -> bool:
     """True when a response signals quota / rate-limit exhaustion.
 
@@ -2862,11 +2904,24 @@ def _proxy_request(
                 out.headers["Retry-After"] = retry_after
         return out
     except requests.exceptions.Timeout:
-        return _error(
+        return _mark_timeout(_error(
             f"Upstream provider '{provider_name}' timed out after {timeout}s.",
             status=504,
             code="timeout",
-        )
+        ))
+    except requests.exceptions.ConnectionError as e:
+        # urllib3 re-raises a read timeout as a ConnectionError rather than a
+        # ReadTimeout, so the string is the only thing that separates "the
+        # upstream went quiet" from "the socket broke". Both are the candidate
+        # failing to produce bytes, but only the former is a timeout for the
+        # purposes of cooling it, so check before falling through to 502.
+        if _looks_like_timeout(e):
+            return _mark_timeout(_error(
+                f"Upstream provider '{provider_name}' timed out after {timeout}s.",
+                status=504,
+                code="timeout",
+            ))
+        return _upstream_error(provider_name, e)
     except Exception as e:
         return _upstream_error(provider_name, e)
 
@@ -3011,11 +3066,53 @@ def _mid_stream_frames(message: str, model: str, inbound) -> list[bytes]:
         return [b'data: {"error":{"message":"Upstream error."}}\n\n']
 
 
+def _cool_on_timeout(
+    exc: BaseException,
+    label: str,
+    provider_name: str,
+    provider_cfg: dict | None,
+    upstream_model: str,
+    account_id: str | None = None,
+) -> None:
+    """Cool a candidate that timed out, exactly as a 429 would.
+
+    A timeout and a rate limit say the same thing to the *next* request: this
+    candidate is not answering right now. Without a cooldown a timing-out model
+    keeps its place in the ordering and is picked first again, so every request
+    pays the full timeout before failing over. Health does not cover this on its
+    own — ``_health_score`` needs several samples before it moves at all, which
+    is several more wasted timeouts.
+
+    Only genuine timeouts are cooled. A connection reset or a DNS failure is a
+    different fault and already fails over on its own; cooling it too would take
+    a candidate out of rotation for a transient blip that cost nothing.
+    """
+    try:
+        if not _looks_like_timeout(exc):
+            return
+        logger.warning(
+            "  [%s] %s/%s timed out mid-stream (%s) — cooling it like a 429",
+            label, provider_name, upstream_model, exc,
+        )
+        if provider_cfg is not None:
+            _record_quota_saturation(provider_name, provider_cfg, upstream_model, None)
+        else:
+            # Post-commit teardown has no provider_cfg in scope. Cool the
+            # candidate itself; the provider-wide circuit needs the config to
+            # know whether a shared free allowance exists, and guessing wrong
+            # there would take every model of the provider out of rotation.
+            _mark_saturated(_usage_key(provider_name, upstream_model, account_id))
+    except Exception as e:  # noqa: BLE001 — never break a teardown over accounting
+        print(f"[server:_cool_on_timeout] {e}")
+        traceback.print_exc()
+
+
 def _demote_on_mid_stream_failure(
     provider_name: str,
     upstream_model: str,
     exc: BaseException,
     account_id: str | None = None,
+    label: str = "stream",
 ) -> None:
     """Count a post-commit stream failure against the provider's health.
 
@@ -3034,6 +3131,11 @@ def _demote_on_mid_stream_failure(
     try:
         if upstream_model and _is_upstream_failure(exc):
             _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+            # A stream that went quiet is the failure this cannot otherwise
+            # reach. The request itself is already lost — bytes have shipped, so
+            # there is nothing to fail over to — but cooling the candidate keeps
+            # the NEXT request off it, which is the only repair available here.
+            _cool_on_timeout(exc, label, provider_name, None, upstream_model, account_id)
     except Exception as e:  # noqa: BLE001
         # Health accounting must never be what breaks a stream's teardown.
         print(f"[server:_demote_on_mid_stream_failure] {e}")
@@ -3626,6 +3728,11 @@ _MIN_CANDIDATE_TIMEOUT_S: float = 5.0
 # small: the window exists to see past a role preamble, not to buffer an answer.
 _DEFAULT_PRECOMMIT_MAX_BYTES: int = 8192
 _DEFAULT_PRECOMMIT_MAX_SECONDS: float = 2.0
+# One patience setting for every virtual-model pool: how long a candidate may go
+# without producing bytes before it is abandoned and cooled. 0 disables it, which
+# is the default and today's behavior (the ordinary request/stream timeouts still
+# apply). See ``_virtual_timeout``.
+_DEFAULT_VIRTUAL_TIMEOUT_S: float = 0.0
 
 
 def _config_float(key: str, default: float, config: dict | None = None) -> float:
@@ -3659,6 +3766,30 @@ def _config_bool(key: str, default: bool, config: dict | None = None) -> bool:
         return bool(cfg.get("server", {}).get(key, default))
     except Exception:  # noqa: BLE001
         return default
+
+
+def _virtual_timeout(config: dict | None = None) -> float | None:
+    """Seconds of silence a virtual-model candidate is allowed, or None when off.
+
+    This is the one patience setting that covers every virtual pool —
+    ``llmproxy/free``, the reasoning tiers, flagship, loadbalanced, the
+    per-provider slices — rather than a per-endpoint knob, because "how long am I
+    willing to wait for an answer" is a property of the caller, not of the pool.
+
+    It is an **idle** bound, not a total one: it limits how long a candidate may
+    go without sending anything, at every stage of a request. Before a stream
+    commits that means connect and first byte; after it commits it means the gap
+    between chunks, which is the only bound that can catch a stream that starts
+    normally and then stops. A long but steadily-producing generation is never
+    cut off, however long it runs, which a total budget would get wrong.
+
+    Default 0 (disabled), so an untouched config keeps the existing
+    ``request_timeout``/``stream_timeout`` behavior exactly. A negative value is
+    treated as disabled rather than as an instant timeout, since that is the
+    harmless reading of a typo.
+    """
+    budget = _config_float("virtual_timeout_seconds", _DEFAULT_VIRTUAL_TIMEOUT_S, config)
+    return budget if budget > 0 else None
 
 
 def _cycle_deadline(config: dict | None = None) -> float | None:
@@ -4592,8 +4723,8 @@ def _proxy_cycling_non_streaming(
     ``on_success`` is invoked as ``on_success(provider, model, body)`` with the
     successful response bytes so the caller can record token + cost usage.
     """
-    candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
-    deadline = _cycle_deadline()
+    candidate_timeout = min(timeout, _virtual_timeout(config) or _VIRTUAL_CANDIDATE_TIMEOUT)
+    deadline = _cycle_deadline(config)
     total = len(candidates)
     last: Response | None = None
     for idx, (provider_name, provider_cfg, upstream_model) in enumerate(candidates):
@@ -4685,7 +4816,20 @@ def _proxy_cycling_non_streaming(
                 resp, route_reason, provider_name, upstream_model, idx,
                 virtual_model=virtual_model, config=config,
             )
-        if _is_quota_error(resp.status_code, resp.get_data()):
+        # A timeout is cooled exactly like a 429. Both mean the same thing to the
+        # next request — this candidate is not currently answering — and without
+        # a cooldown a timing-out model keeps its place in the order and is
+        # picked first again, costing another full timeout every time. Health
+        # alone does not cover it: it needs several samples to move, so a model
+        # that has started timing out stays ranked first for the several requests
+        # it takes to notice.
+        if _is_timeout_response(resp):
+            logger.warning(
+                "  [%s] %s/%s timed out after %ss — cooling it like a 429",
+                label, provider_name, upstream_model, attempt_timeout,
+            )
+            _record_quota_saturation(provider_name, provider_cfg, upstream_model, None)
+        elif _is_quota_error(resp.status_code, resp.get_data()):
             _record_quota_saturation(
                 provider_name, provider_cfg, upstream_model, resp.headers.get("Retry-After")
             )
@@ -4732,7 +4876,8 @@ def _proxy_cycling_streaming(
     count the request for load balancing; token + cost totals are recorded
     post-stream.
     """
-    candidate_timeout = min(timeout, _VIRTUAL_CANDIDATE_TIMEOUT)
+    virtual_timeout = _virtual_timeout(config)
+    candidate_timeout = min(timeout, virtual_timeout or _VIRTUAL_CANDIDATE_TIMEOUT)
     deadline = _cycle_deadline(config)
     inbound = inbound or get_inbound("openai")
     total = len(candidates)
@@ -4773,6 +4918,15 @@ def _proxy_cycling_streaming(
         # *before committing*; left at the full stream_timeout, one silent
         # upstream could eat the entire deadline inside a single post().
         read_timeout = timeout if deadline is None else min(timeout, max(attempt_timeout, 1.0))
+        if virtual_timeout is not None:
+            # This is a socket-level read timeout, so it stays in force for the
+            # life of the connection — including inside iter_content, after the
+            # stream has committed. That is deliberate and is the only thing that
+            # can catch a stream which starts normally and then goes quiet: by
+            # then the bytes belong to the client and no failover is possible, so
+            # a bound on the gap between chunks is all that is left. It measures
+            # silence, never total duration, so a long steady generation is safe.
+            read_timeout = min(read_timeout, virtual_timeout)
 
         # Open the upstream. Transient failures fail over to the next candidate
         # immediately unless this is the last one (then same-candidate retries).
@@ -4792,6 +4946,7 @@ def _proxy_cycling_streaming(
                     continue
                 logger.warning("  [%s] %s/%s error: %s, trying next", label, provider_name, upstream_model, e)
                 _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+                _cool_on_timeout(e, label, provider_name, provider_cfg, upstream_model)
                 resp = None
                 break
             except Exception as e:
@@ -4883,6 +5038,7 @@ def _proxy_cycling_streaming(
                 continue
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
             _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+            _cool_on_timeout(e, label, provider_name, provider_cfg, upstream_model)
             logger.warning("  [%s] %s/%s error mid-peek: %s, trying next", label, provider_name, upstream_model, e)
             resp.close()
             continue
