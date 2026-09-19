@@ -450,6 +450,30 @@ def save_update_state(state: dict, config_path: str | None = None) -> bool:
     )
 
 
+# --- Flagship tier membership + refresh state (flagship_models.json) ---
+#
+# Membership is DEPLOYMENT-SPECIFIC: it depends on which providers are
+# configured and what each of them currently serves, so it is computed locally
+# and cached here rather than shipped in providers.json or written into the
+# hand-edited config.json. Nothing about it is committed to the repo.
+#
+# Shape: {"last_refresh_at": iso8601, "bar": float, "criteria": {...},
+#         "members": ["provider/model", ...], "scores": {id: {...}}}
+
+def get_flagship_state_path(config_path: str | None = None) -> Path:
+    return get_config_path(config_path).parent / "flagship_models.json"
+
+
+def load_flagship_state(config_path: str | None = None) -> dict:
+    return _load_state_file(get_flagship_state_path(config_path), "load_flagship_state")
+
+
+def save_flagship_state(state: dict, config_path: str | None = None) -> bool:
+    return _save_state_file(
+        state, get_flagship_state_path(config_path), "save_flagship_state"
+    )
+
+
 # --- PR state (pr_state.json) ---
 
 def get_pr_state_path(config_path: str | None = None) -> Path:

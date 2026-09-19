@@ -87,6 +87,7 @@ from .config import (
     get_config_path,
     get_provider,
     load_config,
+    load_flagship_state,
     model_is_allowed,
     parse_model_string,
     provider_account_id,
@@ -5308,27 +5309,51 @@ def _get_model_reasoning(config: dict) -> dict[str, str]:
     return result
 
 
-def _get_flagship_models(config: dict | None = None) -> set[str]:
-    """Lowercased set of qualified ids in the computed flagship tier.
+def _get_flagship_models(config: dict | None = None,
+                         config_path: str | None = None) -> set[str]:
+    """Lowercased set of qualified ids in the flagship tier.
 
     Flagship is an overlay rather than a value in ``model_reasoning``: a member
     keeps whatever tier tag it carries there, so promoting a model does not
     remove it from ``llmproxy/deep``.
+
+    Membership is never hardcoded and never committed. It depends on which
+    providers this deployment has configured and what each currently serves, so
+    it is computed locally and cached in ``flagship_models.json`` beside
+    config.json, alongside the other machine-managed state files. What lives in
+    the user's config is only the policy: ``flagship_tier.pin`` and
+    ``.exclude``.
+
+    Pins are applied here rather than only at refresh time so that pinning a
+    model takes effect immediately instead of on the next cadence tick, and
+    excludes are applied last so they always win.
 
     Entries are qualified ``provider/model`` ids, because free-tier status and
     availability are per-provider: the same weights may be free on one provider
     and paid on another, and each provider's instance is its own routing target.
     """
     cfg = config if config is not None else load_config()
-    raw = cfg.get("flagship_models")
-    if not isinstance(raw, list):
-        if raw is not None:
-            logger.warning(
-                "config['flagship_models'] must be a list; got %s — ignoring.",
-                type(raw).__name__,
-            )
-        return set()
-    return {m.lower() for m in raw if isinstance(m, str)}
+    members: set[str] = set()
+
+    state = load_flagship_state(config_path)
+    raw = state.get("members")
+    if isinstance(raw, list):
+        members |= {m.lower() for m in raw if isinstance(m, str)}
+    elif raw is not None:
+        logger.warning(
+            "flagship_models.json: 'members' must be a list; got %s — ignoring.",
+            type(raw).__name__,
+        )
+
+    tier_cfg = cfg.get("flagship_tier")
+    tier_cfg = tier_cfg if isinstance(tier_cfg, dict) else {}
+    pin = tier_cfg.get("pin")
+    if isinstance(pin, list):
+        members |= {m.lower() for m in pin if isinstance(m, str)}
+    exclude = tier_cfg.get("exclude")
+    if isinstance(exclude, list):
+        members -= {m.lower() for m in exclude if isinstance(m, str)}
+    return members
 
 
 def _get_reasoning_model_candidates(level: str) -> list[tuple[str, dict, str]]:

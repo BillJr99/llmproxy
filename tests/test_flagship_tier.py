@@ -1,11 +1,14 @@
 """Flagship tier: an overlay above deep, with per-provider free semantics.
 
-Flagship differs from the three ordinary tiers in two ways that these tests
-pin down. It is an *overlay*: membership lives in config['flagship_models']
-rather than config['model_reasoning'], so promoting a model does not remove it
-from llmproxy/deep. And it is *per-provider*: the same weights may be free on
-one provider and paid on another, so every provider's instance is its own
-routing target and only the free ones reach flagship/free.
+Flagship differs from the three ordinary tiers in three ways that these tests
+pin down. It is an *overlay*: membership sits beside model_reasoning rather
+than in it, so promoting a model does not remove it from llmproxy/deep. It is
+*per-provider*: the same weights may be free on one provider and paid on
+another, so every provider's instance is its own routing target and only the
+free ones reach flagship/free. And it is *never hardcoded*: membership depends
+on which providers a deployment has configured, so it is computed locally into
+flagship_models.json beside config.json, while the user's config holds only
+the pin/exclude policy.
 """
 
 from __future__ import annotations
@@ -42,8 +45,6 @@ def cfg(tmp_path: Path) -> Path:
             "cheapo": {"base_url": "http://cheapo.example/v1", "api_key": "k"},
             "pricey": {"base_url": "http://pricey.example/v1", "api_key": "k"},
         },
-        # Both instances are flagship; only cheapo's is free.
-        "flagship_models": ["cheapo/glm-5.3", "pricey/glm-5.3"],
         "believed_free": ["cheapo/glm-5.3"],
         # The same model also carries an ordinary tier tag.
         "model_reasoning": {"cheapo/glm-5.3": "deep", "pricey/glm-5.3": "deep",
@@ -51,6 +52,12 @@ def cfg(tmp_path: Path) -> Path:
     }
     p = tmp_path / "config.json"
     p.write_text(json.dumps(data), encoding="utf-8")
+    # Membership is machine state in a sibling cache file, not config.
+    (tmp_path / "flagship_models.json").write_text(json.dumps({
+        "last_refresh_at": "2026-09-19T00:00:00+00:00",
+        "bar": 41.7,
+        "members": ["cheapo/glm-5.3", "pricey/glm-5.3"],
+    }), encoding="utf-8")
     return p
 
 
@@ -77,7 +84,7 @@ def test_flagship_member_still_appears_in_deep(server):
 
 
 def test_flagship_reads_membership_not_model_reasoning(server):
-    """model_reasoning says 'deep' for both; flagship comes from its own set."""
+    """model_reasoning says 'deep' for both; flagship comes from the cache."""
     flag = {(pn, um) for pn, _, um in server._get_reasoning_model_candidates("flagship")}
     assert flag == {("cheapo", "glm-5.3"), ("pricey", "glm-5.3")}
 
@@ -125,8 +132,47 @@ def test_unknown_tier_falls_back_to_inference_not_rank_zero(server):
     assert rank == server._REASONING_LEVELS.index("standard")
 
 
-def test_no_flagship_set_means_no_flagship_candidates(server):
-    """With membership empty the tier is simply empty — it never falls back to
-    deep, because a silent fallback would defeat asking for flagship."""
-    assert server._get_flagship_models({"flagship_models": []}) == set()
-    assert server._get_flagship_models({}) == set()
+def test_no_cache_and_no_pins_means_an_empty_tier(server, tmp_path):
+    """With no cache file and no pins the tier is simply empty — it never falls
+    back to deep, because a silent fallback would defeat asking for flagship."""
+    empty = tmp_path / "elsewhere" / "config.json"
+    empty.parent.mkdir(parents=True, exist_ok=True)
+    empty.write_text("{}", encoding="utf-8")
+    assert server._get_flagship_models({}, str(empty)) == set()
+
+
+# ── membership is cached state, policy is config ────────────────────────────
+
+def test_membership_is_not_read_from_the_user_config(server, cfg):
+    """A stray flagship_models key in config.json must not be honoured: the
+    list is deployment-specific machine state, not something to hand-edit."""
+    assert server._get_flagship_models({"flagship_models": ["cheapo/invented"]}) \
+        == {"cheapo/glm-5.3", "pricey/glm-5.3"}
+
+
+def test_pin_takes_effect_without_waiting_for_a_refresh(server):
+    """Pins are applied at read time, so pinning a model works immediately
+    rather than on the next cadence tick."""
+    got = server._get_flagship_models({"flagship_tier": {"pin": ["atria-asi/Atria-Dawn-Preview"]}})
+    assert "atria-asi/atria-dawn-preview" in got
+    assert "cheapo/glm-5.3" in got  # cached members survive
+
+
+def test_exclude_beats_a_cached_member(server):
+    """Excludes are applied last, so they win over computed membership."""
+    got = server._get_flagship_models({"flagship_tier": {"exclude": ["pricey/glm-5.3"]}})
+    assert got == {"cheapo/glm-5.3"}
+
+
+def test_exclude_beats_pin(server):
+    """When a model is both pinned and excluded, exclude wins."""
+    got = server._get_flagship_models({"flagship_tier": {
+        "pin": ["x/y"], "exclude": ["x/y"],
+    }})
+    assert "x/y" not in got
+
+
+def test_membership_cache_lives_beside_the_config(tmp_path):
+    from llmproxy.config import get_flagship_state_path
+    cfg = str(tmp_path / "config.json")
+    assert get_flagship_state_path(cfg) == tmp_path / "flagship_models.json"
