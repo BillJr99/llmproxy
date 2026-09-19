@@ -97,7 +97,10 @@ def test_model_reasoning_rejects_overlay_levels(server, caplog):
     """An overlay tier set by hand in model_reasoning is ignored, with a warning,
     rather than creating a half-state alongside the computed set."""
     parsed = server._get_model_reasoning({"model_reasoning": {"p/m": "flagship"}})
-    assert parsed == {}
+    # Absent, not empty: model_reasoning merges the shipped defaults too, so the
+    # assertion is that the hand-set overlay entry specifically was rejected.
+    assert "p/m" not in parsed
+    assert all(lvl != "flagship" for lvl in parsed.values())
 
 
 # ── per-provider free semantics ─────────────────────────────────────────────

@@ -190,3 +190,45 @@ def infer_reasoning_level(model_id: str) -> str:
         return "standard"
 
     return "exploratory"
+
+
+# ---------------------------------------------------------------------------
+# Capability derivation
+# ---------------------------------------------------------------------------
+
+def capabilities_from_listing(model: dict) -> set[str]:
+    """Derive llmproxy capability tags from one provider's model listing entry.
+
+    Reads the two fields OpenAI-compatible gateways actually publish:
+    ``supported_parameters`` (tools / reasoning / structured output) and
+    ``architecture.input_modalities`` (image -> vision). Both are optional, and
+    a bare OpenAI-shaped object carries neither.
+
+    Returns an EMPTY set for an entry that says nothing, which callers must
+    treat as "unknown" rather than "incapable" — guessing from the model's name
+    would manufacture facts, and the three-valued capability lookup in the
+    router depends on absence being distinguishable from denial.
+
+    One implementation shared by the scraper, the route-cache rebuild and the
+    routing-metadata refresh, so the three cannot drift apart.
+    """
+    if not isinstance(model, dict):
+        return set()
+    supported = model.get("supported_parameters")
+    if not isinstance(supported, list):
+        supported = []
+    arch = model.get("architecture")
+    modalities = (arch or {}).get("input_modalities") if isinstance(arch, dict) else None
+    if not isinstance(modalities, list):
+        modalities = []
+
+    caps: set[str] = set()
+    if "tools" in supported:
+        caps.add("tools")
+    if "reasoning" in supported:
+        caps.add("reasoning")
+    if "structured_outputs" in supported or "response_format" in supported:
+        caps.add("json")
+    if "image" in modalities:
+        caps.add("vision")
+    return caps

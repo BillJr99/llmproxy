@@ -128,13 +128,21 @@ def test_capability_failed_only_when_forced(server):
 
 
 def test_model_capabilities_defensive(server):
-    assert server._model_capabilities({}) == {}
-    assert server._model_capabilities({"model_capabilities": None}) == {}
-    assert server._model_capabilities({"model_capabilities": ["bad"]}) == {}  # non-dict
+    """A malformed override is dropped without raising.
+
+    Asserts the entries are ABSENT rather than that the whole map is empty:
+    model_capabilities now merges three layers, so the shipped providers.json
+    defaults legitimately show up even for a config that says nothing.
+    """
+    for bad in ({}, {"model_capabilities": None}, {"model_capabilities": ["bad"]}):
+        got = server._model_capabilities(bad)
+        assert isinstance(got, dict)
+        assert "p/m" not in got
+
     parsed = server._model_capabilities({"model_capabilities": {
         "P/M": ["Tools", "bogus", "vision"],
     }})
-    assert parsed == {"p/m": {"tools", "vision"}}  # lowercased, unknown dropped
+    assert parsed["p/m"] == {"tools", "vision"}  # lowercased, unknown dropped
 
 
 def test_order_by_capability(server):

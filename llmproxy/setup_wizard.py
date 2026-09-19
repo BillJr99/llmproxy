@@ -799,72 +799,22 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 def _offer_free_tier_auto_populate(provider_key: str, config: dict) -> bool:
+    """Deliberately a no-op; kept so the quick-setup flow needs no guard.
+
+    This used to copy providers.json's free-tier sections into the new
+    config.json. Copying them is what froze them: the data never moved again,
+    and a deployment could end up routing on capability tags years out of date.
+
+    The runtime now reads providers.json directly as the defaults layer, with
+    routing_metadata.json above it kept current by its own refresh cadence, and
+    config.json holding only what the user chose to override. So there is
+    nothing to populate — the data is already in effect the moment the provider
+    is configured, and it stays current on its own.
+
+    The model-tags menu still writes these keys, which is correct: anything set
+    there is a deliberate override and outranks both lower layers.
     """
-    After quick setup, offer to merge PROVIDER_FREE_INFO data into the config.
-    Returns True if the config was modified.
-    """
-    info = PROVIDER_FREE_INFO.get(provider_key)
-    if not info:
-        return False
-
-    has_data = bool(
-        info.get("believed_free")
-        or info.get("model_reasoning")
-        or info.get("model_capabilities")
-    )
-    if not has_data:
-        return False
-
-    n_free = len(info.get("believed_free", []))
-    n_reasoning = len(info.get("model_reasoning", {}))
-    n_caps = len(info.get("model_capabilities", {}))
-    n_limits = len(info.get("free_limits", {}))
-    print()
-    print(_dim(f"  Known free-tier data for {provider_key}: "
-               f"{n_free} believed_free, {n_reasoning} reasoning tag(s), "
-               f"{n_caps} capability tag(s), {n_limits} limit(s)."))
-    if not _confirm(
-        f"Auto-populate believed_free / model_reasoning / model_capabilities / "
-        f"free_limits for {provider_key}?",
-        default=True,
-    ):
-        return False
-
-    modified = False
-
-    existing_kf: list = config.setdefault("believed_free", [])
-    to_add_kf = [e for e in info.get("believed_free", []) if e not in existing_kf]
-    if to_add_kf:
-        existing_kf.extend(to_add_kf)
-        print(_ok(f"  Added {len(to_add_kf)} entr{'y' if len(to_add_kf)==1 else 'ies'} to believed_free."))
-        modified = True
-
-    existing_mr: dict = config.setdefault("model_reasoning", {})
-    to_add_mr = {k: v for k, v in info.get("model_reasoning", {}).items() if k not in existing_mr}
-    if to_add_mr:
-        existing_mr.update(to_add_mr)
-        print(_ok(f"  Added {len(to_add_mr)} entr{'y' if len(to_add_mr)==1 else 'ies'} to model_reasoning."))
-        modified = True
-
-    existing_mc: dict = config.setdefault("model_capabilities", {})
-    to_add_mc = {k: v for k, v in info.get("model_capabilities", {}).items() if k not in existing_mc}
-    if to_add_mc:
-        existing_mc.update(to_add_mc)
-        print(_ok(f"  Added {len(to_add_mc)} entr{'y' if len(to_add_mc)==1 else 'ies'} to model_capabilities."))
-        modified = True
-
-    existing_fl: dict = config.setdefault("free_limits", {})
-    to_add_fl = {k: v for k, v in info.get("free_limits", {}).items()
-                 if k not in existing_fl and any(v.values())}
-    if to_add_fl:
-        existing_fl.update(to_add_fl)
-        print(_ok(f"  Added {len(to_add_fl)} entr{'y' if len(to_add_fl)==1 else 'ies'} to free_limits."))
-        modified = True
-
-    if not modified:
-        print(_dim("  All entries already present — nothing to add."))
-
-    return modified
+    return False
 
 
 

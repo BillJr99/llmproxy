@@ -995,6 +995,14 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
 > starts normally and then stops. They are not interchangeable and they compose
 > (the smaller wins) — see [which one you want](#which-timeout).
 
+> **Routing metadata is not in `config.json` any more.** `believed_free`,
+> `cost_observed_free_tier`, `model_reasoning`, `model_capabilities` and
+> `free_limits` are resolved across four layers, with your `config.json` holding
+> only what you choose to override — see
+> [where routing metadata lives](#routing-metadata). Entries still in your
+> config are honoured, so nothing breaks; they are just frozen where the layers
+> keep themselves current.
+
 > **Config layout (free_tier / providers_pr).** The free-tier maintenance
 > switches and the auto-PR settings live under two grouped objects, `free_tier`
 > and `providers_pr`, rather than as loose top-level keys. Configs written with
@@ -1467,6 +1475,13 @@ what timed out, what it cost, which model actually served it, how often the
 ranked pick failed over — with no content at all, and is the better default for
 a deployment carrying anyone's data but your own.
 
+**`full` also requires `log_level: DEBUG`.** Body-carrying records are emitted at
+DEBUG, so setting `request_log: "full"` is not by itself enough to put prompts
+and completions in your logs — `server.log_level` has to be `DEBUG` as well.
+Content therefore takes two deliberate switches rather than one, and you can
+leave `full` configured permanently without it doing anything until you flip the
+level. `metadata` records are content-free and still emit at INFO.
+
 `request_log_max_body_bytes` caps each captured body, with the record marking
 `"truncated": true` and the original length. `0` (the default) means no cap,
 which is what `full` means. Consider setting one: a record holds the whole body
@@ -1744,6 +1759,101 @@ returns a clear 429/503 rather than silently spending money, and paid models sta
 reachable only by their direct `provider/model` name. Set
 `server.allow_implicit_paid: true` to restore the historical free → local → paid
 fallback. `llmproxy/free` never routes to paid regardless of this flag.
+
+<a name="routing-metadata"></a>
+### Where routing metadata lives
+
+Five keys decide how llmproxy routes: which models are free, which of those
+turned out to cost money, what tier each sits in, what each can do, and how fast
+you may call it.
+
+| Key | What it decides |
+|---|---|
+| `believed_free` | which models the free pools may use |
+| `cost_observed_free_tier` | which of those reported a real cost and are treated as paid |
+| `model_reasoning` | the tier a model sits in (`exploratory` / `standard` / `deep`) |
+| `model_capabilities` | `tools` / `vision` / `reasoning` / `json` |
+| `free_limits` | per-model rate and token quotas |
+
+They are resolved across four layers, highest priority first:
+
+| Layer | Where | Who writes it | Committed |
+|---|---|---|---|
+| **Your overrides** | `config.json` | you, and the admin UI | no |
+| **Provider listings** | in memory | each provider's own `/models` | n/a |
+| **Learned** | `routing_metadata.json` | the refresh cadence | **no** |
+| **Defaults** | `llmproxy/providers.json` | the repo, via the providers PR | yes |
+
+**Your config always wins.** A correction you make by hand, or through the admin
+UI, outranks everything discovered and survives every refresh. That is what
+makes the admin editors worth using rather than something the next cadence
+quietly undoes.
+
+**A provider outranks the catalog about its own models.** A gateway knows what it
+actually deployed; the catalog is the broad base beneath it.
+
+**List keys union; dict keys merge per entry.** `believed_free` and
+`cost_observed_free_tier` accumulate across layers, which still gives complete
+control because they are a pair: one adds a model to the free pool and the other
+takes it out again. Replacing would mean one hand-added entry silently
+discarding everything the refresh had learned. `model_reasoning`,
+`model_capabilities` and `free_limits` merge per model, with the higher layer
+winning that entry.
+
+#### What is keyed by what
+
+A capability belongs to the *weights*; a rate limit belongs to the *deployment*.
+So the learned layer splits them:
+
+- `model_capabilities` and `model_reasoning` are keyed by **normalized model**,
+  so one entry covers every provider serving those weights. `glm-5.3-flash`
+  appears as `z-ai/glm-5.3-flash`, `zai/glm-5.3-flash`, `zai-org/glm-5.3-flash`
+  and bare across a couple of dozen providers — one learned fact answers for all
+  of them.
+- `believed_free`, `cost_observed_free_tier` and `free_limits` are keyed **per
+  provider**, because the same weights can be free on one provider and metered
+  on another.
+
+Lookups try the qualified id, then the bare id, then the normalized model. The
+normalized form is tried last, so an entry for this exact model on this exact
+provider always beats a fact inherited from the same weights elsewhere.
+
+#### What updates itself, and when
+
+```json
+"routing_metadata": { "enabled": true, "refresh_frequency_days": 7 }
+```
+
+The refresh relearns capabilities from each provider's listing and from the
+OpenRouter catalog. It has its own cadence, so disabling the flagship tier does
+not also stop llmproxy learning what its models can do. Two sources that cost
+nothing extra: the provider listings are already fetched to build the route
+cache, and the catalog fetch is the one the flagship refresh already makes.
+
+Cost observations are written here too. A model that reports a real cost while
+marked free is something llmproxy discovered at runtime, so it belongs with the
+rest of what the refresh learns — not in the file you hand-edit.
+
+#### What gets PR'd
+
+With [`providers_pr`](#providers_pr) enabled, learned metadata is proposed as
+`providers.json` defaults so every deployment benefits, not just yours.
+`routing_metadata.json` itself is never committed: it describes one deployment's
+providers and is rewritten on a schedule. Neither is `providers.json` ever
+copied next to your `config.json` — it is read from the repo checkout, and a
+second copy beside your config would drift from it immediately and invite
+hand-edits to a machine-written file.
+
+#### Migrating an existing config
+
+If your `config.json` still holds these five keys, they are still honoured — the
+layers merge, so nothing breaks and nothing needs doing. But they are frozen at
+whatever they were when they were written, which is the problem this structure
+solves. Moving them out lets the refresh keep them current.
+
+The migration script backs up your config, seeds the sidecar and
+`providers.json` from what it finds, strips the five keys, and reports what
+moved. It is safe to re-run and supports `--dry-run`.
 
 <a name="favorite_free_models"></a>
 ### `favorite_free_models` — ranked priority list for free-tier routing

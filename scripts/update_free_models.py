@@ -48,7 +48,6 @@ sys.path.insert(0, str(REPO_ROOT))
 from llmproxy.config import (  # noqa: E402
     FLAGSHIP_TIER_DEFAULTS,
     load_cost_probe_state,
-    save_config,
     save_cost_probe_state,
     save_update_state,
 )
@@ -769,23 +768,16 @@ def sidecar_fallback_paths(config_path: str | None) -> tuple[Path, Path] | None:
 
 
 def _write_sidecar_fallback(sidecar: dict, config_path: str | None) -> None:
-    """Mirror the computed sidecar + config.example to the user-config dir."""
-    paths = sidecar_fallback_paths(config_path)
-    if paths is None:
-        return
-    providers_path, example_path = paths
-    try:
-        providers_path.parent.mkdir(parents=True, exist_ok=True)
-        providers_path.write_text(dump_sidecar(sidecar), encoding="utf-8")
-        example_path.write_text(
-            json.dumps(regenerate_config_example(sidecar), indent=2) + "\n", encoding="utf-8"
-        )
-        print(_warn(
-            f"Mirrored computed providers.json + config.example.json to "
-            f"{providers_path.parent} (review there / open a providers PR)."
-        ))
-    except OSError as e:
-        print(_warn(f"Could not mirror computed artifacts to the config dir: {e}"))
+    """Deliberately a no-op; kept so existing call sites need no guard.
+
+    This used to mirror the computed providers.json and config.example.json into
+    the user's config directory. It no longer does: providers.json is the
+    DEFAULTS layer read straight from the repo checkout, and a second copy beside
+    config.json would shadow nothing, drift immediately, and invite hand-edits to
+    a machine-written file. Learned facts belong in routing_metadata.json, which
+    is per-deployment and never committed.
+    """
+    return
 
 
 # ---------------------------------------------------------------------------
@@ -941,33 +933,20 @@ def print_config_diff(path: Path, changes: dict) -> None:
 
 
 def _sync_user_config(sidecar: dict, config_path: str, *, dry_run: bool) -> int:
-    """Reconcile the user config at *config_path* from *sidecar*. Returns an
-    exit code (0 ok, non-zero on a read error)."""
-    path = Path(config_path).expanduser()
-    try:
-        user_cfg = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        print(_err(f"\n--config: file not found: {path}"))
-        return 2
-    except (OSError, json.JSONDecodeError) as exc:
-        print(_err(f"\n--config: could not read {path}: {exc}"))
-        return 2
-    if not isinstance(user_cfg, dict):
-        print(_err(f"\n--config: {path} is not a JSON object"))
-        return 2
+    """Deliberately a no-op; kept so existing call sites and flags still work.
 
-    changes = reconcile_user_config(sidecar, user_cfg)
-    print_config_diff(path, changes)
-
-    if not _config_changed(changes):
-        return 0
-    if dry_run:
-        print(_dim("\n(dry run — config not written)"))
-        return 0
-    # Atomic write (temp + os.replace), matching how the proxy persists config, so
-    # a concurrent reader never sees a half-written file.
-    save_config(user_cfg, str(path))
-    print(_ok(f"Synced free-tier sections into {path}"))
+    Copying providers.json's free-tier sections into config.json is what froze
+    them: it ran once and the data never moved again, which is how a deployment
+    ended up routing on capability tags years out of date. The runtime now reads
+    providers.json directly as the defaults layer, the refresh keeps
+    routing_metadata.json current above it, and config.json holds only what you
+    chose to override. Nothing to sync.
+    """
+    print(_dim(
+        "\nConfig sync is no longer needed: providers.json is read directly as "
+        "the defaults layer, with routing_metadata.json above it and your "
+        "config.json overriding both."
+    ))
     return 0
 
 

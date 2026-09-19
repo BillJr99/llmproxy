@@ -123,41 +123,48 @@ def test_dry_run_writes_nothing(tmp_path):
     assert json.loads(p.read_text()) == original  # untouched on disk
 
 
-def test_sync_writes_when_not_dry_run(tmp_path):
+def test_sync_never_writes_even_when_not_dry_run(tmp_path):
+    """Not a dry run, and still nothing written.
+
+    The sync used to reconcile the sidecar's free-tier sections into the user's
+    config.json. That copy is what froze them at first run, so it is gone:
+    providers.json is read directly as the defaults layer instead, and the
+    user's file is now purely overrides.
+    """
     p = tmp_path / "config.json"
-    p.write_text(json.dumps(_user_cfg(), indent=2), encoding="utf-8")
+    original = json.dumps(_user_cfg(), indent=2)
+    p.write_text(original, encoding="utf-8")
     rc = _sync_user_config(_sidecar(), str(p), dry_run=False)
     assert rc == 0
-    written = json.loads(p.read_text())
-    assert "google/added" in written["believed_free"]
-    assert "github/gone" not in written["believed_free"]
-    assert written["model_reasoning"]["github/gone"] == "deep"
+    assert p.read_text(encoding="utf-8") == original
 
 
-def test_missing_file_returns_error(tmp_path):
+def test_sync_is_a_no_op_and_cannot_fail(tmp_path):
+    """Nothing to sync, so a missing config is not an error any more: the runtime
+    reads providers.json directly as the defaults layer."""
     rc = _sync_user_config(_sidecar(), str(tmp_path / "nope.json"), dry_run=False)
-    assert rc == 2
+    assert rc == 0
 
 
-def test_sync_config_only_cli_writes_live_config(tmp_path, monkeypatch):
-    """--sync-config-only reconciles the live config from the bundled sidecar,
-    with no scraping and without touching the sidecar / config.example.json —
-    so it works even when the sidecar is read-only."""
+def test_sync_config_only_leaves_the_user_config_alone(tmp_path, monkeypatch):
+    """The routing metadata no longer gets copied into config.json.
+
+    Copying it is what froze it: the sync ran once and the data never moved
+    again. providers.json is now read directly as the defaults layer, so the
+    user's file must come back byte-for-byte unchanged.
+    """
     p = tmp_path / "config.json"
-    p.write_text(json.dumps(_user_cfg(), indent=2), encoding="utf-8")
+    original = json.dumps(_user_cfg(), indent=2)
+    p.write_text(original, encoding="utf-8")
     monkeypatch.setattr(ufm, "load_data", _sidecar)
 
-    # The sidecar must never be written on this path: make any write blow up.
     def _boom(*_a, **_k):  # pragma: no cover - only fails if wrongly called
         raise AssertionError("--sync-config-only must not write the sidecar")
     monkeypatch.setattr(ufm, "write_config_example", _boom)
 
     rc = main(["--sync-config-only", "--config", str(p)])
     assert rc == 0
-    written = json.loads(p.read_text())
-    assert "google/added" in written["believed_free"]   # newly free -> added
-    assert "github/gone" not in written["believed_free"]  # no longer free -> removed
-    assert written["model_reasoning"]["github/gone"] == "deep"  # add-only, kept
+    assert p.read_text(encoding="utf-8") == original
 
 
 def test_sync_config_only_requires_config():
