@@ -176,3 +176,32 @@ def test_membership_cache_lives_beside_the_config(tmp_path):
     from llmproxy.config import get_flagship_state_path
     cfg = str(tmp_path / "config.json")
     assert get_flagship_state_path(cfg) == tmp_path / "flagship_models.json"
+
+
+# ── config block defaults ───────────────────────────────────────────────────
+
+def test_defaults_apply_to_a_config_that_predates_the_block():
+    """The tier must behave identically whether or not the user has pasted the
+    flagship_tier block in, so an upgrade needs no config edit."""
+    from llmproxy.config import FLAGSHIP_TIER_DEFAULTS, flagship_tier_cfg
+    assert flagship_tier_cfg({}) == FLAGSHIP_TIER_DEFAULTS
+    assert flagship_tier_cfg({"flagship_tier": {}}) == FLAGSHIP_TIER_DEFAULTS
+
+
+def test_user_values_override_defaults_key_by_key():
+    from llmproxy.config import flagship_tier_cfg
+    got = flagship_tier_cfg({"flagship_tier": {"min_flagship_free_models": 2}})
+    assert got["min_flagship_free_models"] == 2
+    assert got["refresh_frequency_days"] == 7  # untouched keys keep defaults
+
+
+def test_config_example_matches_the_code_defaults():
+    """CI regenerates config.example.json and diffs it, so these must agree or
+    the committed example drifts from what the server actually does."""
+    import json
+    from pathlib import Path
+
+    from llmproxy.config import FLAGSHIP_TIER_DEFAULTS
+    root = Path(__file__).resolve().parent.parent
+    example = json.loads((root / "config.example.json").read_text(encoding="utf-8"))
+    assert example["flagship_tier"] == FLAGSHIP_TIER_DEFAULTS

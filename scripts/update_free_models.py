@@ -46,15 +46,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from llmproxy.config import (  # noqa: E402
-    load_config as load_user_config,
-)
-from llmproxy.config import (  # noqa: E402
+    FLAGSHIP_TIER_DEFAULTS,
     load_cost_probe_state,
     load_endpoint_probe_state,
     save_config,
     save_cost_probe_state,
     save_endpoint_probe_state,
     save_update_state,
+)
+from llmproxy.config import (  # noqa: E402
+    load_config as load_user_config,
 )
 from llmproxy.providers import (  # noqa: E402
     DATA_PATH,
@@ -692,6 +693,33 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
                 "frequency_days": 0,
             },
         },
+        #
+        # flagship_tier — the computed top tier (llmproxy/flagship,
+        # flagship/free, flagship/local). This block is POLICY only: the
+        # membership list itself is deployment-specific (it depends on which
+        # providers you configure and what they serve), so it is computed
+        # locally and cached in flagship_models.json beside config.json, never
+        # committed and never hand-edited here.
+        #
+        #   enabled                   master switch for the tier
+        #   min_flagship_free_models  float the bar down until at least this
+        #                             many DISTINCT free models qualify; the
+        #                             same model free on several providers
+        #                             counts once, though each provider's
+        #                             instance is its own routing target
+        #   start_percentile          where the bar starts before floating
+        #   min_context               spec veto: minimum context window
+        #   require_tools             spec veto: tool-calling required, since a
+        #                             model that cannot call tools cannot drive
+        #                             an agent loop whatever it scores
+        #   max_models                optional hard cap (null = uncapped)
+        #   pin / exclude             always-in / always-out qualified ids; a
+        #                             pin bypasses both the bar and the spec
+        #                             veto, which is the only way to admit a
+        #                             provider no benchmark covers
+        #   sources                   benchmark sources to combine
+        #   refresh_frequency_days    how often membership is recomputed
+        "flagship_tier": dict(FLAGSHIP_TIER_DEFAULTS),
         "providers_pr": {
             "enabled": False,
             "frequency_days": 0,

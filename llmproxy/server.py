@@ -84,6 +84,7 @@ from . import fusion as _fusion
 from .config import (
     RESERVED_PROVIDER_NAMES,
     account_bound_cfg,
+    flagship_tier_cfg,
     get_config_path,
     get_provider,
     load_config,
@@ -5345,8 +5346,7 @@ def _get_flagship_models(config: dict | None = None,
             type(raw).__name__,
         )
 
-    tier_cfg = cfg.get("flagship_tier")
-    tier_cfg = tier_cfg if isinstance(tier_cfg, dict) else {}
+    tier_cfg = flagship_tier_cfg(cfg)
     pin = tier_cfg.get("pin")
     if isinstance(pin, list):
         members |= {m.lower() for m in pin if isinstance(m, str)}

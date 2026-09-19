@@ -450,6 +450,38 @@ def save_update_state(state: dict, config_path: str | None = None) -> bool:
     )
 
 
+# Defaults for the top-level `flagship_tier` config block. Defined once here so
+# the values the server falls back to for a config that predates the block, and
+# the values scripts/update_free_models.py writes into config.example.json,
+# cannot drift apart. See the README for what each key does.
+FLAGSHIP_TIER_DEFAULTS: dict = {
+    "enabled": True,
+    "min_flagship_free_models": 5,
+    "start_percentile": 0.9,
+    "min_context": 200000,
+    "require_tools": True,
+    "max_models": None,
+    "pin": [],
+    "exclude": [],
+    "sources": ["openrouter_aa", "epoch"],
+    "refresh_frequency_days": 7,
+}
+
+
+def flagship_tier_cfg(config: dict | None = None) -> dict:
+    """The `flagship_tier` block with defaults filled in.
+
+    A config written before the block existed simply gets every default, so the
+    tier behaves identically whether or not the user has pasted the block in.
+    """
+    raw = (config or {}).get("flagship_tier")
+    merged = dict(FLAGSHIP_TIER_DEFAULTS)
+    if isinstance(raw, dict):
+        merged.update({k: v for k, v in raw.items() if v is not None
+                       or k in ("max_models",)})
+    return merged
+
+
 # --- Flagship tier membership + refresh state (flagship_models.json) ---
 #
 # Membership is DEPLOYMENT-SPECIFIC: it depends on which providers are
