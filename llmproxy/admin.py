@@ -494,6 +494,12 @@ _MAINTENANCE_BOOL_FLAGS = (
 # Maintenance booleans that default to True when absent (vs False above).
 _MAINTENANCE_BOOL_FLAGS_DEFAULT_TRUE = ("sync_believed_free_on_startup",)
 _MAINTENANCE_STR_FIELDS = ("pr_providers_repo", "pr_providers_base", "pr_providers_branch")
+# Integer fields, with the default applied when the key is absent from config.
+_MAINTENANCE_INT_FIELDS: dict[str, int] = {
+    "probe_frequency_days": 0,
+    "update_frequency_days": 7,
+    "probe_timeout_sec": 10,
+}
 
 # The admin API and frontend keep the historical flat field names; storage maps
 # each into the reorganized nested config (free_tier / providers_pr). This keeps
@@ -506,6 +512,11 @@ _MAINTENANCE_PATHS: dict[str, tuple[str, ...]] = {
     "pr_providers_list": ("providers_pr", "enabled"),
     "sync_believed_free_on_startup": ("free_tier", "sync_on_startup"),
     "probe_frequency_days": ("free_tier", "cost_probe", "frequency_days"),
+    # The sweep's own cadence. Distinct from probe_frequency_days, which only
+    # throttles the cost probe *within* a sweep.
+    "update_frequency_days": ("free_tier", "update_frequency_days"),
+    # Read timeout shared by both probes.
+    "probe_timeout_sec": ("free_tier", "probe_timeout_sec"),
     "pr_providers_repo": ("providers_pr", "repo"),
     "pr_providers_base": ("providers_pr", "base"),
     "pr_providers_branch": ("providers_pr", "branch"),
@@ -547,12 +558,12 @@ def _maintenance_view(config: dict) -> dict:
     view.update(
         {k: bool(_cfg_get(config, _MAINTENANCE_PATHS[k], True)) for k in _MAINTENANCE_BOOL_FLAGS_DEFAULT_TRUE}
     )
-    try:
-        view["probe_frequency_days"] = int(
-            _cfg_get(config, _MAINTENANCE_PATHS["probe_frequency_days"], 0) or 0
-        )
-    except (TypeError, ValueError):
-        view["probe_frequency_days"] = 0
+    for key, default in _MAINTENANCE_INT_FIELDS.items():
+        raw = _cfg_get(config, _MAINTENANCE_PATHS[key], default)
+        try:
+            view[key] = int(default if raw is None else raw)
+        except (TypeError, ValueError):
+            view[key] = default
     for k in _MAINTENANCE_STR_FIELDS:
         view[k] = _cfg_get(config, _MAINTENANCE_PATHS[k]) or ""
     tok = _cfg_get(config, _MAINTENANCE_PATHS["pr_providers_token"])
@@ -644,7 +655,8 @@ def api_put_server():
 def api_put_maintenance():
     """Edit the top-level automation flags: the free-models updater / cost probe
     (probe_cost, autoremove_believed_free, update_believed_free_on_startup,
-    probe_frequency_days) and the providers-PR settings (pr_providers_*).
+    probe_frequency_days, update_frequency_days, probe_timeout_sec) and the
+    providers-PR settings (pr_providers_*).
 
     The PR token is write-only: send a new value to set it, or omit/blank to keep
     the current one (mirrors the api_key edit convention)."""
@@ -661,14 +673,19 @@ def api_put_maintenance():
                     return _err(f"{key} must be a boolean.")
                 _cfg_set(config, _MAINTENANCE_PATHS[key], payload[key])
 
-        if "probe_frequency_days" in payload:
+        for key in _MAINTENANCE_INT_FIELDS:
+            if key not in payload:
+                continue
             try:
-                v = int(payload["probe_frequency_days"])
+                v = int(payload[key])
             except (TypeError, ValueError):
-                return _err("probe_frequency_days must be an integer.")
+                return _err(f"{key} must be an integer.")
             if v < 0:
-                return _err("probe_frequency_days must be >= 0.")
-            _cfg_set(config, _MAINTENANCE_PATHS["probe_frequency_days"], v)
+                return _err(f"{key} must be >= 0.")
+            # A zero timeout would mean "give up immediately", never "no limit".
+            if key == "probe_timeout_sec" and v == 0:
+                return _err("probe_timeout_sec must be >= 1.")
+            _cfg_set(config, _MAINTENANCE_PATHS[key], v)
 
         for key in _MAINTENANCE_STR_FIELDS:
             if key in payload:

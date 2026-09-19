@@ -82,6 +82,7 @@ from flask import (
 from . import __version__
 from . import fusion as _fusion
 from .config import (
+    DEFAULT_FREE_TIER_CONFIG,
     RESERVED_PROVIDER_NAMES,
     account_bound_cfg,
     flagship_tier_cfg,
@@ -787,12 +788,14 @@ _startup_update_done: bool = False
 _startup_update_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
-# Periodic interval probe checks (endpoint probe, cost probe, PR creation)
+# Periodic interval checks (free-models sweep, flagship recompute, cost probe,
+# PR creation)
 # ---------------------------------------------------------------------------
 # State files are re-read at most once per _PROBE_INTERVAL_GATE_SEC so
-# concurrent requests don't all hit disk simultaneously. The actual probe
-# frequency is controlled by the per-probe frequency_minutes / frequency_days
-# settings in config.json.
+# concurrent requests don't all hit disk simultaneously. The actual cadences
+# come from free_tier.update_frequency_days and
+# flagship_tier.refresh_frequency_days, with free_tier.cost_probe.frequency_days
+# throttling that one expensive source within a sweep.
 _PROBE_INTERVAL_GATE_SEC = 60   # check state files at most once per minute
 _last_probe_interval_check: float = 0.0
 _probe_interval_check_lock = threading.Lock()
@@ -1790,7 +1793,9 @@ def _maybe_fire_interval_probes(config_path: str | None = None) -> None:
     _maybe_fire_pr_if_due(config, config_path)
 
 
-DEFAULT_UPDATE_FREQUENCY_DAYS = 7
+# Canonical value lives in config.DEFAULT_FREE_TIER_CONFIG so the runtime
+# fallback and the generated config.example.json cannot drift apart.
+DEFAULT_UPDATE_FREQUENCY_DAYS = DEFAULT_FREE_TIER_CONFIG["update_frequency_days"]
 
 
 def _free_update_due(free_tier: dict, config_path: str | None) -> bool:
@@ -1952,10 +1957,10 @@ def _maybe_fire_free_models_update(
     models (including unsuffixed cloaked ones, which are detected by $0 pricing
     rather than by a ":free" suffix) are picked up, repriced models lose the free
     tag, and models withdrawn upstream are dropped. The cadence is
-    free_tier.update_frequency_days, default 7. The opt-in endpoint-probe source
-    is throttled separately inside the updater by
-    free_tier.endpoint_probe.frequency_minutes, and so cannot run more often than
-    this refresh does.
+    free_tier.update_frequency_days, default 7. Sources run as part of the sweep
+    and so cannot run more often than it does; the cost probe throttles itself
+    further via free_tier.cost_probe.frequency_days, because it spends real
+    quota, while the endpoint probe simply runs every sweep.
     """
     if not _free_update_due(free_tier, config_path):
         return

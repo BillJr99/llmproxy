@@ -48,10 +48,8 @@ sys.path.insert(0, str(REPO_ROOT))
 from llmproxy.config import (  # noqa: E402
     FLAGSHIP_TIER_DEFAULTS,
     load_cost_probe_state,
-    load_endpoint_probe_state,
     save_config,
     save_cost_probe_state,
-    save_endpoint_probe_state,
     save_update_state,
 )
 from llmproxy.config import (  # noqa: E402
@@ -92,6 +90,7 @@ _PLACEHOLDER_KEYS: dict[str, str] = {
     "teamorouter": "sk-teamo-...",
     "tokenharbor": "thk_live_...",
     "atria-asi": "atr_...",
+    "unbiased-ai": "sk_...",
 }
 
 
@@ -683,10 +682,9 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
             "sync_on_startup": True,
             "update_on_startup": False,
             "update_frequency_days": 7,
-            "endpoint_probe": {
-                "frequency_minutes": 30,
-                "timeout_sec": 10,
-            },
+            # Read timeout for BOTH probes (endpoint and cost). One setting,
+            # because they differ in what they spend, not in how patient to be.
+            "probe_timeout_sec": 10,
             "cost_probe": {
                 "enabled": False,
                 "autoremove": False,
@@ -984,16 +982,17 @@ def _run_source(
     probe_max: int | None = None,
     probe_provider: str | None = None,
     probe_concurrency: int | None = None,
-    endpoint_probe_timeout: int = 10,
+    probe_timeout: int = 10,
 ) -> tuple[str, bool, list[Evidence], str | None]:
     try:
         if source_name == "cost_probe":
             src = CostProbeSource(config_path=config_path, max_models=probe_max,
                                   provider_filter=probe_provider,
-                                  concurrency=probe_concurrency)
+                                  concurrency=probe_concurrency,
+                                  timeout=probe_timeout)
         elif source_name == "endpoint_probe":
             src = EndpointProbeSource(config_path=config_path,
-                                      timeout=endpoint_probe_timeout)
+                                      timeout=probe_timeout)
         else:
             cls = ALL_SOURCES[source_name]
             src = cls()
@@ -1084,7 +1083,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return _sync_user_config(load_data(), args.config, dry_run=args.dry_run)
 
-    # Read opt-in flags from the user config (cost_probe / endpoint_probe / autoremove).
+    # Read opt-in flags from the user config (cost probe, endpoint probe,
+    # autoremove) plus the sweep's shared probe timeout.
     try:
         user_cfg = load_user_config(args.config, force_reload=True)
     except Exception:  # noqa: BLE001 — a missing/broken config must not break scraping
@@ -1093,7 +1093,12 @@ def main(argv: list[str] | None = None) -> int:
     cost_probe_cfg = free_tier_cfg.get("cost_probe", {})
     cost_probe_enabled = bool(cost_probe_cfg.get("enabled", False)) or args.cost_probe
     autoremove = bool(cost_probe_cfg.get("autoremove", False))
-    ep_cfg = free_tier_cfg.get("endpoint_probe", {})
+    # One timeout governs both probes; free_tier.endpoint_probe.timeout_sec is
+    # the pre-flattening spelling and is migrated by config._normalize_config.
+    probe_timeout = int(free_tier_cfg.get("probe_timeout_sec") or 10)
+    # The free_tier.endpoint_probe block is gone; this is read ONLY to warn
+    # about leftover keys in an old config, never to configure anything.
+    legacy_ep_cfg = free_tier_cfg.get("endpoint_probe", {})
     ep_enabled = bool(
         free_tier_cfg.get("sync_on_startup") or free_tier_cfg.get("update_on_startup")
     ) or args.endpoint_probe
@@ -1115,19 +1120,22 @@ def main(argv: list[str] | None = None) -> int:
             ))
             cost_probe_enabled = False
 
-    # Throttle the endpoint probe to at most once every frequency_minutes.
-    if ep_enabled and not args.ignore_throttle:
-        ep_state = load_endpoint_probe_state(args.config)
-        freq_days = ep_cfg.get("frequency_minutes", 30) / 1440.0
-        ep_due, ep_days_since = _probe_due(ep_state.get("last_probe_at"), freq_days)
-        if not ep_due:
-            freq_min = ep_cfg.get("frequency_minutes", 30)
-            ep_since_min = f"{ep_days_since * 1440:.1f}" if ep_days_since is not None else "?"
-            print(_warn(
-                f"  ⚠  endpoint_probe throttled — last run was {ep_since_min} min ago, "
-                f"frequency_minutes={freq_min}. Use --ignore-throttle to override."
-            ))
-            ep_enabled = False
+    # The endpoint probe has no throttle of its own: it only issues GET /models
+    # per provider, spends no quota, and can only run as part of a sweep, so the
+    # sweep's own update_frequency_days is the only limit it needs. (The cost
+    # probe does keep a throttle, because it spends real quota.)
+    if legacy_ep_cfg.get("frequency_minutes") is not None:
+        print(_warn(
+            "  ⚠  free_tier.endpoint_probe.frequency_minutes is obsolete and ignored. "
+            "The endpoint probe now runs on every sweep; the sweep's own cadence is "
+            "free_tier.update_frequency_days. You can delete the key."
+        ))
+    if legacy_ep_cfg.get("timeout_sec") is not None and "probe_timeout_sec" not in free_tier_cfg:
+        print(_dim(
+            "  free_tier.endpoint_probe.timeout_sec has moved to "
+            "free_tier.probe_timeout_sec (now shared with the cost probe); "
+            "the old spelling is still honoured."
+        ))
 
     if args.regen_config_only:
         write_config_example()
@@ -1157,7 +1165,7 @@ def main(argv: list[str] | None = None) -> int:
             ex.submit(_run_source, s, config_path=args.config,
                       probe_max=args.cost_probe_max, probe_provider=args.cost_probe_provider,
                       probe_concurrency=args.cost_probe_concurrency,
-                      endpoint_probe_timeout=ep_cfg.get("timeout_sec", 10)): s
+                      probe_timeout=probe_timeout): s
             for s in requested
         }
         for fut in as_completed(futures):
@@ -1258,8 +1266,6 @@ def main(argv: list[str] | None = None) -> int:
     now_iso = datetime.now(UTC).isoformat()
     if "cost_probe" in requested:
         save_cost_probe_state({"last_probe_at": now_iso}, args.config)
-    if "endpoint_probe" in requested:
-        save_endpoint_probe_state({"last_probe_at": now_iso}, args.config)
     # A completed scrape is a completed refresh, whichever sources ran, so the
     # server's update_frequency_days throttle advances from here.
     save_update_state({"last_update_at": now_iso}, args.config)
