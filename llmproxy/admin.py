@@ -585,7 +585,15 @@ def api_get_config():
         },
         "maintenance": _maintenance_view(config),
         "reserved_provider_names": sorted(RESERVED_PROVIDER_NAMES),
-        "valid_reasoning_levels": sorted(_providers.VALID_REASONING_LEVELS),
+        # Hand-assignable levels, in canonical weakest-to-strongest order (not
+        # alphabetical — the order is the routing rank).
+        "valid_reasoning_levels": [
+            lvl for lvl in _providers.REASONING_LEVELS
+            if lvl in _providers.VALID_REASONING_LEVELS
+        ],
+        # Every tier including computed overlays, for display purposes.
+        "reasoning_levels": list(_providers.REASONING_LEVELS),
+        "overlay_reasoning_levels": sorted(_providers.OVERLAY_REASONING_LEVELS),
         "valid_capabilities": sorted(_VALID_CAPABILITIES),
         "free_limit_keys": list(_providers.FREE_LIMIT_KEYS),
     })

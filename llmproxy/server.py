@@ -99,6 +99,7 @@ from .config import (
 )
 from .dialects import get_inbound, get_outbound
 from .dialects.responses import UnknownPreviousResponse
+from .providers import OVERLAY_REASONING_LEVELS, REASONING_LEVELS
 from .signals import (
     SOURCE_NEUTRAL,
     extract_tool_signals,
@@ -149,7 +150,17 @@ class _StripApiPrefix:
 
 app.wsgi_app = _StripApiPrefix(app.wsgi_app)
 
-_REASONING_LEVELS: tuple[str, ...] = ("exploratory", "standard", "deep")
+# Canonical tier order lives in llmproxy/providers.py; see REASONING_LEVELS
+# there for why it is ordered and why flagship is an overlay. Aliased here
+# because the virtual-model name sets below are comprehensions over it.
+_REASONING_LEVELS: tuple[str, ...] = REASONING_LEVELS
+# Tiers whose membership is computed rather than read from model_reasoning.
+_OVERLAY_REASONING_LEVELS: frozenset[str] = OVERLAY_REASONING_LEVELS
+# The strongest tier a prompt-size heuristic may target on its own. Overlay
+# tiers are opt-in by name only, never reached by the router drifting upward.
+_MAX_INFERRED_LEVEL_INDEX: int = max(
+    i for i, lvl in enumerate(_REASONING_LEVELS) if lvl not in OVERLAY_REASONING_LEVELS
+)
 # Capabilities that get their own capability-selecting virtual endpoints
 # (llmproxy__tools, llmproxy__vision, and their /free variants).
 _CAPABILITY_VIRTUALS: tuple[str, ...] = ("tools", "vision")
@@ -3608,8 +3619,11 @@ def _target_reasoning_tier_explained(payload: dict) -> tuple[str, str]:
     if not delta or signal_source == SOURCE_NEUTRAL:
         return base, TIER_SOURCE_PROMPT_SIZE
 
+    # Clamp to the strongest *inferable* tier, not to the end of the tuple.
+    # Overlay tiers such as flagship sit above deep and are opt-in by name only
+    # (llmproxy/flagship), so no prompt size or tool signal may drift into them.
     idx = _REASONING_LEVELS.index(base)
-    shifted = min(len(_REASONING_LEVELS) - 1, max(0, idx + delta))
+    shifted = min(_MAX_INFERRED_LEVEL_INDEX, max(0, idx + delta))
     if shifted == idx:
         return base, TIER_SOURCE_PROMPT_SIZE
     return _REASONING_LEVELS[shifted], f"{TIER_SOURCE_TOOL_SIGNALS}:{signal_source}"
@@ -4990,18 +5004,33 @@ def _param_count(model_id: str) -> float:
 
 
 def _quality_key(provider_name: str, upstream_id: str,
-                 reasoning_map: dict[str, str]) -> tuple[int, float]:
+                 reasoning_map: dict[str, str],
+                 flagship_models: set[str] | None = None) -> tuple[int, float]:
     """Sophistication sort key for a candidate — higher is more capable.
 
-    ``(reasoning_rank, param_count)`` where ``reasoning_rank`` is the configured
-    ``model_reasoning`` tier (deep=2 > standard=1 > exploratory=0), falling back
-    to a tier inferred from the model name when untagged, and ``param_count`` is
-    the inferred size in billions. Sorting candidates by this key descending puts
-    the most sophisticated model first.
+    ``(reasoning_rank, param_count)`` where ``reasoning_rank`` is the index of
+    the model's tier in _REASONING_LEVELS (flagship > deep > standard >
+    exploratory), and ``param_count`` is the inferred size in billions. Sorting
+    candidates by this key descending puts the most sophisticated model first.
+
+    Flagship is an overlay: membership is looked up separately rather than read
+    from ``model_reasoning``, so a flagship model keeps whatever tier tag it
+    carries there and simply outranks it here.
+
+    An unrecognised explicit tag falls back to the name-inferred tier, never to
+    rank 0. A config written by a newer build (or a tier this build has since
+    renamed) would otherwise sort as the *weakest* candidate rather than the
+    strongest, which is the worst possible direction to fail in.
     """
+    qualified = f"{provider_name}/{upstream_id}".lower()
+    if flagship_models and (qualified in flagship_models
+                            or upstream_id.lower() in flagship_models):
+        return (_REASONING_LEVELS.index("flagship"), _param_count(upstream_id))
     lvl = (reasoning_map.get(upstream_id.lower())
-           or reasoning_map.get(f"{provider_name}/{upstream_id}".lower())
+           or reasoning_map.get(qualified)
            or _infer_reasoning_level(upstream_id))
+    if lvl not in _REASONING_LEVELS:
+        lvl = _infer_reasoning_level(upstream_id)
     rank = _REASONING_LEVELS.index(lvl) if lvl in _REASONING_LEVELS else 0
     return (rank, _param_count(upstream_id))
 

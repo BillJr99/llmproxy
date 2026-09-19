@@ -282,6 +282,8 @@
     "google/gemini-3.6-flash",
     "google/gemini-3.7-flash",
     "google/gemini-3.8-flash",
+    "google/gemini-3.8-live",
+    "google/gemini-3.8-live-extended-thinking",
     "google/gemma-3-12b-it",
     "google/gemma-3-1b-it",
     "google/gemma-3-27b-it",
@@ -301,6 +303,7 @@
     "groq/meta-llama/llama-prompt-guard-2-22m",
     "groq/meta-llama/llama-prompt-guard-2-86m",
     "groq/mixtral-8x7b-32768",
+    "groq/openai/gpt-oss-120b",
     "groq/openai/gpt-oss-20b",
     "groq/openai/gpt-oss-safeguard-20b",
     "groq/qwen/qwen3.6-27b",
@@ -431,6 +434,14 @@
     "openrouter/thinkingmachines/inkling-small:free",
     "openrouter/thinkingmachines/inkling:free",
     "openrouter/z-ai/glm-5.2:free",
+    "xkiro/minimax/minimax-m2.1-highspeed:free",
+    "xkiro/minimax/minimax-m2.1:free",
+    "xkiro/minimax/minimax-m2.5-highspeed:free",
+    "xkiro/minimax/minimax-m2.5:free",
+    "xkiro/minimax/minimax-m2.7-highspeed:free",
+    "xkiro/minimax/minimax-m2.7:free",
+    "xkiro/minimax/minimax-m2:free",
+    "xkiro/minimax/minimax-m3:free",
     "xkiro/mistralai/codestral-2508",
     "xkiro/mistralai/devstral-medium",
     "xkiro/mistralai/ministral-14b",
@@ -439,7 +450,25 @@
     "xkiro/mistralai/mistral-large-2512",
     "xkiro/mistralai/mistral-medium-3.5",
     "xkiro/mistralai/mistral-small-2603",
-    "xkiro/openai/gpt-5.3-codex-spark",
+    "xkiro/qwen/qwen-plus-2025-07-28:free",
+    "xkiro/qwen/qwen3-coder-plus:free",
+    "xkiro/qwen/qwen3-max:free",
+    "xkiro/qwen/qwen3-omni-flash:free",
+    "xkiro/qwen/qwen3-vl-plus:free",
+    "xkiro/qwen/qwen3.5-397b-a17b:free",
+    "xkiro/qwen/qwen3.5-flash:free",
+    "xkiro/qwen/qwen3.5-omni-flash:free",
+    "xkiro/qwen/qwen3.5-omni-plus:free",
+    "xkiro/qwen/qwen3.5-plus:free",
+    "xkiro/qwen/qwen3.6-27b:free",
+    "xkiro/qwen/qwen3.6-35b-a3b:free",
+    "xkiro/qwen/qwen3.6-max-preview:free",
+    "xkiro/qwen/qwen3.6-plus:free",
+    "xkiro/qwen/qwen3.7-flash:free",
+    "xkiro/qwen/qwen3.7-max:free",
+    "xkiro/qwen/qwen3.7-plus:free",
+    "xkiro/qwen/qwen3.8-max:free",
+    "xkiro/qwen/qwen3.8-omni-flash:free",
     "xkiro/sensenova/sensenova-6.7-flash-lite",
     "xkiro/sensenova/sensenova-6.8-flash-lite",
     "tokenharbor/deepseek-v4-flash:free",
@@ -493,6 +522,8 @@
     "google/gemini-3.6-flash": "exploratory",
     "google/gemini-3.7-flash": "exploratory",
     "google/gemini-3.8-flash": "exploratory",
+    "google/gemini-3.8-live": "exploratory",
+    "google/gemini-3.8-live-extended-thinking": "exploratory",
     "google/gemma-3-12b-it": "exploratory",
     "google/gemma-3-1b-it": "exploratory",
     "google/gemma-3-27b-it": "standard",
@@ -655,6 +686,14 @@
     "openrouter/thinkingmachines/inkling:free": "exploratory",
     "openrouter/xiaomi/mimo-v2.5-pro": "exploratory",
     "openrouter/z-ai/glm-5.2:free": "exploratory",
+    "xkiro/minimax/minimax-m2.1-highspeed:free": "exploratory",
+    "xkiro/minimax/minimax-m2.1:free": "exploratory",
+    "xkiro/minimax/minimax-m2.5-highspeed:free": "exploratory",
+    "xkiro/minimax/minimax-m2.5:free": "exploratory",
+    "xkiro/minimax/minimax-m2.7-highspeed:free": "exploratory",
+    "xkiro/minimax/minimax-m2.7:free": "exploratory",
+    "xkiro/minimax/minimax-m2:free": "exploratory",
+    "xkiro/minimax/minimax-m3:free": "exploratory",
     "xkiro/mistralai/codestral-2508": "exploratory",
     "xkiro/mistralai/devstral-medium": "standard",
     "xkiro/mistralai/ministral-14b": "exploratory",
@@ -678,9 +717,11 @@
     "xkiro/qwen/qwen3.6-35b-a3b:free": "standard",
     "xkiro/qwen/qwen3.6-max-preview:free": "exploratory",
     "xkiro/qwen/qwen3.6-plus:free": "exploratory",
+    "xkiro/qwen/qwen3.7-flash:free": "exploratory",
     "xkiro/qwen/qwen3.7-max:free": "exploratory",
     "xkiro/qwen/qwen3.7-plus:free": "exploratory",
     "xkiro/qwen/qwen3.8-max:free": "exploratory",
+    "xkiro/qwen/qwen3.8-omni-flash:free": "exploratory",
     "xkiro/sensenova/sensenova-6.7-flash-lite": "exploratory",
     "xkiro/sensenova/sensenova-6.8-flash-lite": "exploratory",
     "moonshot/kimi-latest": "standard",
@@ -883,6 +924,39 @@
     "openrouter/z-ai/glm-5.2:free": [
       "reasoning"
     ],
+    "xkiro/minimax/minimax-m2.1-highspeed:free": [
+      "tools",
+      "reasoning"
+    ],
+    "xkiro/minimax/minimax-m2.1:free": [
+      "tools",
+      "reasoning"
+    ],
+    "xkiro/minimax/minimax-m2.5-highspeed:free": [
+      "tools",
+      "reasoning"
+    ],
+    "xkiro/minimax/minimax-m2.5:free": [
+      "tools",
+      "reasoning"
+    ],
+    "xkiro/minimax/minimax-m2.7-highspeed:free": [
+      "tools",
+      "reasoning"
+    ],
+    "xkiro/minimax/minimax-m2.7:free": [
+      "tools",
+      "reasoning"
+    ],
+    "xkiro/minimax/minimax-m2:free": [
+      "tools",
+      "reasoning"
+    ],
+    "xkiro/minimax/minimax-m3:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
     "xkiro/mistralai/codestral-2508": [
       "tools"
     ],
@@ -915,8 +989,94 @@
       "vision",
       "reasoning"
     ],
-    "xkiro/openai/gpt-5.3-codex-spark": [
+    "xkiro/qwen/qwen-plus-2025-07-28:free": [
       "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3-coder-plus:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3-max:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3-omni-flash:free": [
+      "tools",
+      "vision"
+    ],
+    "xkiro/qwen/qwen3-vl-plus:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3.5-397b-a17b:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3.5-flash:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3.5-omni-flash:free": [
+      "tools",
+      "vision"
+    ],
+    "xkiro/qwen/qwen3.5-omni-plus:free": [
+      "tools",
+      "vision"
+    ],
+    "xkiro/qwen/qwen3.5-plus:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3.6-27b:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3.6-35b-a3b:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3.6-max-preview:free": [
+      "tools",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3.6-plus:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3.7-flash:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3.7-max:free": [
+      "tools",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3.7-plus:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3.8-max:free": [
+      "tools",
+      "vision",
+      "reasoning"
+    ],
+    "xkiro/qwen/qwen3.8-omni-flash:free": [
+      "tools",
+      "vision",
       "reasoning"
     ],
     "xkiro/sensenova/sensenova-6.7-flash-lite": [
@@ -1061,6 +1221,12 @@
       "requests_per_day": 14400,
       "tokens_per_minute": null,
       "tokens_per_day": null
+    },
+    "groq/openai/gpt-oss-120b": {
+      "requests_per_minute": 30,
+      "requests_per_day": 1000,
+      "tokens_per_minute": 8000,
+      "tokens_per_day": 200000
     },
     "groq/openai/gpt-oss-20b": {
       "requests_per_minute": 30,

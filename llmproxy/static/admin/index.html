@@ -232,7 +232,9 @@ function esc(s) {
 }
 const TOKEN_KEY = "llmproxy_admin_token";
 
-let META = { valid_reasoning_levels: ["exploratory","standard","deep"], valid_capabilities: ["tools","vision","reasoning","json"], free_limit_keys: ["requests_per_minute","requests_per_day","tokens_per_minute","tokens_per_day"], reserved_provider_names: ["llmproxy"] };
+// Populated from GET /admin/api/config; intentionally empty until then so a
+// stale hardcoded copy can never disagree with the server's tier list.
+let META = { valid_reasoning_levels: [], valid_capabilities: ["tools","vision","reasoning","json"], free_limit_keys: ["requests_per_minute","requests_per_day","tokens_per_minute","tokens_per_day"], reserved_provider_names: ["llmproxy"] };
 let CATS = { believed_free: [], model_reasoning: {}, model_capabilities: {}, free_limits: {} };
 let DISCOVERED = [];
 
