@@ -5039,6 +5039,7 @@ def _quality_ordered_candidates(
     candidates: list[tuple[str, dict, str]],
     free_limits: dict[str, dict],
     reasoning_map: dict[str, str],
+    flagship_models: set[str] | None = None,
 ) -> list[tuple[str, dict, str]]:
     """Order free candidates best-first: most sophisticated model with headroom.
 
@@ -5071,7 +5072,7 @@ def _quality_ordered_candidates(
 
     def _key(item: tuple[tuple[str, dict, str], float]):
         (pn, _pc, um), score = item
-        rank, params = _quality_key(pn, um, reasoning_map)
+        rank, params = _quality_key(pn, um, reasoning_map, flagship_models)
         return (rank, params, score)
 
     viable = sorted((it for it in scored if it[1] > 0.0), key=_key, reverse=True)
@@ -5288,28 +5289,74 @@ def _get_model_reasoning(config: dict) -> dict[str, str]:
             )
         return {}
     result: dict[str, str] = {}
+    assignable = [lvl for lvl in _REASONING_LEVELS
+                  if lvl not in _OVERLAY_REASONING_LEVELS]
     for key, val in raw.items():
-        if isinstance(key, str) and isinstance(val, str) and val.lower() in _REASONING_LEVELS:
+        if isinstance(key, str) and isinstance(val, str) and val.lower() in assignable:
             result[key.lower()] = val.lower()
+        elif isinstance(val, str) and val.lower() in _OVERLAY_REASONING_LEVELS:
+            logger.warning(
+                "config['model_reasoning']: %r is a computed tier and cannot be set by "
+                "hand (entry %r) — skipping. Membership lives in config['flagship_models'].",
+                val, key,
+            )
         else:
             logger.warning(
                 "config['model_reasoning']: invalid entry %r: %r (level must be one of %s) — skipping.",
-                key, val, "/".join(_REASONING_LEVELS),
+                key, val, "/".join(assignable),
             )
     return result
 
 
+def _get_flagship_models(config: dict | None = None) -> set[str]:
+    """Lowercased set of qualified ids in the computed flagship tier.
+
+    Flagship is an overlay rather than a value in ``model_reasoning``: a member
+    keeps whatever tier tag it carries there, so promoting a model does not
+    remove it from ``llmproxy/deep``.
+
+    Entries are qualified ``provider/model`` ids, because free-tier status and
+    availability are per-provider: the same weights may be free on one provider
+    and paid on another, and each provider's instance is its own routing target.
+    """
+    cfg = config if config is not None else load_config()
+    raw = cfg.get("flagship_models")
+    if not isinstance(raw, list):
+        if raw is not None:
+            logger.warning(
+                "config['flagship_models'] must be a list; got %s — ignoring.",
+                type(raw).__name__,
+            )
+        return set()
+    return {m.lower() for m in raw if isinstance(m, str)}
+
+
 def _get_reasoning_model_candidates(level: str) -> list[tuple[str, dict, str]]:
-    """(provider_name, provider_cfg, upstream_model) for every model tagged with *level*."""
+    """(provider_name, provider_cfg, upstream_model) for every model in *level*.
+
+    For the ordinary tiers this is an equality match on ``model_reasoning``. For
+    an overlay tier (flagship) it is membership in the computed set instead, so
+    the ordinary tiers keep every model they had.
+
+    Either way the route cache is walked per provider, so a model served by
+    several providers yields one candidate each — which is what gives failover
+    something to fail over to.
+    """
     config = load_config()
-    reasoning = _get_model_reasoning(config)
+    overlay = level in _OVERLAY_REASONING_LEVELS
+    flagship = _get_flagship_models(config) if overlay else set()
+    reasoning = {} if overlay else _get_model_reasoning(config)
     candidates = []
     for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
-        lvl = (
-            reasoning.get(upstream_id.lower())
-            or reasoning.get(f"{provider_name}/{upstream_id}".lower())
-        )
-        if lvl == level:
+        qualified = f"{provider_name}/{upstream_id}".lower()
+        if overlay:
+            matched = qualified in flagship or upstream_id.lower() in flagship
+        else:
+            matched = (
+                reasoning.get(upstream_id.lower())
+                or reasoning.get(qualified)
+            ) == level
+        if matched:
             provider_cfg = get_provider(config, provider_name)
             if not provider_cfg:
                 continue
@@ -5493,6 +5540,9 @@ def _loadbalanced_ordered_candidates(
     needed = _needed_capabilities(payload)
     cap_map = _model_capabilities(config)
     reasoning_map = _get_model_reasoning(config)
+    # Flagship is an overlay, so it is not in reasoning_map; fetch it once here
+    # rather than per candidate.
+    flagship_models = _get_flagship_models(config)
 
     def _price(c: tuple[str, dict, str]) -> float:
         pn, _pc, um = c
@@ -5509,21 +5559,24 @@ def _loadbalanced_ordered_candidates(
         if tier == _TIER_PAID and not allow_paid:
             continue  # paid never an implicit fallback unless explicitly enabled
         if tier == _TIER_FREE:
-            bucket = _quality_ordered_candidates(bucket, free_limits, reasoning_map)
+            bucket = _quality_ordered_candidates(
+                bucket, free_limits, reasoning_map, flagship_models)
             bucket = _apply_favorite_free_ordering(bucket, config)
         elif tier == _TIER_LOCAL:
             # $0 like free — prefer the strongest local model (e.g. the larger
             # Ollama model) rather than rotating randomly.
             bucket = sorted(
                 bucket,
-                key=lambda c: _quality_key(c[0], c[2], reasoning_map),
+                key=lambda c: _quality_key(c[0], c[2], reasoning_map, flagship_models),
                 reverse=True,
             )
         else:
             # Paid: cost first, then sophistication as a tiebreak among equals.
             bucket = sorted(
                 bucket,
-                key=lambda c: (_price(c), tuple(-x for x in _quality_key(c[0], c[2], reasoning_map))),
+                key=lambda c: (_price(c),
+                               tuple(-x for x in _quality_key(
+                                   c[0], c[2], reasoning_map, flagship_models))),
             )
             # Paid providers are the ones that actually bill prompt caching, so
             # this is where affinity pays for itself: keep a conversation on the
@@ -5836,6 +5889,29 @@ def _virtual_model_hint(model_full: str) -> str:
     if name == "local":
         return "Check that at least one provider has a localhost base_url."
     for level in _REASONING_LEVELS:
+        # Overlay tiers are computed, so "go tag a model" is the wrong advice.
+        if level in _OVERLAY_REASONING_LEVELS:
+            where = (f"config['{level}_models'], refreshed on "
+                     f"config['{level}_tier'].refresh_frequency_days")
+            if name == level:
+                return (
+                    f"No model currently qualifies for '{level}'. Membership is "
+                    f"computed into {where}; pin one with "
+                    f"config['{level}_tier'].pin to force it in."
+                )
+            if name == f"{level}/free":
+                return (
+                    f"No '{level}' model is currently free on any configured "
+                    f"provider. Membership is computed into {where}; free status "
+                    f"is per-provider, so the same model may be paid here and "
+                    f"free elsewhere."
+                )
+            if name == f"{level}/local":
+                return (
+                    f"No '{level}' model is served by a localhost provider. "
+                    f"Membership is computed into {where}."
+                )
+            continue
         if name == level:
             return f"Tag at least one model with '{level}' in config['model_reasoning']."
         if name == f"{level}/free":
