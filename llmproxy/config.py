@@ -475,7 +475,7 @@ FLAGSHIP_TIER_DEFAULTS: dict = {
     "max_models": None,
     "pin": [],
     "exclude": [],
-    "sources": ["openrouter_aa", "epoch"],
+    "sources": ["openrouter_aa"],
     "refresh_frequency_days": 7,
 }
 

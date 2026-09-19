@@ -71,13 +71,14 @@ def test_batch_variant_collapses_to_one_model():
 # ── combining incompatible scales ───────────────────────────────────────────
 
 def test_a_wider_scale_does_not_dominate_a_narrower_one():
-    """Averaging raw scores would let Epoch's scale swamp AA's 0-100 indices.
-    Here the two sources agree on order, so the combined order must follow the
-    agreement rather than the magnitudes."""
+    """Averaging raw scores would let a 0-1000 source swamp AA's 0-100 indices,
+    which is why sources are rank-normalised before combining. Here the two
+    agree on order, so the result must follow the agreement, not the
+    magnitudes."""
     cands = [
-        Candidate("p", "best", scores={"aa": 60, "epoch": 1000}),
-        Candidate("p", "mid", scores={"aa": 50, "epoch": 600}),
-        Candidate("p", "worst", scores={"aa": 40, "epoch": 100}),
+        Candidate("p", "best", scores={"aa": 60, "wide": 1000}),
+        Candidate("p", "mid", scores={"aa": 50, "wide": 600}),
+        Candidate("p", "worst", scores={"aa": 40, "wide": 100}),
     ]
     got = combine_scores(cands)
     assert got["best"] > got["mid"] > got["worst"]
@@ -87,9 +88,9 @@ def test_sources_that_perfectly_disagree_produce_a_tie():
     """The honest answer when one source ranks a model top and another ranks it
     bottom is 'no signal', not an ordering invented from the scales."""
     cands = [
-        Candidate("p", "a", scores={"aa": 90, "epoch": 100}),
-        Candidate("p", "b", scores={"aa": 50, "epoch": 900}),
-        Candidate("p", "c", scores={"aa": 10, "epoch": 1000}),
+        Candidate("p", "a", scores={"aa": 90, "wide": 100}),
+        Candidate("p", "b", scores={"aa": 50, "wide": 900}),
+        Candidate("p", "c", scores={"aa": 10, "wide": 1000}),
     ]
     got = combine_scores(cands)
     assert len(set(got.values())) == 1
@@ -98,7 +99,7 @@ def test_sources_that_perfectly_disagree_produce_a_tie():
 def test_a_model_missing_from_one_source_is_ranked_on_the_others():
     cands = [
         Candidate("p", "a", scores={"aa": 90}),
-        Candidate("p", "b", scores={"aa": 10, "epoch": 5}),
+        Candidate("p", "b", scores={"aa": 10, "wide": 5}),
     ]
     got = combine_scores(cands)
     assert got["a"] > got["b"]

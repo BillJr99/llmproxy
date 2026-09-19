@@ -1343,8 +1343,7 @@
     "pin": [],
     "exclude": [],
     "sources": [
-      "openrouter_aa",
-      "epoch"
+      "openrouter_aa"
     ],
     "refresh_frequency_days": 7
   },

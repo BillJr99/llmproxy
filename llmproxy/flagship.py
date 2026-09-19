@@ -8,9 +8,10 @@ so it is recomputed locally and cached in ``flagship_models.json``.
 
 The rules, in the order they apply:
 
-1. **Benchmarks rank.** Sources use incompatible scales (Artificial Analysis'
-   0–100 indices, Epoch's ECI), so each source is rank-normalised to a
-   percentile and the percentiles are combined. Raw scores are never averaged.
+1. **Benchmarks rank.** Sources may use unrelated scales, so each is
+   rank-normalised to a percentile over the models it covers and the
+   percentiles are combined. Raw scores are never averaged, so adding a source
+   on a different scale cannot swamp the existing one.
 2. **Spec gates veto.** Tool-calling and a context floor. These barely
    discriminate on their own, so they are a veto rather than a selector: a
    model that cannot call tools cannot drive an agent loop whatever it scores.
@@ -246,11 +247,23 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
 # Score sources
 # ---------------------------------------------------------------------------
 #
-# Only sources whose terms permit this use are wired up. LLM Stats forbids
-# redistribution on every tier ("Technical access is not a redistribution
-# license"), and BenchLM states no licence at all, which is no grant rather
-# than a restrictive one; neither is used. Nothing fetched here is committed:
-# scores live only in the local flagship_models.json cache.
+# Only sources whose terms permit this use, and which work without credentials
+# a user would have to go and obtain, are wired up:
+#
+#   * LLM Stats forbids redistribution on every tier ("Technical access is not
+#     a redistribution license").
+#   * BenchLM states no licence at all, which is an absence of any grant
+#     rather than a restrictive one.
+#   * Epoch AI publishes under CC-BY, but its `epochai` client is an Airtable
+#     ORM: it reads AIRTABLE_PERSONAL_ACCESS_TOKEN and AIRTABLE_BASE_ID at
+#     import time and raises without them, and its data model is benchmark
+#     *runs* rather than a leaderboard. Installing it does not make the source
+#     work, it just fails quietly, so it is not a dependency. Epoch's public
+#     CC-BY CSV export would be the way to add it, keyed the same way and
+#     credited per the licence.
+#
+# Nothing fetched here is committed: scores live only in the local
+# flagship_models.json cache.
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 _FETCH_TIMEOUT = (5, 15)
@@ -298,44 +311,8 @@ def fetch_openrouter_profiles(url: str = OPENROUTER_MODELS_URL) -> dict[str, dic
     return out
 
 
-def fetch_epoch_profiles() -> dict[str, dict]:
-    """Epoch AI benchmark scores, keyed by join key.
-
-    Epoch publishes under CC-BY, so this is the one source we could cache and
-    redistribute with credit; we still keep it local. The ``epochai`` client is
-    an optional dependency — a deployment without it simply ranks on the
-    remaining sources rather than failing the refresh.
-
-    Attribution, required by CC-BY: Epoch AI, https://epoch.ai/, used under
-    the Creative Commons Attribution licence.
-    """
-    try:
-        import epochai  # type: ignore[import-not-found]
-    except ImportError:
-        return {}
-
-    out: dict[str, dict] = {}
-    try:
-        rows = epochai.benchmarks()  # pragma: no cover - optional dependency
-    except Exception:  # noqa: BLE001 — an unavailable source must not fail the run
-        return {}
-    for row in rows or []:  # pragma: no cover - optional dependency
-        name = row.get("model") if isinstance(row, dict) else None
-        score = row.get("score") if isinstance(row, dict) else None
-        if not name or score is None:
-            continue
-        key = normalize_model_id(str(name))
-        profile = out.setdefault(key, {"scores": {}, "context_length": None,
-                                       "supports_tools": False})
-        prev = profile["scores"].get("epoch")
-        if prev is None or float(score) > prev:
-            profile["scores"]["epoch"] = float(score)
-    return out
-
-
 _SOURCE_FETCHERS = {
     "openrouter_aa": fetch_openrouter_profiles,
-    "epoch": fetch_epoch_profiles,
 }
 
 

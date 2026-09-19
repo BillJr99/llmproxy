@@ -1705,16 +1705,33 @@ than waiting for the next refresh.
 
 #### Benchmark sources
 
-| Source | What it is | Licence position |
-|--------|------------|------------------|
-| `openrouter_aa` | Artificial Analysis indices embedded in OpenRouter's model catalog, under `benchmarks.artificial_analysis`. The `agentic_index` is used, being the closest published measure of tool-loop capability. | Arrives with a listing already fetched each sweep; no extra key, and ids match by construction. |
-| `epoch` | [Epoch AI](https://epoch.ai/) benchmark data, via the optional `epochai` client. Not installed by default; without it the tier simply ranks on the remaining sources. | Published under CC-BY. Attribution: Epoch AI, https://epoch.ai/, used under the Creative Commons Attribution licence. |
+One source is wired up today:
 
-Two leaderboards are deliberately **not** used. LLM Stats forbids
-redistribution on every tier, including paid ones, stating that "technical
-access is not a redistribution license". BenchLM publishes no licence at all,
-which is an absence of any grant rather than a restrictive one. Neither is
-wired up regardless of data quality.
+| Source | What it is |
+|--------|------------|
+| `openrouter_aa` | Artificial Analysis indices embedded in OpenRouter's model catalog, under `benchmarks.artificial_analysis`. The `agentic_index` is used, being the closest published measure of tool-loop capability rather than conversational preference. |
+
+It needs no API key of its own and no second scraper: the scores arrive inside
+a model listing llmproxy already fetches, so the ids match by construction
+with nothing to reconcile.
+
+`sources` is a list because adding another is meant to be easy. Each source is
+rank-normalised to a percentile before the scores are combined, so a new
+source on a completely different scale cannot swamp the existing one.
+
+**Why there is only one.** Three obvious candidates are deliberately absent:
+
+- **LLM Stats** forbids redistribution on every tier including paid ones,
+  stating that "technical access is not a redistribution license".
+- **BenchLM** publishes no licence at all, which is an absence of any grant
+  rather than a restrictive one.
+- **Epoch AI** publishes under CC-BY and would be usable, but its `epochai`
+  Python client is an Airtable ORM: it reads `AIRTABLE_PERSONAL_ACCESS_TOKEN`
+  and `AIRTABLE_BASE_ID` at import time and raises without them, and its data
+  model is individual benchmark *runs* rather than a leaderboard. Adding it as
+  a dependency would not make the source work for anyone lacking those
+  credentials — it would just fail quietly. Epoch's public CC-BY CSV export is
+  the way in if you want that data, with the attribution the licence requires.
 
 Nothing fetched from any source is committed to the repository; scores live
 only in your local `flagship_models.json`.
