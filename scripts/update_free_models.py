@@ -46,14 +46,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from llmproxy.config import (  # noqa: E402
-    load_config as load_user_config,
-)
-from llmproxy.config import (  # noqa: E402
+    FLAGSHIP_TIER_DEFAULTS,
     load_cost_probe_state,
     load_endpoint_probe_state,
     save_config,
     save_cost_probe_state,
     save_endpoint_probe_state,
+    save_update_state,
+)
+from llmproxy.config import (  # noqa: E402
+    load_config as load_user_config,
 )
 from llmproxy.providers import (  # noqa: E402
     DATA_PATH,
@@ -132,10 +134,64 @@ def cost_observed_denylist(cfg: dict | None) -> set[str]:
     return {x.lower() for x in raw if isinstance(x, str)}
 
 
+# Absence-based removal is only trusted when the enumerating fetch looks
+# plausible. A truncated or degraded catalog response would otherwise wipe a
+# provider's whole believed_free list in one sweep, so we require the response
+# to be either substantial in its own right or still to cover most of what we
+# currently believe is free for that provider.
+CATALOG_MIN_MODELS = 50
+CATALOG_MIN_RETAINED_FRACTION = 0.5
+
+
+def catalog_source_names() -> set[str]:
+    """Names of registered sources whose absence-of-evidence is meaningful.
+
+    A source qualifies when its class sets ``enumerates_catalog`` (see
+    scripts.sources.base.Source). Registry entries that are factories rather
+    than classes simply do not carry the attribute and are excluded.
+    """
+    return {
+        name for name, cls in ALL_SOURCES.items()
+        if getattr(cls, "enumerates_catalog", False)
+    }
+
+
+def _absence_is_trustworthy(
+    provider_key: str,
+    current_free: list[str],
+    seen: set[str],
+    catalog_succeeded: set[str],
+) -> bool:
+    """Whether a model's absence from the catalog fetch justifies removing it.
+
+    Absence is only meaningful when a catalog-enumerating source ran cleanly for
+    this provider AND its response looks whole. A response is taken as whole
+    when it either lists a substantial number of models outright, or still
+    accounts for most of what we currently believe is free. Anything smaller is
+    treated as a degraded fetch and suppresses absence-based removal, so one bad
+    response cannot empty believed_free.
+    """
+    if provider_key not in catalog_succeeded:
+        return False
+    if not current_free:
+        return True  # nothing to remove; the answer is moot
+    if len(seen) >= CATALOG_MIN_MODELS:
+        return True
+    retained = sum(1 for model_id in current_free if model_id in seen)
+    if retained >= len(current_free) * CATALOG_MIN_RETAINED_FRACTION:
+        return True
+    print(_warn(
+        f"  ⚠  {provider_key}: catalog fetch returned {len(seen)} model(s) and covers "
+        f"only {retained}/{len(current_free)} of believed_free — treating it as a "
+        f"partial response and skipping absence-based removal."
+    ))
+    return False
+
+
 def aggregate(
     evidence: Iterable[Evidence],
     current_sidecar: dict,
-    api_succeeded: set[str],
+    catalog_succeeded: set[str],
     denylist: set[str] | None = None,
 ) -> dict:
     """Compute proposed sidecar updates from a flat list of Evidence records.
@@ -149,20 +205,22 @@ def aggregate(
         All evidence records from all sources.
     current_sidecar
         The current providers.json contents.
-    api_succeeded
-        Set of provider_keys for which a /v1/models source ran cleanly. Only
-        these providers can produce inference-based removals (otherwise a
-        blocked host would cause silent deletions).
+    catalog_succeeded
+        Set of provider_keys for which a catalog-enumerating source ran cleanly
+        (see catalog_source_names). Only these providers can produce
+        absence-based removals, otherwise a blocked host would cause silent
+        deletions.
     """
     # provider_key -> model_id -> list[Evidence]
     by_model: dict[str, dict[str, list[Evidence]]] = defaultdict(lambda: defaultdict(list))
-    # provider_key -> set[model_id] observed by any /v1/models call
-    api_seen: dict[str, set[str]] = defaultdict(set)
+    # provider_key -> set[model_id] observed by any catalog-enumerating source
+    catalog_seen: dict[str, set[str]] = defaultdict(set)
+    catalog_sources = catalog_source_names()
 
     for ev in evidence:
         by_model[ev.provider][ev.model_id].append(ev)
-        if ev.source == "api":
-            api_seen[ev.provider].add(ev.model_id)
+        if ev.source in catalog_sources:
+            catalog_seen[ev.provider].add(ev.model_id)
 
     out: dict[str, dict] = {}
     providers = current_sidecar["providers"]
@@ -212,7 +270,22 @@ def aggregate(
                         break
 
         # Removes — high-confidence negative OR absent from a successful
-        # /v1/models fetch (only for providers where api_succeeded).
+        # catalog fetch (only where a catalog source ran cleanly and its
+        # response looks plausible).
+        trust_absence = _absence_is_trustworthy(
+            provider_key, current_free, catalog_seen[provider_key], catalog_succeeded,
+        )
+        # Models the provider no longer lists at all. Distinct from a model that
+        # merely stopped being free: a withdrawn model's routing metadata is dead
+        # weight, so apply_updates prunes it, while a repriced model keeps its
+        # tier tag because loadbalanced routing still uses it.
+        withdrawn: list[str] = []
+        if trust_absence:
+            seen = catalog_seen[provider_key]
+            tagged = set(current_free)
+            tagged.update(prov_cfg.get("model_reasoning", {}) or {})
+            tagged.update(prov_cfg.get("model_capabilities", {}) or {})
+            withdrawn = [model_id for model_id in tagged if model_id not in seen]
         for model_id in current_free:
             if model_id.lower() in deny:
                 removes.append(model_id)  # observed paid at runtime
@@ -221,15 +294,16 @@ def aggregate(
             if any(e.confidence == "high" and e.is_free is False for e in evs):
                 removes.append(model_id)
                 continue
-            if provider_key in api_succeeded:
+            if trust_absence:
                 # We have a trusted source-of-truth for what exists. If the
-                # qualified model id is absent, signal removal.
-                if model_id not in api_seen[provider_key]:
+                # qualified model id is absent, the model has been withdrawn.
+                if model_id not in catalog_seen[provider_key]:
                     removes.append(model_id)
 
         out[provider_key] = {
             "add": sorted(set(adds)),
             "remove": sorted(set(removes)),
+            "withdrawn": sorted(set(withdrawn)),
             "limits": limits,
             "capabilities": capabilities,
             "pricing": pricing,
@@ -317,6 +391,21 @@ def apply_updates(sidecar: dict, updates: dict) -> bool:
 
         # Drop limits for models we just removed.
         for mid in change["remove"]:
+            if mid in fl:
+                del fl[mid]
+                changed = True
+
+        # Drop routing metadata for models the provider no longer lists at all.
+        # A model that merely stopped being free keeps its tier tag, because
+        # loadbalanced routing still ranks it; one that has been withdrawn has
+        # nothing left to route to, and its tags would otherwise accumulate in
+        # the sidecar forever.
+        for mid in change.get("withdrawn", []):
+            for block_name in ("model_reasoning", "model_capabilities"):
+                block = prov.get(block_name)
+                if isinstance(block, dict) and mid in block:
+                    del block[mid]
+                    changed = True
             if mid in fl:
                 del fl[mid]
                 changed = True
@@ -582,9 +671,18 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         # model_capabilities from the bundled providers.json sidecar. This needs no
         # network and works when the sidecar is read-only, so the shipped/merged
         # free-tier data reaches the live config without running the full scrape.
+        #
+        # update_frequency_days is the cadence of the full network refresh. The
+        # server runs it on startup and then whenever this many days have
+        # elapsed, so a new free model (including an unsuffixed cloaked one,
+        # which is detected by $0 pricing rather than by a ":free" suffix) is
+        # picked up, a repriced model loses the free tag, and a model withdrawn
+        # upstream is dropped. Lower it to refresh more eagerly; 0 means every
+        # time the interval is checked.
         "free_tier": {
             "sync_on_startup": True,
             "update_on_startup": False,
+            "update_frequency_days": 7,
             "endpoint_probe": {
                 "frequency_minutes": 30,
                 "timeout_sec": 10,
@@ -595,6 +693,33 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
                 "frequency_days": 0,
             },
         },
+        #
+        # flagship_tier — the computed top tier (llmproxy/flagship,
+        # flagship/free, flagship/local). This block is POLICY only: the
+        # membership list itself is deployment-specific (it depends on which
+        # providers you configure and what they serve), so it is computed
+        # locally and cached in flagship_models.json beside config.json, never
+        # committed and never hand-edited here.
+        #
+        #   enabled                   master switch for the tier
+        #   min_flagship_free_models  float the bar down until at least this
+        #                             many DISTINCT free models qualify; the
+        #                             same model free on several providers
+        #                             counts once, though each provider's
+        #                             instance is its own routing target
+        #   start_percentile          where the bar starts before floating
+        #   min_context               spec veto: minimum context window
+        #   require_tools             spec veto: tool-calling required, since a
+        #                             model that cannot call tools cannot drive
+        #                             an agent loop whatever it scores
+        #   max_models                optional hard cap (null = uncapped)
+        #   pin / exclude             always-in / always-out qualified ids; a
+        #                             pin bypasses both the bar and the spec
+        #                             veto, which is the only way to admit a
+        #                             provider no benchmark covers
+        #   sources                   benchmark sources to combine
+        #   refresh_frequency_days    how often membership is recomputed
+        "flagship_tier": dict(FLAGSHIP_TIER_DEFAULTS),
         "providers_pr": {
             "enabled": False,
             "frequency_days": 0,
@@ -1066,14 +1191,17 @@ def main(argv: list[str] | None = None) -> int:
                 if not (ev.source == "cost_probe" and ev.is_free is False)
             ]
 
-    # If only "api" succeeded for a provider, we trust /models presence as
-    # ground truth for that provider.
-    api_succeeded = {
-        ev.provider for ev in all_evidence if ev.source == "api"
+    # Providers for which a catalog-enumerating source (a /v1/models listing, or
+    # OpenRouter's full price catalog) produced evidence. For those we trust
+    # presence as ground truth, so a model that has vanished upstream can leave
+    # believed_free instead of lingering forever.
+    _catalog_sources = catalog_source_names()
+    catalog_succeeded = {
+        ev.provider for ev in all_evidence if ev.source in _catalog_sources
     }
 
     sidecar = load_data()
-    updates = aggregate(all_evidence, sidecar, api_succeeded,
+    updates = aggregate(all_evidence, sidecar, catalog_succeeded,
                         denylist=cost_observed_denylist(user_cfg))
 
     # Provider filter
@@ -1132,6 +1260,9 @@ def main(argv: list[str] | None = None) -> int:
         save_cost_probe_state({"last_probe_at": now_iso}, args.config)
     if "endpoint_probe" in requested:
         save_endpoint_probe_state({"last_probe_at": now_iso}, args.config)
+    # A completed scrape is a completed refresh, whichever sources ran, so the
+    # server's update_frequency_days throttle advances from here.
+    save_update_state({"last_update_at": now_iso}, args.config)
 
     # Sync the user config even when the sidecar was unchanged — a stale config
     # should still be reconciled against the current sidecar.

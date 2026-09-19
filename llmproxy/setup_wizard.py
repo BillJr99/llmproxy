@@ -20,6 +20,12 @@ from .config import (
     save_config,
 )
 from .providers import (
+    REASONING_LEVELS as _PROVIDER_REASONING_LEVELS,
+)
+from .providers import (
+    VALID_REASONING_LEVELS as _VALID_REASONING_LEVELS,
+)
+from .providers import (
     get_provider_free_info,
     get_provider_templates,
 )
@@ -423,7 +429,12 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
 # ---------------------------------------------------------------------------
 
 _PAGE_SIZE = 20
-_REASONING_LEVELS = ("exploratory", "standard", "deep")
+# Levels a user may assign by hand, in canonical order. Derived from
+# providers.REASONING_LEVELS rather than restated, and excluding the computed
+# overlay tiers (flagship), whose membership the scraper owns.
+_REASONING_LEVELS = tuple(
+    lvl for lvl in _PROVIDER_REASONING_LEVELS if lvl in _VALID_REASONING_LEVELS
+)
 _CAPABILITIES = ("tools", "vision", "reasoning", "json")
 
 
@@ -627,7 +638,7 @@ def _edit_model_tags(config: dict, providers: dict) -> bool:
         options = [
             "Add model to believed_free",
             "Remove model from believed_free",
-            "Tag model with reasoning level  (exploratory / standard / deep)",
+            f"Tag model with reasoning level  ({' / '.join(_REASONING_LEVELS)})",
             "Remove reasoning tag from model",
             "Tag model with capabilities  (tools / vision / reasoning / json)",
             "Remove capability tag from model",

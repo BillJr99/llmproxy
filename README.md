@@ -169,6 +169,7 @@ The families are:
 | Cost-tiered (default)     | `llmproxy/loadbalanced`                              | The whole pool, walked free → local → paid |
 | General                   | `llmproxy/free`, `llmproxy/local`                    | All free / all localhost-served models |
 | Reasoning level           | `llmproxy/exploratory`, `llmproxy/standard`, `llmproxy/deep` (+ `/free`, `/local`) | Models tagged at that reasoning tier |
+| Flagship (computed)       | `llmproxy/flagship` (+ `/free`, `/local`)            | The models nearest the state of the art, [selected automatically](#flagship-tier) |
 | Capability                | `llmproxy/tools`, `llmproxy/vision` (+ `/free`)     | Models tagged with that capability |
 | Per-provider              | `llmproxy/<provider>` (+ `/<dimension>`)            | One provider's models, optionally sliced |
 | Fusion (deliberation)     | `llmproxy/fusion`, `llmproxy/fusion__free`           | A panel of models, judged + synthesized |
@@ -444,7 +445,14 @@ is exposed to virtual routing.
 You can optionally tag individual models in the config with a **reasoning
 level** — `exploratory`, `standard`, or `deep` — to group them by how much
 thinking effort they are expected to apply.  When at least one model is tagged
-with a given level, llmproxy exposes corresponding virtual endpoints:
+with a given level, llmproxy exposes corresponding virtual endpoints.
+
+There is a fourth tier, [`flagship`](#flagship-tier), which sits above `deep`.
+It works differently in one important way: you do not tag models with it.
+Membership is computed from benchmark data and refreshed automatically, and it
+is an *overlay* rather than a fourth exclusive level, so a flagship model keeps
+whatever `deep` or `standard` tag it already carries and `llmproxy/deep` does
+not lose its strongest models.
 
 | Virtual model name           | Selects                                                       |
 |------------------------------|---------------------------------------------------------------|
@@ -457,6 +465,9 @@ with a given level, llmproxy exposes corresponding virtual endpoints:
 | `llmproxy/standard__local`   | Models tagged `standard` **and** served on localhost          |
 | `llmproxy/deep__free`        | Models tagged `deep` **and** qualifying as free-tier          |
 | `llmproxy/deep__local`       | Models tagged `deep` **and** served on localhost              |
+| `llmproxy/flagship`          | [Computed](#flagship-tier) — the models nearest the state of the art |
+| `llmproxy/flagship__free`    | Flagship models **and** free on that provider                 |
+| `llmproxy/flagship__local`   | Flagship models **and** served on localhost                   |
 
 Each endpoint cycles through its pool using the
 [shared failover rules](#how-cycling--failover-works); the `/free` variants are
@@ -1477,7 +1488,7 @@ Two opt-in, top-level config flags (both default `false`) let you keep
 **On by default.** On every boot, the server reconciles your **live `config.json`**'s
 `believed_free` / `free_limits` / `model_reasoning` / `model_capabilities` from the
 bundled `providers.json` sidecar — the same data that ships with the package and is
-refreshed by the [weekly CI PR](#automated-providersjson-updates-ci). This is the
+refreshed by the [providers PR workflow](#automated-providersjson-updates-ci). This is the
 piece that makes merged/`pip install -U` updates actually reach a running proxy:
 
 - It does **no network scraping** and **never writes the sidecar or
@@ -1527,6 +1538,13 @@ through the server log with a `[startup-update]` prefix (at `INFO` level), so se
 startup run includes the active cost probe (and, with `free_tier.probe.autoremove`,
 removes any model it finds is no longer free). Defaults to `false`.
 
+The startup run is throttled by
+[`free_tier.update_frequency_days`](#refresh-cadence) (default 7), so enabling
+this flag on a deployment that restarts often does not re-scrape every provider
+on every boot. Leaving it `false` does not mean the deployment never refreshes:
+the periodic check described under [Refresh cadence](#refresh-cadence) still
+runs on the same interval.
+
 > The scraper lives in the repo-root `scripts/` package. The Docker image ships
 > it, and the server adds its parent directory to `sys.path` so the import works
 > under gunicorn. If a slimmed-down deployment omits `scripts/`, the server logs
@@ -1534,6 +1552,233 @@ removes any model it finds is no longer free). Defaults to `false`.
 > rewrite is **ephemeral in a container** (it lives in the image layer) — the
 > durable effect is the `config.json` sync on your mounted volume. To land sidecar
 > changes back in the repo, use the [CI auto-update workflow](#automated-providersjson-updates-ci).
+
+<a name="refresh-cadence"></a>
+### Refresh cadence — `free_tier.update_frequency_days`
+
+The refresh is **not** a cron job and needs no scheduler. A running proxy checks
+whether a refresh is due, and runs one if so, at startup and then periodically
+while it serves traffic. `free_tier.update_frequency_days` sets how often that
+may happen, and defaults to weekly:
+
+```json
+{
+  "free_tier": {
+    "sync_on_startup": true,
+    "update_on_startup": false,
+    "update_frequency_days": 7
+  }
+}
+```
+
+The cadence is what makes the free-model list self-maintaining. Each refresh
+re-reads every default source, so within one interval:
+
+- a **newly free model is picked up**, including an unsuffixed cloaked or
+  "stealth" model. Detection keys on `$0` pricing in the provider catalog rather
+  than on a `:free` suffix, so a model does not have to be named `…:free` to be
+  found;
+- a model that is **no longer free loses the tag**, because a non-zero price is
+  high-confidence evidence against it; and
+- a model that has been **withdrawn upstream is dropped**, because a catalog
+  that no longer lists it is treated as authoritative about what exists.
+
+Set a smaller number to refresh more eagerly, or `0` to refresh every time the
+interval is checked. The last-run timestamp lives in `update_state.json` beside
+your `config.json`, not in the config itself, so restarting the server does not
+trigger a fresh scrape on every boot; a deployment that restarts constantly still
+scrapes about once per interval.
+
+Two related settings sit nearby and are easy to confuse:
+
+- `free_tier.sync_on_startup` (default `true`) is the **no-network** path. It
+  reconciles your `config.json` from the bundled `providers.json` sidecar at
+  boot. See [`sync_on_startup`](#sync-on-startup).
+- `free_tier.update_on_startup` (default `false`) additionally runs the network
+  scrape during startup itself rather than leaving it to the periodic check. It
+  honours `update_frequency_days` too. See
+  [`update_on_startup`](#update-on-startup).
+- `free_tier.endpoint_probe.frequency_minutes` throttles the opt-in
+  endpoint-probe **source** *within* a refresh. Because that source only runs as
+  part of a refresh, it cannot fire more often than `update_frequency_days`
+  allows.
+
+<a name="flagship-tier"></a>
+### The flagship tier — `flagship_tier`
+
+`llmproxy/flagship` routes only to models near the current state of the art:
+the ones actually capable of driving a long agentic loop. It sits above `deep`
+in the tier order, so a flagship model outranks everything else when the proxy
+picks a candidate.
+
+Three things make it different from the other tiers.
+
+**You never tag models with it.** Membership is computed from benchmark data
+and refreshed on a schedule. `flagship` is rejected if you try to set it in
+`model_reasoning`, and it is not offered in the setup wizard's level picker.
+
+**It is an overlay, not a fourth exclusive level.** A flagship model keeps its
+existing `deep` or `standard` tag and appears in both places. Promoting your
+best models therefore does not empty out `llmproxy/deep`, which is what a
+fourth exclusive tier would have done.
+
+**Nothing about it is shipped or committed.** Which models qualify depends
+entirely on which providers *you* have configured and what each of them
+currently serves, so the list is different for every install. It is computed
+locally into `flagship_models.json` beside your `config.json`, alongside the
+other machine-managed state files. Your config holds only policy — the pin and
+exclude lists.
+
+A prompt's size never drifts into flagship, either. The request-fit heuristic
+tops out at `deep`; flagship is reachable only by asking for it by name.
+
+#### How membership is decided
+
+Four rules, in this order:
+
+1. **Benchmarks rank.** Sources use incompatible scales, so each is
+   rank-normalised to a percentile over the models it covers and the
+   percentiles are combined with a median. Raw scores are never averaged. A
+   model missing from one source is ranked on the sources that do cover it
+   rather than penalised for the gap.
+2. **Spec gates veto.** Tool-calling support and a context-window floor. These
+   are a veto rather than a selector: on their own they admit almost
+   everything, but they correctly reject a model that cannot call tools, which
+   cannot drive an agent loop whatever it scores. A model whose capabilities
+   cannot be determined fails the gate.
+3. **The bar floats.** Starting from `start_percentile`, the bar is lowered
+   until at least `min_flagship_free_models` **distinct** free models qualify.
+   There is no lower bound, so a thin free tier produces a smaller tier rather
+   than an error.
+4. **Pins and excludes win.** A pin bypasses both the bar and the spec veto.
+   An exclude is applied last and beats everything, including a pin.
+
+#### Free is per-provider
+
+The same weights can be free on one provider and paid on another, so free
+status is a property of the *routing target*, not of the model. Every
+provider's instance of a flagship model is its own candidate in
+`llmproxy/flagship`, and only the free ones appear in `flagship/free`.
+
+Cross-provider duplicates count **once** toward `min_flagship_free_models`,
+because three providers serving the same weights is one model's worth of
+capability. They remain separate routing targets, though, since each has its
+own quota, rate limits and outage profile — which is exactly what failover
+needs.
+
+#### Configuration
+
+Paste this block at the top level of `config.json`, beside `free_tier`. Every
+key is optional; a config without the block behaves as if it contained these
+values, so upgrading needs no edit.
+
+```json
+"flagship_tier": {
+  "enabled": true,
+  "min_flagship_free_models": 5,
+  "start_percentile": 0.9,
+  "min_context": 200000,
+  "require_tools": true,
+  "max_models": null,
+  "pin": [],
+  "exclude": [],
+  "sources": ["openrouter_aa", "epoch"],
+  "refresh_frequency_days": 7
+}
+```
+
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `enabled` | `true` | Master switch. When false, no recompute runs and no network calls are made for the tier. |
+| `min_flagship_free_models` | `5` | Lower the bar until at least this many **distinct** free models qualify. Cross-provider duplicates count once. Best-effort: if the free pool is smaller, you get what there is. |
+| `start_percentile` | `0.9` | Where the bar starts before floating downward. Raise it for a stricter tier; the free floor may still pull it below this. |
+| `min_context` | `200000` | Spec veto: minimum context window. `0` disables the check. |
+| `require_tools` | `true` | Spec veto: the model must support tool calling. Set false at your own risk — a model that cannot call tools cannot run an agent loop. |
+| `max_models` | `null` | Optional hard cap on distinct models. `null` means uncapped. |
+| `pin` | `[]` | Qualified `provider/model` ids always admitted, bypassing both the bar and the spec veto. |
+| `exclude` | `[]` | Qualified ids never admitted. Applied last, so it beats a pin. |
+| `sources` | `["openrouter_aa", "epoch"]` | Which benchmark sources to combine. |
+| `refresh_frequency_days` | `7` | How often membership is recomputed. `0` recomputes every time the interval is checked. |
+
+Pins and excludes take effect immediately, when membership is read, rather
+than waiting for the next refresh.
+
+#### Benchmark sources
+
+One source is wired up today:
+
+| Source | What it is |
+|--------|------------|
+| `openrouter_aa` | Artificial Analysis indices embedded in OpenRouter's model catalog, under `benchmarks.artificial_analysis`. The `agentic_index` is used, being the closest published measure of tool-loop capability rather than conversational preference. |
+
+It needs no API key of its own and no second scraper: the scores arrive inside
+a model listing llmproxy already fetches, so the ids match by construction
+with nothing to reconcile.
+
+`sources` is a list because adding another is meant to be easy. Each source is
+rank-normalised to a percentile before the scores are combined, so a new
+source on a completely different scale cannot swamp the existing one.
+
+**Why there is only one.** Three obvious candidates are deliberately absent:
+
+- **LLM Stats** forbids redistribution on every tier including paid ones,
+  stating that "technical access is not a redistribution license".
+- **BenchLM** publishes no licence at all, which is an absence of any grant
+  rather than a restrictive one.
+- **Epoch AI** publishes under CC-BY and would be usable, but its `epochai`
+  Python client is an Airtable ORM: it reads `AIRTABLE_PERSONAL_ACCESS_TOKEN`
+  and `AIRTABLE_BASE_ID` at import time and raises without them, and its data
+  model is individual benchmark *runs* rather than a leaderboard. Adding it as
+  a dependency would not make the source work for anyone lacking those
+  credentials — it would just fail quietly. Epoch's public CC-BY CSV export is
+  the way in if you want that data, with the attribution the licence requires.
+
+Nothing fetched from any source is committed to the repository; scores live
+only in your local `flagship_models.json`.
+
+#### Coverage, and when to use a pin
+
+Benchmark coverage stops at the major labs. A small or direct provider —
+`atria-asi`, for example — appears on no leaderboard, so nothing can score it
+and it will never be admitted automatically no matter how good it is. The pin
+list is the intended answer:
+
+```json
+"flagship_tier": {
+  "pin": ["atria-asi/Atria-Dawn-Preview"]
+}
+```
+
+A pin bypasses the spec veto too, since an unscraped provider has no
+capability data to check. The refresh logs a warning naming any pinned id it
+could not verify, so an unnoticed typo does not silently do nothing.
+
+Where a provider does not publish capability data but serves the same weights
+as a provider that does, the specs and score are carried across by matching
+normalised model names. That join is a heuristic and can be wrong; a pin or an
+exclude is the way to overrule it.
+
+#### When the tier is empty
+
+Until the first refresh completes — or if nothing qualifies — `llmproxy/flagship`
+is hidden from `GET /v1/models`, and requesting it directly returns `503` with a
+message explaining that membership is computed and pointing at the pin list.
+
+It deliberately does **not** fall back to `deep`. Silently serving a weaker
+model would defeat the purpose of asking for flagship, and would be impossible
+to notice.
+
+#### Refresh cadence
+
+Membership is recomputed automatically: once at startup, and thereafter
+whenever `refresh_frequency_days` has elapsed, checked on the same interval
+tick as the other background jobs. The last-run timestamp lives in
+`flagship_models.json`, so restarting the server does not trigger a fresh
+recompute on every boot.
+
+The candidate pool is everything this deployment can actually reach: every
+model of every configured provider, paid included. That is why the list is
+deployment-specific, and why it changes when you add a provider.
 
 <a name="pr-providers-list"></a>
 ### Proposing `providers.json` changes as a PR — `providers_pr.enabled`
@@ -1804,13 +2049,18 @@ A scraper at `scripts/update_free_models.py` polls multiple sources, diffs the
 result against the sidecar, and prints proposed adds / removes / limit changes
 for human review.
 
+You rarely need to run it by hand. A running proxy runs the same scraper on the
+cadence set by [`free_tier.update_frequency_days`](#refresh-cadence), so its live
+view of what is free stays current on its own; the manual and CI paths exist to
+land those changes durably in the repository.
+
 ### Sources
 
 | Source       | Confidence | What it does |
 |--------------|------------|--------------|
-| `openrouter` | high       | Hits `https://openrouter.ai/api/v1/models` and flags any model with `pricing.prompt == 0` as free; also reports per-token prices for paid models into the sidecar `pricing` block. |
+| `openrouter` | high       | Hits `https://openrouter.ai/api/v1/models` and flags any model with `pricing.prompt == 0` as free, whether or not its id carries a `:free` suffix — this is what catches unsuffixed cloaked models. Also reports per-token prices for paid models into the sidecar `pricing` block, and, because the endpoint is the gateway's full catalog, drives removals for models withdrawn upstream. |
 | `docs`       | high       | Per-provider HTML scrapers for published rate-limit / free-tier pages (Google, Groq, Cerebras, Cohere, Token Harbor). Add more under `scripts/sources/docs/`. |
-| `api`        | medium     | Calls each provider's OpenAI-compatible `/v1/models` endpoint when `<PROVIDER>_API_KEY` is set in your environment. Used to detect *removals* (a believed-free model that's no longer listed). |
+| `api`        | medium     | Calls each provider's OpenAI-compatible `/v1/models` endpoint when `<PROVIDER>_API_KEY` is set in your environment. One of the sources that can detect *removals* — see [Removing withdrawn models](#removing-withdrawn-models). |
 | `litellm_cost_map` | medium | Reads the public [litellm](https://github.com/BerriAI/litellm) pricing map: flags zero-priced models as free **and** snapshots per-token prices for paid ones into the sidecar `pricing` block (used by the proxy to cost tokens offline — see [Token + cost accounting](#usage-accounting)). |
 | `together`   | high       | When `TOGETHER_API_KEY` is set, reads Together's `/v1/models` pricing — zero-priced models are free; paid models contribute per-token prices to the `pricing` block. |
 | `fireworks`  | high       | When `FIREWORKS_API_KEY` is set, reads Fireworks' `/inference/v1/models` and flags models marked `is_free`/`serverless_billing: free` or zero-priced as free. |
@@ -1826,6 +2076,35 @@ authoritative per-token prices. The result powers offline cost accounting and th
 [`llmproxy/loadbalanced`](#the-loadbalanced-virtual-model) paid-tier ranking, and
 is committed alongside `believed_free` in the same providers.json refresh (and the
 [automated PR](#keeping-the-free-models-list-current), when enabled).
+
+<a name="removing-withdrawn-models"></a>
+### Removing withdrawn models
+
+A model leaves `believed_free` for one of three reasons. The first two are
+straightforward: a high-confidence source reports a non-zero price for it, or the
+proxy observed it billing a real cost at runtime and recorded it in
+`cost_observed_free_tier` (see
+[Verifying free models are actually free](#cost-flags)).
+
+The third is absence. Short-lived models, cloaked previews especially, tend not
+to be repriced when they end; they simply stop being listed. A model that no
+source mentions produces no evidence at all, so absence is only treated as
+removal under two conditions:
+
+1. the model is missing from a source that enumerates the provider's **entire**
+   catalog, currently OpenRouter's `/api/v1/models` and any provider's
+   `/v1/models` listing via the `api` source. A docs scraper reads a free-tier
+   page rather than a catalog, so its silence about a model means nothing and
+   never removes anything; and
+2. that catalog response looks whole. A response is trusted when it either lists
+   a substantial number of models outright, or still accounts for at least half
+   of what is currently believed free for that provider. A truncated or degraded
+   fetch falls below that floor, and the run logs that it is skipping
+   absence-based removal for the provider rather than emptying the list.
+
+Together these mean a cloaked model that appears at `$0`, is used for a while,
+and then disappears will be added and later dropped without anyone editing
+`providers.json` by hand.
 
 ### Usage
 
@@ -1925,10 +2204,12 @@ COHERE_API_KEY=...          SAMBANOVA_API_KEY=...
 <a name="automated-providersjson-updates-ci"></a>
 ### Automated `providers.json` updates (CI → PR)
 
-A scheduled GitHub Actions workflow,
+A GitHub Actions workflow,
 [`.github/workflows/update-providers.yml`](.github/workflows/update-providers.yml),
 keeps the sidecar current **in the repository** without anyone running the
-scraper by hand. Once a week (and on demand via the Actions tab) it:
+scraper by hand. It is **manual only**: there is no schedule, so it runs exactly
+when you trigger it from the Actions tab (or with
+`gh workflow run update-providers.yml`). When it runs it:
 
 1. runs `python scripts/update_free_models.py` with the default, read-only
    sources — provider docs, `/models` catalogs, OpenRouter, the litellm cost
@@ -1941,20 +2222,29 @@ scraper by hand. Once a week (and on demand via the Actions tab) it:
    When nothing changed, no PR is created. The run logs the `git status` diff
    and the action logs whether a PR was opened.
 
-**Enabling / disabling.** A GitHub Action can't read your deployment's private
-`config.json`, so the on/off switch is a **repository variable** rather than a
-config flag: set `PROVIDERS_AUTOUPDATE` to `false` under *Settings → Secrets and
-variables → Actions → Variables* to disable the scheduled run (it is treated as
-enabled unless explicitly `false`). Manual `workflow_dispatch` runs always
-execute. The workflow needs `contents: write` and `pull-requests: write`
-permissions (already declared in the file); if your org disables PR creation by
+**Running it on a schedule (optional).** Most deployments do not need this: a
+running proxy already refreshes itself on its own cadence, as described in
+[Refresh cadence](#refresh-cadence) below, and the workflow exists to land those
+same updates in the repository as a reviewable PR. If you would rather the repo
+refresh itself without being asked, add a `schedule:` block to the workflow's
+`on:` section, for example weekly on Monday at 06:00 UTC:
+
+```yaml
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 6 * * 1"
+```
+
+The workflow needs `contents: write` and `pull-requests: write` permissions
+(already declared in the file); if your organization disables PR creation by
 `GITHUB_TOKEN`, enable it under *Settings → Actions → General → Workflow
 permissions*.
 
-> This repo-level workflow and the server-side
-> [`free_tier.update_on_startup`](#update-on-startup) flag are complementary:
-> the workflow lands durable updates in the repo via reviewable PRs, while the
-> startup flag refreshes a running deployment's live config.
+> This repo-level workflow and the server-side refresh are complementary: the
+> workflow lands durable updates in the repo via reviewable PRs, while the
+> running proxy refreshes its own live config on the cadence set by
+> [`free_tier.update_frequency_days`](#refresh-cadence).
 
 ---
 

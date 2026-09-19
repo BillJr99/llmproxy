@@ -49,7 +49,25 @@ _TEMPLATE_FIELDS = frozenset({
 # Fields that belong to the free-tier metadata view.
 _FREE_INFO_FIELDS = ("believed_free", "model_reasoning", "model_capabilities", "free_limits")
 
-VALID_REASONING_LEVELS = frozenset({"exploratory", "standard", "deep"})
+# The reasoning tiers, ordered weakest to strongest. This tuple is the single
+# source of truth: routing rank is its index (server._quality_key), and the
+# virtual-endpoint name sets are comprehensions over it, so order is load
+# bearing and a new tier belongs at the end. server.py and setup_wizard.py
+# import it rather than restating it; tests/test_reasoning_levels.py asserts
+# that every consumer agrees.
+#
+# flagship is an OVERLAY on top of the other three rather than a fourth
+# exclusive level: a flagship model keeps its own deep/standard tag in
+# model_reasoning and additionally appears in the flagship membership set, so
+# promoting a model does not empty it out of llmproxy/deep.
+REASONING_LEVELS: tuple[str, ...] = ("exploratory", "standard", "deep", "flagship")
+
+# The tier membership is computed, not hand-tagged, so it is not offered in the
+# wizard's manual level picker and never inferred from a model name.
+OVERLAY_REASONING_LEVELS: frozenset[str] = frozenset({"flagship"})
+
+# Levels a user may set by hand on a model (admin API, wizard, config).
+VALID_REASONING_LEVELS = frozenset(REASONING_LEVELS) - OVERLAY_REASONING_LEVELS
 FREE_LIMIT_KEYS = ("requests_per_minute", "requests_per_day",
                    "tokens_per_minute", "tokens_per_day")
 # Per-token USD prices recorded in the top-level providers.json "pricing" block.

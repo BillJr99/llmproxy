@@ -84,9 +84,11 @@ from . import fusion as _fusion
 from .config import (
     RESERVED_PROVIDER_NAMES,
     account_bound_cfg,
+    flagship_tier_cfg,
     get_config_path,
     get_provider,
     load_config,
+    load_flagship_state,
     model_is_allowed,
     parse_model_string,
     provider_account_id,
@@ -96,9 +98,11 @@ from .config import (
     provider_base_url,
     resolve_env_refs,
     save_config,
+    save_flagship_state,
 )
 from .dialects import get_inbound, get_outbound
 from .dialects.responses import UnknownPreviousResponse
+from .providers import OVERLAY_REASONING_LEVELS, REASONING_LEVELS
 from .signals import (
     SOURCE_NEUTRAL,
     extract_tool_signals,
@@ -149,7 +153,17 @@ class _StripApiPrefix:
 
 app.wsgi_app = _StripApiPrefix(app.wsgi_app)
 
-_REASONING_LEVELS: tuple[str, ...] = ("exploratory", "standard", "deep")
+# Canonical tier order lives in llmproxy/providers.py; see REASONING_LEVELS
+# there for why it is ordered and why flagship is an overlay. Aliased here
+# because the virtual-model name sets below are comprehensions over it.
+_REASONING_LEVELS: tuple[str, ...] = REASONING_LEVELS
+# Tiers whose membership is computed rather than read from model_reasoning.
+_OVERLAY_REASONING_LEVELS: frozenset[str] = OVERLAY_REASONING_LEVELS
+# The strongest tier a prompt-size heuristic may target on its own. Overlay
+# tiers are opt-in by name only, never reached by the router drifting upward.
+_MAX_INFERRED_LEVEL_INDEX: int = max(
+    i for i, lvl in enumerate(_REASONING_LEVELS) if lvl not in OVERLAY_REASONING_LEVELS
+)
 # Capabilities that get their own capability-selecting virtual endpoints
 # (llmproxy__tools, llmproxy__vision, and their /free variants).
 _CAPABILITY_VIRTUALS: tuple[str, ...] = ("tools", "vision")
@@ -783,8 +797,10 @@ _PROBE_INTERVAL_GATE_SEC = 60   # check state files at most once per minute
 _last_probe_interval_check: float = 0.0
 _probe_interval_check_lock = threading.Lock()
 
-_endpoint_probe_inflight: bool = False
-_endpoint_probe_lock = threading.Lock()
+_free_update_inflight: bool = False
+_free_update_lock = threading.Lock()
+_flagship_refresh_inflight: bool = False
+_flagship_refresh_lock = threading.Lock()
 _cost_probe_inflight: bool = False
 _cost_probe_lock = threading.Lock()
 
@@ -1734,13 +1750,15 @@ def _run_free_models_update(config: dict, config_path: str | None) -> bool:
 
 
 def _maybe_fire_interval_probes(config_path: str | None = None) -> None:
-    """Check frequency intervals for endpoint probe, cost probe, and PR creation.
+    """Check frequency intervals for the free-models refresh, the cost probe,
+    and PR creation.
 
     Fires each as a background daemon thread if its interval has elapsed.
     Gated by _PROBE_INTERVAL_GATE_SEC so state files are not read on every
-    single request — the actual probe frequency is set in config.json.
+    single request — the actual cadence is set in config.json.
 
-    Endpoint probe: gated by sync_on_startup OR update_on_startup.
+    Free-models refresh: gated by sync_on_startup OR update_on_startup, and
+      throttled by free_tier.update_frequency_days (default 7).
     Cost probe: gated by update_on_startup AND cost_probe.enabled.
     PR creation: checked independently of startup flags.
     """
@@ -1757,9 +1775,12 @@ def _maybe_fire_interval_probes(config_path: str | None = None) -> None:
         return
     free_tier = config.get("free_tier", {}) if isinstance(config.get("free_tier"), dict) else {}
 
-    # Endpoint probe — gated by sync_on_startup OR update_on_startup.
+    # Full free-models refresh — gated by sync_on_startup OR update_on_startup.
     if free_tier.get("sync_on_startup") or free_tier.get("update_on_startup"):
-        _maybe_fire_endpoint_probe(config, free_tier, config_path)
+        _maybe_fire_free_models_update(config, free_tier, config_path)
+
+    # Flagship membership — independent cadence, gated by flagship_tier.enabled.
+    _maybe_fire_flagship_refresh(config, flagship_tier_cfg(config), config_path)
 
     # Cost probe — gated by update_on_startup + cost_probe.enabled.
     if free_tier.get("update_on_startup") and free_tier.get("cost_probe", {}).get("enabled"):
@@ -1769,48 +1790,197 @@ def _maybe_fire_interval_probes(config_path: str | None = None) -> None:
     _maybe_fire_pr_if_due(config, config_path)
 
 
-def _maybe_fire_endpoint_probe(
-    config: dict, free_tier: dict, config_path: str | None
-) -> None:
-    ep_cfg = free_tier.get("endpoint_probe", {})
-    freq_min = ep_cfg.get("frequency_minutes", 30)
-    freq_days = freq_min / 1440.0
+DEFAULT_UPDATE_FREQUENCY_DAYS = 7
+
+
+def _free_update_due(free_tier: dict, config_path: str | None) -> bool:
+    """Whether the full free-models refresh is due per update_frequency_days.
+
+    Returns False when the updater is not importable in this deployment, since
+    there is then nothing to run. A frequency of 0 or less means "every time",
+    matching the other throttles in this module.
+    """
     try:
         import os as _os
         import sys
         repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
         if repo_root not in sys.path:
             sys.path.insert(0, repo_root)
-        from llmproxy.config import load_endpoint_probe_state
+        from llmproxy.config import load_update_state
         from scripts.update_free_models import _probe_due
     except Exception:  # noqa: BLE001 — scripts/ may not be available
-        return
-    state = load_endpoint_probe_state(config_path)
-    due, _ = _probe_due(state.get("last_probe_at"), freq_days)
-    if not due:
+        return False
+    freq_days = free_tier.get("update_frequency_days", DEFAULT_UPDATE_FREQUENCY_DAYS)
+    state = load_update_state(config_path)
+    due, _ = _probe_due(state.get("last_update_at"), freq_days)
+    return due
+
+
+def _flagship_refresh_due(tier_cfg: dict, config_path: str | None) -> bool:
+    """Whether the flagship membership recompute is due.
+
+    Mirrors _free_update_due. A frequency of 0 or less means "every time", and
+    a disabled tier is never due.
+    """
+    if not tier_cfg.get("enabled", True):
+        return False
+    try:
+        import os as _os
+        import sys
+        repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from scripts.update_free_models import _probe_due
+    except Exception:  # noqa: BLE001
+        return False
+    state = load_flagship_state(config_path)
+    due, _ = _probe_due(state.get("last_refresh_at"),
+                        tier_cfg.get("refresh_frequency_days", 7))
+    return due
+
+
+def _recompute_flagship_members(config: dict, config_path: str | None) -> dict | None:
+    """Recompute flagship membership against everything this deployment sees.
+
+    The candidate pool is the whole route cache — every model of every
+    configured provider, paid included — not just believed_free and not just
+    one gateway's catalog. Free status is evaluated per candidate, so the same
+    weights can be free on one provider and paid on another.
+
+    Capability specs come from the provider's own listing where the sidecar has
+    them and from the benchmark profile otherwise, joined on the normalised
+    model key. That join is heuristic, which is why a pin exists to override it.
+
+    Returns the state written to flagship_models.json, or None if the refresh
+    could not run.
+    """
+    from .flagship import (
+        Candidate,
+        fetch_profiles,
+        normalize_model_id,
+        select_flagship,
+    )
+
+    tier_cfg = flagship_tier_cfg(config)
+    profiles = fetch_profiles(tier_cfg.get("sources"))
+    if not profiles:
+        logger.warning("[flagship] no benchmark source returned data; keeping previous membership")
+        return None
+
+    candidates: list[Candidate] = []
+    for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
+        provider_cfg = get_provider(config, provider_name)
+        if not provider_cfg or not _provider_exposes_to_virtual_models(provider_cfg):
+            continue
+        profile = profiles.get(normalize_model_id(upstream_id), {})
+        candidates.append(Candidate(
+            provider=provider_name,
+            upstream_id=upstream_id,
+            is_free=(not _is_local_url(provider_base_url(provider_cfg))
+                     and _is_model_free(provider_name, upstream_id, config)),
+            context_length=profile.get("context_length"),
+            supports_tools=profile.get("supports_tools"),
+            scores=dict(profile.get("scores") or {}),
+        ))
+
+    selection = select_flagship(candidates, tier_cfg)
+    if selection.unverified_pins:
+        logger.warning(
+            "[flagship] pinned but not found among this deployment's models "
+            "(admitted anyway, and unverifiable against the spec gate): %s",
+            ", ".join(selection.unverified_pins),
+        )
+    state = {
+        "last_refresh_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        "bar": selection.bar,
+        "members": selection.members,
+        "distinct_models": selection.distinct_models,
+        "free_models": selection.free_models,
+        "candidates_considered": len(candidates),
+    }
+    save_flagship_state(state, config_path)
+    logger.info(
+        "[flagship] %d routing target(s) across %d distinct model(s), "
+        "%d of them free, from %d candidate(s)",
+        len(selection.members), len(selection.distinct_models),
+        len(selection.free_models), len(candidates),
+    )
+    return state
+
+
+def _maybe_fire_flagship_refresh(
+    config: dict, tier_cfg: dict, config_path: str | None
+) -> None:
+    """Recompute flagship membership in the background when its cadence is due.
+
+    Modelled on _maybe_fire_free_models_update: the tier has to maintain itself
+    without anyone running anything, since the whole point is that models enter
+    as they ship and leave as the field moves past them.
+    """
+    if not _flagship_refresh_due(tier_cfg, config_path):
         return
 
-    global _endpoint_probe_inflight
-    with _endpoint_probe_lock:
-        if _endpoint_probe_inflight:
+    global _flagship_refresh_inflight
+    with _flagship_refresh_lock:
+        if _flagship_refresh_inflight:
             return
-        _endpoint_probe_inflight = True
+        _flagship_refresh_inflight = True
 
     def _run() -> None:
-        global _endpoint_probe_inflight
+        global _flagship_refresh_inflight
         try:
-            logger.info("[endpoint-probe] interval due — running endpoint probe")
+            logger.info("[flagship] refresh interval due — recomputing membership")
+            if _recompute_flagship_members(load_config(), config_path):
+                with _models_list_cache_lock:
+                    global _models_list_cache
+                    _models_list_cache = None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[flagship] refresh failed: %s", exc)
+        finally:
+            with _flagship_refresh_lock:
+                _flagship_refresh_inflight = False
+
+    threading.Thread(target=_run, daemon=True, name="flagship-refresh").start()
+
+
+def _maybe_fire_free_models_update(
+    config: dict, free_tier: dict, config_path: str | None
+) -> None:
+    """Run the full free-models refresh in the background when its cadence is due.
+
+    This is the scheduled sweep: it re-scrapes every default source, so new free
+    models (including unsuffixed cloaked ones, which are detected by $0 pricing
+    rather than by a ":free" suffix) are picked up, repriced models lose the free
+    tag, and models withdrawn upstream are dropped. The cadence is
+    free_tier.update_frequency_days, default 7. The opt-in endpoint-probe source
+    is throttled separately inside the updater by
+    free_tier.endpoint_probe.frequency_minutes, and so cannot run more often than
+    this refresh does.
+    """
+    if not _free_update_due(free_tier, config_path):
+        return
+
+    global _free_update_inflight
+    with _free_update_lock:
+        if _free_update_inflight:
+            return
+        _free_update_inflight = True
+
+    def _run() -> None:
+        global _free_update_inflight
+        try:
+            logger.info("[free-update] refresh interval due — running free-models update")
             _run_free_models_update(load_config(), config_path)
             with _models_list_cache_lock:
                 global _models_list_cache
                 _models_list_cache = None
         except Exception as exc:  # noqa: BLE001
-            logger.warning("[endpoint-probe] failed: %s", exc)
+            logger.warning("[free-update] failed: %s", exc)
         finally:
-            with _endpoint_probe_lock:
-                _endpoint_probe_inflight = False
+            with _free_update_lock:
+                _free_update_inflight = False
 
-    threading.Thread(target=_run, daemon=True, name="endpoint-probe-interval").start()
+    threading.Thread(target=_run, daemon=True, name="free-models-update-interval").start()
 
 
 def _maybe_fire_cost_probe(
@@ -1903,7 +2073,8 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
          live config.json's free-tier sections from the bundled providers.json
          sidecar (no network, safe on a read-only sidecar).
       3. When config['update_believed_free_on_startup'] is true, additionally runs
-         the full free-models updater (streaming its progress to the log).
+         the full free-models updater (streaming its progress to the log), as
+         long as free_tier.update_frequency_days has elapsed since the last run.
       4. Invalidates the cached /v1/models list after either step changes the
          config, so the synthetic 'free' virtual models are rebuilt from the
          updated believed_free data instead of the pre-update snapshot. (The route
@@ -1933,9 +2104,18 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
 
         # 3. Optionally run the full network updater (refreshes + persists the
         #    sidecar, then syncs the live config from the freshly-scraped data).
+        #    Throttled by update_frequency_days so a restart-heavy deployment
+        #    re-scrapes on its configured cadence rather than on every boot.
         ran = False
-        if config.get("free_tier", {}).get("update_on_startup") is True:
-            ran = _run_free_models_update(config, config_path)
+        startup_free_tier = config.get("free_tier", {})
+        if startup_free_tier.get("update_on_startup") is True:
+            if _free_update_due(startup_free_tier, config_path):
+                ran = _run_free_models_update(config, config_path)
+            else:
+                logger.info(
+                    "[startup] free-models update not due yet "
+                    "(free_tier.update_frequency_days); skipping"
+                )
 
         # 4. Drop the cached /v1/models list so the synthetic 'free' set is rebuilt
         #    from the updated believed_free on the next request.
@@ -1967,8 +2147,12 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
         except Exception as exc:  # noqa: BLE001 — warming must never crash the worker
             logger.warning("[startup] /v1/models cache warm failed: %s", exc)
 
-        # 6. Check frequency intervals for endpoint probe, cost probe, and PR
-        #    creation. Fires background threads for any that are due.
+        # 6. Check frequency intervals for the free-models refresh, the
+        #    flagship recompute, cost probe, and PR creation. Fires background
+        #    threads for any that are due. The flagship pass runs here rather
+        #    than earlier because it reads the route cache, which steps 1 and 5
+        #    have just warmed — a fresh deployment would otherwise compute
+        #    membership from an empty candidate pool.
         _maybe_fire_interval_probes(config_path)
 
     threading.Thread(target=_run, daemon=True, name="startup-tasks").start()
@@ -3574,8 +3758,11 @@ def _target_reasoning_tier_explained(payload: dict) -> tuple[str, str]:
     if not delta or signal_source == SOURCE_NEUTRAL:
         return base, TIER_SOURCE_PROMPT_SIZE
 
+    # Clamp to the strongest *inferable* tier, not to the end of the tuple.
+    # Overlay tiers such as flagship sit above deep and are opt-in by name only
+    # (llmproxy/flagship), so no prompt size or tool signal may drift into them.
     idx = _REASONING_LEVELS.index(base)
-    shifted = min(len(_REASONING_LEVELS) - 1, max(0, idx + delta))
+    shifted = min(_MAX_INFERRED_LEVEL_INDEX, max(0, idx + delta))
     if shifted == idx:
         return base, TIER_SOURCE_PROMPT_SIZE
     return _REASONING_LEVELS[shifted], f"{TIER_SOURCE_TOOL_SIGNALS}:{signal_source}"
@@ -4956,18 +5143,33 @@ def _param_count(model_id: str) -> float:
 
 
 def _quality_key(provider_name: str, upstream_id: str,
-                 reasoning_map: dict[str, str]) -> tuple[int, float]:
+                 reasoning_map: dict[str, str],
+                 flagship_models: set[str] | None = None) -> tuple[int, float]:
     """Sophistication sort key for a candidate — higher is more capable.
 
-    ``(reasoning_rank, param_count)`` where ``reasoning_rank`` is the configured
-    ``model_reasoning`` tier (deep=2 > standard=1 > exploratory=0), falling back
-    to a tier inferred from the model name when untagged, and ``param_count`` is
-    the inferred size in billions. Sorting candidates by this key descending puts
-    the most sophisticated model first.
+    ``(reasoning_rank, param_count)`` where ``reasoning_rank`` is the index of
+    the model's tier in _REASONING_LEVELS (flagship > deep > standard >
+    exploratory), and ``param_count`` is the inferred size in billions. Sorting
+    candidates by this key descending puts the most sophisticated model first.
+
+    Flagship is an overlay: membership is looked up separately rather than read
+    from ``model_reasoning``, so a flagship model keeps whatever tier tag it
+    carries there and simply outranks it here.
+
+    An unrecognised explicit tag falls back to the name-inferred tier, never to
+    rank 0. A config written by a newer build (or a tier this build has since
+    renamed) would otherwise sort as the *weakest* candidate rather than the
+    strongest, which is the worst possible direction to fail in.
     """
+    qualified = f"{provider_name}/{upstream_id}".lower()
+    if flagship_models and (qualified in flagship_models
+                            or upstream_id.lower() in flagship_models):
+        return (_REASONING_LEVELS.index("flagship"), _param_count(upstream_id))
     lvl = (reasoning_map.get(upstream_id.lower())
-           or reasoning_map.get(f"{provider_name}/{upstream_id}".lower())
+           or reasoning_map.get(qualified)
            or _infer_reasoning_level(upstream_id))
+    if lvl not in _REASONING_LEVELS:
+        lvl = _infer_reasoning_level(upstream_id)
     rank = _REASONING_LEVELS.index(lvl) if lvl in _REASONING_LEVELS else 0
     return (rank, _param_count(upstream_id))
 
@@ -4976,6 +5178,7 @@ def _quality_ordered_candidates(
     candidates: list[tuple[str, dict, str]],
     free_limits: dict[str, dict],
     reasoning_map: dict[str, str],
+    flagship_models: set[str] | None = None,
 ) -> list[tuple[str, dict, str]]:
     """Order free candidates best-first: most sophisticated model with headroom.
 
@@ -5008,7 +5211,7 @@ def _quality_ordered_candidates(
 
     def _key(item: tuple[tuple[str, dict, str], float]):
         (pn, _pc, um), score = item
-        rank, params = _quality_key(pn, um, reasoning_map)
+        rank, params = _quality_key(pn, um, reasoning_map, flagship_models)
         return (rank, params, score)
 
     viable = sorted((it for it in scored if it[1] > 0.0), key=_key, reverse=True)
@@ -5225,28 +5428,97 @@ def _get_model_reasoning(config: dict) -> dict[str, str]:
             )
         return {}
     result: dict[str, str] = {}
+    assignable = [lvl for lvl in _REASONING_LEVELS
+                  if lvl not in _OVERLAY_REASONING_LEVELS]
     for key, val in raw.items():
-        if isinstance(key, str) and isinstance(val, str) and val.lower() in _REASONING_LEVELS:
+        if isinstance(key, str) and isinstance(val, str) and val.lower() in assignable:
             result[key.lower()] = val.lower()
+        elif isinstance(val, str) and val.lower() in _OVERLAY_REASONING_LEVELS:
+            logger.warning(
+                "config['model_reasoning']: %r is a computed tier and cannot be set by "
+                "hand (entry %r) — skipping. Membership lives in config['flagship_models'].",
+                val, key,
+            )
         else:
             logger.warning(
                 "config['model_reasoning']: invalid entry %r: %r (level must be one of %s) — skipping.",
-                key, val, "/".join(_REASONING_LEVELS),
+                key, val, "/".join(assignable),
             )
     return result
 
 
+def _get_flagship_models(config: dict | None = None,
+                         config_path: str | None = None) -> set[str]:
+    """Lowercased set of qualified ids in the flagship tier.
+
+    Flagship is an overlay rather than a value in ``model_reasoning``: a member
+    keeps whatever tier tag it carries there, so promoting a model does not
+    remove it from ``llmproxy/deep``.
+
+    Membership is never hardcoded and never committed. It depends on which
+    providers this deployment has configured and what each currently serves, so
+    it is computed locally and cached in ``flagship_models.json`` beside
+    config.json, alongside the other machine-managed state files. What lives in
+    the user's config is only the policy: ``flagship_tier.pin`` and
+    ``.exclude``.
+
+    Pins are applied here rather than only at refresh time so that pinning a
+    model takes effect immediately instead of on the next cadence tick, and
+    excludes are applied last so they always win.
+
+    Entries are qualified ``provider/model`` ids, because free-tier status and
+    availability are per-provider: the same weights may be free on one provider
+    and paid on another, and each provider's instance is its own routing target.
+    """
+    cfg = config if config is not None else load_config()
+    members: set[str] = set()
+
+    state = load_flagship_state(config_path)
+    raw = state.get("members")
+    if isinstance(raw, list):
+        members |= {m.lower() for m in raw if isinstance(m, str)}
+    elif raw is not None:
+        logger.warning(
+            "flagship_models.json: 'members' must be a list; got %s — ignoring.",
+            type(raw).__name__,
+        )
+
+    tier_cfg = flagship_tier_cfg(cfg)
+    pin = tier_cfg.get("pin")
+    if isinstance(pin, list):
+        members |= {m.lower() for m in pin if isinstance(m, str)}
+    exclude = tier_cfg.get("exclude")
+    if isinstance(exclude, list):
+        members -= {m.lower() for m in exclude if isinstance(m, str)}
+    return members
+
+
 def _get_reasoning_model_candidates(level: str) -> list[tuple[str, dict, str]]:
-    """(provider_name, provider_cfg, upstream_model) for every model tagged with *level*."""
+    """(provider_name, provider_cfg, upstream_model) for every model in *level*.
+
+    For the ordinary tiers this is an equality match on ``model_reasoning``. For
+    an overlay tier (flagship) it is membership in the computed set instead, so
+    the ordinary tiers keep every model they had.
+
+    Either way the route cache is walked per provider, so a model served by
+    several providers yields one candidate each — which is what gives failover
+    something to fail over to.
+    """
     config = load_config()
-    reasoning = _get_model_reasoning(config)
+    overlay = level in _OVERLAY_REASONING_LEVELS
+    flagship = _get_flagship_models(config) if overlay else set()
+    reasoning = {} if overlay else _get_model_reasoning(config)
     candidates = []
     for _proxy_id, (provider_name, upstream_id) in _get_route_cache_snapshot().items():
-        lvl = (
-            reasoning.get(upstream_id.lower())
-            or reasoning.get(f"{provider_name}/{upstream_id}".lower())
-        )
-        if lvl == level:
+        qualified = f"{provider_name}/{upstream_id}".lower()
+        if overlay:
+            matched = qualified in flagship or upstream_id.lower() in flagship
+        else:
+            matched = (
+                reasoning.get(upstream_id.lower())
+                or reasoning.get(qualified)
+            ) == level
+        if matched:
             provider_cfg = get_provider(config, provider_name)
             if not provider_cfg:
                 continue
@@ -5430,6 +5702,9 @@ def _loadbalanced_ordered_candidates(
     needed = _needed_capabilities(payload)
     cap_map = _model_capabilities(config)
     reasoning_map = _get_model_reasoning(config)
+    # Flagship is an overlay, so it is not in reasoning_map; fetch it once here
+    # rather than per candidate.
+    flagship_models = _get_flagship_models(config)
 
     def _price(c: tuple[str, dict, str]) -> float:
         pn, _pc, um = c
@@ -5446,21 +5721,24 @@ def _loadbalanced_ordered_candidates(
         if tier == _TIER_PAID and not allow_paid:
             continue  # paid never an implicit fallback unless explicitly enabled
         if tier == _TIER_FREE:
-            bucket = _quality_ordered_candidates(bucket, free_limits, reasoning_map)
+            bucket = _quality_ordered_candidates(
+                bucket, free_limits, reasoning_map, flagship_models)
             bucket = _apply_favorite_free_ordering(bucket, config)
         elif tier == _TIER_LOCAL:
             # $0 like free — prefer the strongest local model (e.g. the larger
             # Ollama model) rather than rotating randomly.
             bucket = sorted(
                 bucket,
-                key=lambda c: _quality_key(c[0], c[2], reasoning_map),
+                key=lambda c: _quality_key(c[0], c[2], reasoning_map, flagship_models),
                 reverse=True,
             )
         else:
             # Paid: cost first, then sophistication as a tiebreak among equals.
             bucket = sorted(
                 bucket,
-                key=lambda c: (_price(c), tuple(-x for x in _quality_key(c[0], c[2], reasoning_map))),
+                key=lambda c: (_price(c),
+                               tuple(-x for x in _quality_key(
+                                   c[0], c[2], reasoning_map, flagship_models))),
             )
             # Paid providers are the ones that actually bill prompt caching, so
             # this is where affinity pays for itself: keep a conversation on the
@@ -5773,6 +6051,29 @@ def _virtual_model_hint(model_full: str) -> str:
     if name == "local":
         return "Check that at least one provider has a localhost base_url."
     for level in _REASONING_LEVELS:
+        # Overlay tiers are computed, so "go tag a model" is the wrong advice.
+        if level in _OVERLAY_REASONING_LEVELS:
+            where = (f"config['{level}_models'], refreshed on "
+                     f"config['{level}_tier'].refresh_frequency_days")
+            if name == level:
+                return (
+                    f"No model currently qualifies for '{level}'. Membership is "
+                    f"computed into {where}; pin one with "
+                    f"config['{level}_tier'].pin to force it in."
+                )
+            if name == f"{level}/free":
+                return (
+                    f"No '{level}' model is currently free on any configured "
+                    f"provider. Membership is computed into {where}; free status "
+                    f"is per-provider, so the same model may be paid here and "
+                    f"free elsewhere."
+                )
+            if name == f"{level}/local":
+                return (
+                    f"No '{level}' model is served by a localhost provider. "
+                    f"Membership is computed into {where}."
+                )
+            continue
         if name == level:
             return f"Tag at least one model with '{level}' in config['model_reasoning']."
         if name == f"{level}/free":

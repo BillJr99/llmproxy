@@ -38,7 +38,19 @@ Schema:
     "<upstream_model_id>": "exploratory",         // models with a reasoning
     "<provider>/<upstream_model_id>": "standard", // level so they appear under
     "another-model": "deep"                       // the exploratory/standard/deep
-  },                                              // virtual endpoints
+  },                                              // virtual endpoints.
+                                                  // 'flagship' is NOT settable
+                                                  // here: it is a computed
+                                                  // overlay above deep — see
+                                                  // flagship_tier below
+  "flagship_tier": { ... },                       // optional; policy for the
+                                                  // computed llmproxy/flagship
+                                                  // tier. The membership list
+                                                  // itself is deployment-
+                                                  // specific and cached in
+                                                  // flagship_models.json, not
+                                                  // stored here. See the README
+                                                  // section "The flagship tier"
   "model_capabilities": {                         // optional; tag individual models
     "<upstream_model_id>": ["tools", "vision"],   // with the capabilities they
     "<provider>/<upstream_model_id>": ["json"]    // support. Drives capability-aware
@@ -427,6 +439,82 @@ def load_endpoint_probe_state(config_path: str | None = None) -> dict:
 def save_endpoint_probe_state(state: dict, config_path: str | None = None) -> bool:
     return _save_state_file(
         state, get_endpoint_probe_state_path(config_path), "save_endpoint_probe_state"
+    )
+
+
+# --- Full-refresh state (update_state.json) ---
+#
+# Throttles the full free-models scrape (free_tier.update_frequency_days) so a
+# restart-heavy deployment does not re-scrape every provider on every boot, and
+# a long-lived process still refreshes on its configured cadence.
+
+def get_update_state_path(config_path: str | None = None) -> Path:
+    return get_config_path(config_path).parent / "update_state.json"
+
+
+def load_update_state(config_path: str | None = None) -> dict:
+    return _load_state_file(get_update_state_path(config_path), "load_update_state")
+
+
+def save_update_state(state: dict, config_path: str | None = None) -> bool:
+    return _save_state_file(
+        state, get_update_state_path(config_path), "save_update_state"
+    )
+
+
+# Defaults for the top-level `flagship_tier` config block. Defined once here so
+# the values the server falls back to for a config that predates the block, and
+# the values scripts/update_free_models.py writes into config.example.json,
+# cannot drift apart. See the README for what each key does.
+FLAGSHIP_TIER_DEFAULTS: dict = {
+    "enabled": True,
+    "min_flagship_free_models": 5,
+    "start_percentile": 0.9,
+    "min_context": 200000,
+    "require_tools": True,
+    "max_models": None,
+    "pin": [],
+    "exclude": [],
+    "sources": ["openrouter_aa"],
+    "refresh_frequency_days": 7,
+}
+
+
+def flagship_tier_cfg(config: dict | None = None) -> dict:
+    """The `flagship_tier` block with defaults filled in.
+
+    A config written before the block existed simply gets every default, so the
+    tier behaves identically whether or not the user has pasted the block in.
+    """
+    raw = (config or {}).get("flagship_tier")
+    merged = dict(FLAGSHIP_TIER_DEFAULTS)
+    if isinstance(raw, dict):
+        merged.update({k: v for k, v in raw.items() if v is not None
+                       or k in ("max_models",)})
+    return merged
+
+
+# --- Flagship tier membership + refresh state (flagship_models.json) ---
+#
+# Membership is DEPLOYMENT-SPECIFIC: it depends on which providers are
+# configured and what each of them currently serves, so it is computed locally
+# and cached here rather than shipped in providers.json or written into the
+# hand-edited config.json. Nothing about it is committed to the repo.
+#
+# Shape: {"last_refresh_at": iso8601, "bar": float, "criteria": {...},
+#         "members": ["provider/model", ...], "scores": {id: {...}}}
+
+def get_flagship_state_path(config_path: str | None = None) -> Path:
+    return get_config_path(config_path).parent / "flagship_models.json"
+
+
+def load_flagship_state(config_path: str | None = None) -> dict:
+    return _load_state_file(get_flagship_state_path(config_path), "load_flagship_state")
+
+
+def save_flagship_state(state: dict, config_path: str | None = None) -> bool:
+    return _save_state_file(
+        state, get_flagship_state_path(config_path), "save_flagship_state"
     )
 
 
