@@ -948,6 +948,8 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "allow_implicit_paid": false,
     "saturation_cooldown_seconds": 60,
     "virtual_timeout_seconds": 0,
+    "request_log": "off",
+    "request_log_max_body_bytes": 0,
     "tool_signal_routing": true,
     "workers": 1,
     "cycle_deadline_seconds": 0,
@@ -1263,6 +1265,11 @@ model whose words actually reach you; a cached reply names the model that
 originally produced it; and when *every* candidate fails, the error reply still
 names the last one tried, which is precisely when you most want to know.
 
+For a durable record rather than a per-reply signal, see
+[`server.request_log`](#request_log), which emits one structured JSON object per
+request to stdout — including the route reason above, the real duration of a
+streamed reply, and a request id echoed back as `X-LLMProxy-Request-Id`.
+
 **A body field, on virtual models.** Most SDK clients surface a parsed body and
 never expose response headers to their callers, so a virtual-model reply also
 carries an additive top-level `llmproxy_route` object:
@@ -1355,6 +1362,93 @@ asymmetric on purpose: overestimating costs one suboptimal but working pick, whi
 underestimating costs a `400` and a walk down the pool.
 
 When the pass fires it appends `context_fit=~Ntok` to `X-LLMProxy-Route-Reason`.
+
+<a name="request_log"></a>
+### `server.request_log` — one structured record per request
+
+llmproxy logs two human lines per request, `→ POST /v1/chat/completions` and
+`← POST /v1/chat/completions 200 412ms`. They are fine for watching it work and
+useless for reconstructing anything afterwards: there is no id joining them, so
+under concurrency you cannot tell which `←` belongs to which `→`; the `←` line
+names no model, provider, route reason or token count, though all of those are
+known by then; and because Flask runs `after_request` before the WSGI server
+iterates a streamed body, every streamed request reports time-to-headers rather
+than its real duration.
+
+`server.request_log` adds one JSON object per request, written to **stdout** —
+while every other log line goes to stderr, so a collector can tee the record
+stream apart from human log chatter without grepping. Three settings:
+
+| Value | What it emits |
+|---|---|
+| `"off"` (default) | Nothing. Only the `→`/`←` lines, exactly as before. |
+| `"metadata"` | One record per request, with everything llmproxy knows *about* it and **no message content**. |
+| `"full"` | The same record plus the complete request and response bodies. |
+
+```json
+"server": {
+  "request_log": "full"
+}
+```
+
+A record looks like this (`full` mode, a streamed reply):
+
+```json
+{
+  "object": "request.record",
+  "id": "af018083d96e4b83a1812eed19972f67",
+  "ts": "2026-09-19T21:38:04.432781+00:00",
+  "method": "POST", "path": "/v1/chat/completions",
+  "status": 200, "duration_ms": 101.6, "streamed": true,
+  "model": "llmproxy/flagship",
+  "selected_model": "groq/llama-3.3-70b-versatile",
+  "route_reason": "flagship_rank=4/5,capability=tools",
+  "failed_over": false,
+  "request_body": { "model": "llmproxy/flagship", "messages": [ ... ] },
+  "response_body": "data: {\"choices\": ...}\n\ndata: [DONE]\n\n"
+}
+```
+
+Four details worth knowing:
+
+- **`model` is what the client asked for; `selected_model` is what answered.**
+  The proxy rewrites `payload["model"]` in place while routing, so the record
+  captures the requested id before that happens.
+- **A streamed record is emitted when the stream ends**, not when the headers
+  go out, so `duration_ms` is the real duration and `response_body` is the whole
+  stream. A client that hangs up mid-stream still produces a record.
+- **`X-LLMProxy-Request-Id`** is returned on every response and is the record's
+  `id`, so a user reporting a bad answer can name the exact request.
+- Bodies are parsed into the record where they are JSON, rather than embedded as
+  an escaped string, so `jq` works on them directly.
+
+**What is never recorded, in any mode.** Request headers, which carry the
+caller's `Authorization` — a record stream that must itself be handled as
+credential material is one nobody will keep. And the bodies of `/admin/*`
+requests, because the admin API takes provider API keys in the clear (that is
+how you set one); admin requests still produce a record, marked
+`"bodies_omitted"`, so the audit trail keeps the fact that a config change
+happened without becoming a key dump.
+
+**`full` mode is a data-handling decision, not a log level.** It writes every
+prompt and every completion to stdout, so wherever your container logs go, user
+content goes too, for as long as they are retained. That is why it is off by
+default. `metadata` answers almost every operational question — what was slow,
+what timed out, what it cost, which model actually served it, how often the
+ranked pick failed over — with no content at all, and is the better default for
+a deployment carrying anyone's data but your own.
+
+`request_log_max_body_bytes` caps each captured body, with the record marking
+`"truncated": true` and the original length. `0` (the default) means no cap,
+which is what `full` means. Consider setting one: a record holds the whole body
+in memory until the response completes, and a streamed answer has no size known
+in advance.
+
+**Note:** the first 200 bytes of every streamed reply's first chunk are also
+logged at `INFO` on the ordinary (stderr) log, independently of this setting.
+That line predates the record stream and is useful for spotting a provider
+returning an error frame; be aware it puts a little generated text in the normal
+log even with `request_log` off.
 
 <a name="virtual_timeout_seconds"></a>
 ### `server.virtual_timeout_seconds` — one patience setting for every pool

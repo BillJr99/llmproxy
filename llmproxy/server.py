@@ -60,10 +60,12 @@ import logging
 import math
 import random
 import re
+import sys
 import threading
 import time
 import traceback
 import urllib.parse
+import uuid
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -125,6 +127,27 @@ from .usage import (
 
 app = Flask(__name__)
 logger = logging.getLogger("llmproxy.server")
+
+# The per-request audit channel, deliberately separate from `logger`.
+#
+# It writes bare JSON — one object per line, no level, no timestamp prefix — to
+# **stdout**, while everything else llmproxy logs goes to stderr. That split is
+# the point: `docker logs` and every collector can tee the two apart, so a
+# machine-readable record stream never has to be grepped out of human log
+# chatter, and turning the audit on does not change the operational log at all.
+#
+# ``propagate = False`` keeps these lines out of the root handler that
+# ``logging.basicConfig`` installs, which would otherwise print each record a
+# second time on stderr with a level prefix, and ``_request_log_mode`` gates
+# emission rather than the log level, so the record stream is independent of
+# ``server.log_level``.
+request_logger = logging.getLogger("llmproxy.requests")
+request_logger.propagate = False
+if not request_logger.handlers:
+    _request_log_handler = logging.StreamHandler(sys.stdout)
+    _request_log_handler.setFormatter(logging.Formatter("%(message)s"))
+    request_logger.addHandler(_request_log_handler)
+    request_logger.setLevel(logging.INFO)
 
 
 class _StripApiPrefix:
@@ -916,9 +939,162 @@ def _response_cache_put(
         _response_cache[key] = (content, status, content_type, selected_model, time.monotonic())
 
 
+# ---------------------------------------------------------------------------
+# Per-request audit records
+# ---------------------------------------------------------------------------
+#
+# The human log says what llmproxy is doing; this says what it did. The two ``→``
+# / ``←`` lines cannot be paired under concurrency (no id), carry no model,
+# tokens or route reason, and — because Flask runs ``after_request`` before the
+# WSGI server iterates a streamed body — report time-to-headers rather than the
+# real duration of the request that matters most. One structured record per
+# request, emitted when the response has actually finished, fixes all three.
+#
+# Request headers are never recorded. They carry the client's Authorization, and
+# a record stream that must be handled as credential material is one nobody will
+# keep. The bodies are recorded in ``full`` mode, so prompts and completions do
+# land in the stream; that is the mode's whole purpose and is why it is off by
+# default and documented as a data-handling decision rather than a log level.
+
+
+def _body_capture_allowed(path: str) -> bool:
+    """False for paths whose bodies carry credentials rather than content.
+
+    The admin API takes API keys in the clear — that is how you set one — so in
+    ``full`` mode its request bodies would put plaintext provider keys into the
+    record stream. ``admin.py`` masks keys on the way *out* for exactly this
+    reason; this is the same rule applied on the way in. Admin requests are
+    still recorded, just without their bodies, so the audit trail keeps the fact
+    that a config change happened without becoming credential material.
+    """
+    return not path.startswith("/admin")
+
+
+def _json_or_text(raw: bytes | None, limit: int) -> object:
+    """Decode a body for the record: parsed JSON where possible, else text.
+
+    Parsing rather than escaping keeps a record one object instead of an object
+    wrapping a long JSON string, which is what makes ``jq`` useful over the
+    stream. A body that is not JSON (an SSE stream, a provider's HTML error
+    page) is kept as text so nothing is silently dropped.
+    """
+    if not raw:
+        return None
+    truncated = bool(limit) and len(raw) > limit
+    body = raw[:limit] if truncated else raw
+    text = body.decode("utf-8", "replace")
+    if not truncated:
+        try:
+            return json.loads(text)
+        except Exception:  # noqa: BLE001 — not JSON is normal, not an error
+            pass
+    return {"truncated": True, "bytes": len(raw), "text": text} if truncated else text
+
+
+def _emit_request_record(
+    status: int,
+    elapsed_ms: float,
+    *,
+    mode: str,
+    method: str,
+    path: str,
+    request_id: str,
+    requested_model: object = None,
+    request_body: bytes | None = None,
+    response_body: bytes | None = None,
+    streamed: bool = False,
+    selected_model: str | None = None,
+    route_reason: str | None = None,
+) -> None:
+    """Write one JSON record for a completed request. Never raises."""
+    try:
+        record: dict = {
+            "object": "request.record",
+            "id": request_id,
+            "ts": datetime.datetime.now(datetime.UTC).isoformat(),
+            "method": method,
+            "path": path,
+            "status": status,
+            "duration_ms": round(elapsed_ms, 1),
+            "streamed": streamed,
+            "model": requested_model,
+            "selected_model": selected_model,
+            "route_reason": route_reason,
+        }
+        # failed_over is the question anyone reading these actually asks, and it
+        # is already encoded in the reason; surfacing it saves parsing.
+        if route_reason:
+            record["failed_over"] = ROUTE_SOURCE_FAILOVER in route_reason
+        if mode == "full":
+            if _body_capture_allowed(path):
+                limit = _config_int("request_log_max_body_bytes",
+                                    _DEFAULT_REQUEST_LOG_MAX_BODY)
+                record["request_body"] = _json_or_text(request_body, limit)
+                record["response_body"] = _json_or_text(response_body, limit)
+            else:
+                record["bodies_omitted"] = "credential-bearing path"
+        request_logger.info(json.dumps(record, default=str))
+    except Exception as e:  # noqa: BLE001 — a record must never break a reply
+        print(f"[server:_emit_request_record] {e}")
+        traceback.print_exc()
+
+
+def _record_wrapped_stream(
+    iterable, on_done: Callable[[bytes], None]
+) -> Iterator[bytes]:
+    """Relay *iterable* unchanged, then hand the joined bytes to *on_done*.
+
+    This is what moves the record past the end of a streamed reply. Flask's
+    ``after_request`` fires before the WSGI server pulls a single chunk, so a
+    record written there would report the wrong duration and an empty body. The
+    ``finally`` covers the client hanging up mid-stream too, which is a real
+    outcome worth recording rather than a reason to lose the record.
+    """
+    chunks: list[bytes] = []
+    try:
+        for chunk in iterable:
+            if chunk:
+                chunks.append(chunk if isinstance(chunk, bytes) else bytes(chunk))
+            yield chunk
+    finally:
+        try:
+            on_done(b"".join(chunks))
+        except Exception as e:  # noqa: BLE001
+            print(f"[server:_record_wrapped_stream] {e}")
+            traceback.print_exc()
+
+
 @app.before_request
 def _log_request() -> None:
     g._start_time = time.monotonic()
+    # A correlation id, so the two human log lines and the audit record for one
+    # request can be tied together under concurrency — which the ``→``/``←``
+    # pair alone never could. Echoed back as X-LLMProxy-Request-Id so a client
+    # reporting a problem can name the exact request.
+    g.llmproxy_request_id = uuid.uuid4().hex
+    g.llmproxy_log_mode = _request_log_mode()
+    if g.llmproxy_log_mode != "off":
+        # Capture the requested model HERE, before the view canonicalises
+        # payload["model"] in place (llmproxy/flagship -> llmproxy__flagship, a
+        # slash form -> the internal one). The record's job is to say what was
+        # asked for; what it resolved to is selected_model. Read afterwards, the
+        # record would report the rewritten id instead.
+        try:
+            parsed = request.get_json(silent=True)
+            g.llmproxy_requested_model = (
+                parsed.get("model") if isinstance(parsed, dict) else None
+            )
+        except Exception:  # noqa: BLE001 — auditing never fails a request
+            g.llmproxy_requested_model = None
+    if g.llmproxy_log_mode == "full":
+        # Read the body here too, while it is certainly still readable. Flask
+        # caches it, so the view's own get_json() is unaffected, and a view that
+        # fails before parsing still leaves the record with what was actually
+        # sent.
+        try:
+            g.llmproxy_request_body = request.get_data(cache=True)
+        except Exception:  # noqa: BLE001
+            g.llmproxy_request_body = None
     # Fire the one-time startup tasks (warm the virtual-model route cache and,
     # if enabled, run the free-models updater). This is a fallback safety net for
     # deployments where the eager per-worker trigger in __main__ did not fire; it
@@ -937,7 +1113,66 @@ def _log_response(response: Response) -> Response:
     # Last stop before the bytes leave the app: apply the route provenance
     # recorded at selection time. See _stamp_route_provenance for why the
     # guarantee has to be enforced here rather than at each return site.
-    return _stamp_route_provenance(response)
+    response = _stamp_route_provenance(response)
+    return _attach_request_record(response, elapsed_ms)
+
+
+def _attach_request_record(response: Response, elapsed_ms: float) -> Response:
+    """Emit this request's audit record, or arrange for it to be emitted.
+
+    A buffered reply is complete right now, so its record goes out immediately.
+    A streamed one is not: ``after_request`` runs before the WSGI server pulls a
+    single chunk, so the record is deferred onto the end of the stream, where
+    the duration is the real one and the body exists. Everything the record
+    needs is captured into locals first, because the request context is gone by
+    the time that generator finishes.
+    """
+    mode = g.get("llmproxy_log_mode", "off")
+    request_id = g.get("llmproxy_request_id") or ""
+    if request_id:
+        response.headers["X-LLMProxy-Request-Id"] = request_id
+    if mode == "off":
+        return response
+    try:
+        common = {
+            "mode": mode,
+            "method": request.method,
+            "path": request.path,
+            "request_id": request_id,
+            "requested_model": _requested_model_for_record(),
+            "request_body": g.get("llmproxy_request_body"),
+            "selected_model": g.get("llmproxy_selected_model"),
+            "route_reason": g.get("llmproxy_route_reason"),
+        }
+        status = response.status_code
+        started = g._start_time
+        if response.is_streamed:
+            def _done(body: bytes, _s=status, _c=common, _t=started) -> None:
+                _emit_request_record(
+                    _s, (time.monotonic() - _t) * 1000,
+                    response_body=body, streamed=True, **_c,
+                )
+            response.response = _record_wrapped_stream(response.response, _done)
+            return response
+        _emit_request_record(
+            status, elapsed_ms,
+            response_body=response.get_data() if mode == "full" else None,
+            streamed=False, **common,
+        )
+    except Exception as e:  # noqa: BLE001 — a record must never break a reply
+        print(f"[server:_attach_request_record] {e}")
+        traceback.print_exc()
+    return response
+
+
+def _requested_model_for_record() -> object:
+    """The model id the client asked for, as the client wrote it.
+
+    Captured in ``before_request`` rather than read here, because by now the
+    proxy has canonicalised ``payload["model"]`` in place. Returns None for a
+    request that names no model, which is most of the non-proxy surface.
+    """
+    return g.get("llmproxy_requested_model")
 
 
 # ---------------------------------------------------------------------------
@@ -3733,6 +3968,14 @@ _DEFAULT_PRECOMMIT_MAX_SECONDS: float = 2.0
 # is the default and today's behavior (the ordinary request/stream timeouts still
 # apply). See ``_virtual_timeout``.
 _DEFAULT_VIRTUAL_TIMEOUT_S: float = 0.0
+# Per-request audit records. "off" is the default, matching every other knob
+# here: an untouched config behaves exactly as it did before the knob existed.
+_REQUEST_LOG_MODES: tuple[str, ...] = ("off", "metadata", "full")
+_DEFAULT_REQUEST_LOG: str = "off"
+# 0 = no cap, which is what "full" means. A cap is offered because a record
+# holds the whole body in memory until the response completes, and a streamed
+# answer has no size known in advance.
+_DEFAULT_REQUEST_LOG_MAX_BODY: int = 0
 
 
 def _config_float(key: str, default: float, config: dict | None = None) -> float:
@@ -3766,6 +4009,30 @@ def _config_bool(key: str, default: bool, config: dict | None = None) -> bool:
         return bool(cfg.get("server", {}).get(key, default))
     except Exception:  # noqa: BLE001
         return default
+
+
+def _request_log_mode(config: dict | None = None) -> str:
+    """How much of each request to record: ``off``, ``metadata`` or ``full``.
+
+    ``off`` (the default) emits nothing, leaving only the human ``→``/``←``
+    lines. ``metadata`` emits one JSON object per request carrying everything
+    llmproxy knows *about* the request — which model was asked for, which
+    candidate answered, why it was ranked first, status, tokens, cost, timing —
+    and no message content. ``full`` adds the request and response bodies.
+
+    An unrecognised value reads as ``off`` rather than as an error: this decides
+    whether user content is written down, so a typo must fail closed.
+    """
+    try:
+        cfg = config if config is not None else load_config()
+        raw = cfg.get("server", {}).get("request_log", _DEFAULT_REQUEST_LOG)
+        if isinstance(raw, bool):
+            # `true` is the obvious thing to write when you just want records.
+            return "full" if raw else "off"
+        mode = str(raw).strip().lower()
+        return mode if mode in _REQUEST_LOG_MODES else _DEFAULT_REQUEST_LOG
+    except Exception:  # noqa: BLE001 — auditing must never fail a request
+        return _DEFAULT_REQUEST_LOG
 
 
 def _virtual_timeout(config: dict | None = None) -> float | None:
