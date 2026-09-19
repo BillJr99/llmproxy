@@ -1931,6 +1931,7 @@ The wizard currently offers ready-made templates for these providers:
 | Moonshot AI (Kimi)                         | `moonshot`              | `https://api.moonshot.ai/v1`                                                   |
 | MiniMax                                    | `minimax`               | `https://api.minimax.io/v1`                                                    |
 | Atria ASI                                  | `atria-asi`             | `https://api.atria-asi.ai/v1`                                                  |
+| Unbiased AI                                | `unbiased-ai`           | `https://api.unbiased.ai/v1`                                                   |
 | Hugging Face Inference                     | `huggingface`           | `https://router.huggingface.co/v1`                                             |
 | xAI (Grok)                                 | `xai`                   | `https://api.x.ai/v1`                                                          |
 | Cloudflare AI Gateway                      | `cloudflare-ai-gateway` | `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai/v1` |

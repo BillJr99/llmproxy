@@ -129,6 +129,12 @@
       "api_key": "atr_...",
       "model_filter": null
     },
+    "unbiased-ai": {
+      "_note": "OpenAI-compatible. The endpoint also answers Anthropic's /v1/messages and accepts either Authorization: Bearer or x-api-key, but the OpenAI pair is what llmproxy sends by default, so no 'protocol' is set. GET /v1/models is registered and key-gated, so model discovery needs no models_url override. One model, 'pareto', a blend of frontier and open models; pay-as-you-go credits, no free tier.",
+      "base_url": "https://api.unbiased.ai/v1",
+      "api_key": "sk_...",
+      "model_filter": null
+    },
     "huggingface": {
       "base_url": "https://router.huggingface.co/v1",
       "api_key": "hf_...",
@@ -727,6 +733,7 @@
     "moonshot/kimi-latest": "standard",
     "minimax/MiniMax-M1": "standard",
     "atria-asi/Atria-Dawn-Preview": "deep",
+    "unbiased-ai/pareto": "deep",
     "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": "standard",
     "xai/grok-3": "deep",
     "xai/grok-3-mini": "standard",

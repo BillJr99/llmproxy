@@ -90,6 +90,7 @@ _PLACEHOLDER_KEYS: dict[str, str] = {
     "teamorouter": "sk-teamo-...",
     "tokenharbor": "thk_live_...",
     "atria-asi": "atr_...",
+    "unbiased-ai": "sk_...",
 }
 
 

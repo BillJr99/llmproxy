@@ -33,6 +33,7 @@
     "moonshot",
     "minimax",
     "atria-asi",
+    "unbiased-ai",
     "huggingface",
     "xai",
     "cloudflare-ai-gateway",
@@ -1059,6 +1060,20 @@
       "believed_free": [],
       "model_reasoning": {
         "atria-asi/Atria-Dawn-Preview": "deep"
+      },
+      "model_capabilities": {},
+      "free_limits": {},
+      "fallback_models": []
+    },
+    "unbiased-ai": {
+      "display": "Unbiased AI",
+      "base_url": "https://api.unbiased.ai/v1",
+      "key_required": true,
+      "key_hint": "Create an API key at platform.unbiased.ai (signup is reviewed by hand). Keys look like sk_...",
+      "_note": "OpenAI-compatible. The endpoint also answers Anthropic's /v1/messages and accepts either Authorization: Bearer or x-api-key, but the OpenAI pair is what llmproxy sends by default, so no 'protocol' is set. GET /v1/models is registered and key-gated, so model discovery needs no models_url override. One model, 'pareto', a blend of frontier and open models; pay-as-you-go credits, no free tier.",
+      "believed_free": [],
+      "model_reasoning": {
+        "unbiased-ai/pareto": "deep"
       },
       "model_capabilities": {},
       "free_limits": {},
