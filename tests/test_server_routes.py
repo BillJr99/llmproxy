@@ -178,3 +178,155 @@ def test_supported_parameters_from_config(server):
     assert server._supported_parameters("p", "m1", cfg) == ["tools", "tool_choice"]
     assert server._supported_parameters("p", "m2", cfg) == ["reasoning"]
     assert server._supported_parameters("p", "m3", cfg) == []
+
+
+# --------------------------------------------------------------------------- #
+# route provenance coverage
+# --------------------------------------------------------------------------- #
+# The guarantee is that no reply leaves the proxy without saying which model
+# served it. That only stays true if a newly added path cannot quietly opt out,
+# so this walks every chat-serving surface rather than testing one of them.
+
+# Routes that select a candidate and must therefore report one. /v1/embeddings
+# and the /v1/<path> catch-all are excluded deliberately: they never go through
+# _proxy_endpoint, so they neither serve virtual models nor pick a candidate,
+# and have no provenance to report.
+_PROVENANCE_ROUTES = [
+    ("/v1/chat/completions", lambda m: {"model": m, "messages": [{"role": "user", "content": "hi"}]}),
+    ("/v1/completions", lambda m: {"model": m, "prompt": "hi"}),
+    ("/v1/messages", lambda m: {"model": m, "messages": [{"role": "user", "content": "hi"}],
+                                "max_tokens": 16}),
+    ("/v1/responses", lambda m: {"model": m, "input": "hi"}),
+]
+
+_UPSTREAM_OK = (
+    b'{"id":"chatcmpl-1","object":"chat.completion","model":"free-model",'
+    b'"choices":[{"index":0,"message":{"role":"assistant","content":"hi"},'
+    b'"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,'
+    b'"total_tokens":2}}'
+)
+
+
+class _Elapsed:
+    def total_seconds(self):
+        return 0.01
+
+
+class _FakeResp:
+    def __init__(self, status=200, body=_UPSTREAM_OK, chunks=None):
+        self.status_code = status
+        self._body = body
+        self._chunks = chunks
+        self.headers = {"Content-Type": "application/json"}
+        self.elapsed = _Elapsed()
+
+    @property
+    def content(self):
+        return self._body
+
+    def iter_content(self, chunk_size=None):
+        yield from (self._chunks if self._chunks is not None else [self._body])
+
+    def close(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _stub_upstream(monkeypatch, server, resp_factory):
+    monkeypatch.setattr(
+        server.requests, "post",
+        lambda url, headers=None, json=None, stream=False, timeout=None: resp_factory(),
+    )
+
+
+def _virtual_pool(monkeypatch, server, candidates):
+    monkeypatch.setattr(server, "_get_virtual_candidates", lambda model_full: candidates)
+
+
+_PROVIDER_CFG = {"base_url": "http://upstream.example/v1", "api_key": "k"}
+
+
+@pytest.mark.parametrize("path,payload", _PROVENANCE_ROUTES,
+                         ids=[p for p, _ in _PROVENANCE_ROUTES])
+def test_every_route_reports_the_model_that_served_a_virtual(
+    server, monkeypatch, path, payload,
+):
+    _stub_upstream(monkeypatch, server, _FakeResp)
+    _virtual_pool(monkeypatch, server, [("fakeprov", _PROVIDER_CFG, "free-model")])
+    server.app.config["TESTING"] = True
+    r = server.app.test_client().post(path, json=payload("llmproxy__free"))
+    assert r.status_code == 200, r.data
+    assert r.headers.get("X-LLMProxy-Selected-Model") == "fakeprov/free-model"
+
+
+@pytest.mark.parametrize("path,payload", _PROVENANCE_ROUTES,
+                         ids=[p for p, _ in _PROVENANCE_ROUTES])
+def test_every_route_reports_the_model_that_served_a_pinned_request(
+    server, monkeypatch, path, payload,
+):
+    _stub_upstream(monkeypatch, server, _FakeResp)
+    server.app.config["TESTING"] = True
+    r = server.app.test_client().post(path, json=payload("fakeprov__free-model"))
+    assert r.status_code == 200, r.data
+    assert r.headers.get("X-LLMProxy-Selected-Model") == "fakeprov/free-model"
+
+
+def test_a_failed_reply_still_names_the_last_candidate_tried(server, monkeypatch):
+    """The reply that says everything failed is the one most worth labelling."""
+    _stub_upstream(monkeypatch, server, lambda: _FakeResp(status=503, body=b'{"error":{"message":"down"}}'))
+    _virtual_pool(monkeypatch, server, [
+        ("fakeprov", _PROVIDER_CFG, "free-model"),
+        ("fakeprov", _PROVIDER_CFG, "big-model"),
+    ])
+    server.app.config["TESTING"] = True
+    r = server.app.test_client().post(
+        "/v1/chat/completions",
+        json={"model": "llmproxy__free", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert r.status_code >= 400
+    assert r.headers.get("X-LLMProxy-Selected-Model") in (
+        "fakeprov/free-model", "fakeprov/big-model",
+    )
+
+
+def test_streamed_reply_reports_its_model_before_any_bytes_flow(server, monkeypatch):
+    chunks = [b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n', b"data: [DONE]\n\n"]
+    _stub_upstream(monkeypatch, server, lambda: _FakeResp(chunks=chunks))
+    _virtual_pool(monkeypatch, server, [("fakeprov", _PROVIDER_CFG, "free-model")])
+    server.app.config["TESTING"] = True
+    r = server.app.test_client().post(
+        "/v1/chat/completions",
+        json={"model": "llmproxy__free", "stream": True,
+              "messages": [{"role": "user", "content": "hi"}]},
+    )
+    # Headers are readable without consuming the body: Flask finalizes the
+    # response before the WSGI server iterates it.
+    assert r.headers.get("X-LLMProxy-Selected-Model") == "fakeprov/free-model"
+    assert b"[DONE]" in r.data
+
+
+def test_the_error_path_still_carries_retry_after(server, monkeypatch):
+    """Carrying headers across the re-render must not disturb the error path.
+
+    The re-render is gated on 2xx, so a quota reply never passes through it and
+    keeps the Retry-After the upstream sent.
+    """
+    class _QuotaResp(_FakeResp):
+        def __init__(self):
+            super().__init__(status=429, body=b'{"error":{"message":"slow down"}}')
+            self.headers = {"Content-Type": "application/json", "Retry-After": "42"}
+
+    _stub_upstream(monkeypatch, server, _QuotaResp)
+    server.app.config["TESTING"] = True
+    r = server.app.test_client().post(
+        "/v1/chat/completions",
+        json={"model": "fakeprov__free-model", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert r.status_code == 429
+    assert r.headers.get("Retry-After") == "42"
+    assert r.headers.get("X-LLMProxy-Selected-Model") == "fakeprov/free-model"

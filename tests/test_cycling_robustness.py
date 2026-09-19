@@ -623,3 +623,107 @@ def test_a_forced_capability_miss_does_not_count_against_health(server, monkeypa
         )
     assert server._health_score("p1", "m1") == 1.0
     server._reset_usage()
+
+
+# ── llmproxy_route body field ───────────────────────────────────────────────
+# The route headers say which candidate answered, but most SDK clients surface
+# a parsed body and never expose response headers, so a virtual-model reply also
+# carries the same facts in an additive top-level key.
+
+def _route_of(resp) -> dict:
+    return json.loads(resp.get_data())["llmproxy_route"]
+
+
+def test_route_field_names_the_ranked_pick(server, monkeypatch):
+    monkeypatch.setattr(server, "_proxy_request",
+                        lambda endpoint, pn, cfg, payload, timeout: _json_resp(_OK))
+    resp = server._proxy_cycling_non_streaming(
+        "chat/completions", "t", [("p1", {}, "m1")], {}, 5,
+        route_reason="capacity", virtual_model="llmproxy__free",
+    )
+    route = _route_of(resp)
+    assert route["object"] == "route.report"
+    assert route["virtual"] == "llmproxy__free"
+    assert route["provider"] == "p1"
+    assert route["model"] == "m1"
+    assert route["selected_model"] == "p1/m1"
+    assert route["route_reason"] == "capacity"
+    assert route["attempt"] == 0
+    assert route["failed_over"] is False
+    # The answer itself is untouched.
+    assert json.loads(resp.get_data())["choices"] == _OK["choices"]
+
+
+def test_route_field_marks_a_failover(server, monkeypatch):
+    def fake(endpoint, pn, cfg, payload, timeout):
+        return _json_resp({"error": {"message": "down"}}) if payload["model"] == "m1" else _json_resp(_OK)
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    resp = server._proxy_cycling_non_streaming(
+        "chat/completions", "t", [("p1", {}, "m1"), ("p2", {}, "m2")], {}, 5,
+        route_reason="capacity", virtual_model="llmproxy__free",
+    )
+    route = _route_of(resp)
+    assert route["selected_model"] == "p2/m2"
+    assert route["attempt"] == 1
+    assert route["failed_over"] is True
+    assert route["route_reason"] == "capacity,failover#1"
+    # Header and body agree.
+    assert resp.headers["X-LLMProxy-Selected-Model"] == "p2/m2"
+
+
+def test_route_field_is_absent_for_a_pinned_request(server, monkeypatch):
+    """A pinned provider__model request already names its own answer."""
+    monkeypatch.setattr(server, "_proxy_request",
+                        lambda endpoint, pn, cfg, payload, timeout: _json_resp(_OK))
+    resp = server._proxy_cycling_non_streaming(
+        "chat/completions", "t", [("p1", {}, "m1")], {}, 5, route_reason="capacity",
+    )
+    assert "llmproxy_route" not in json.loads(resp.get_data())
+    assert resp.headers["X-LLMProxy-Selected-Model"] == "p1/m1"
+
+
+def test_route_field_can_be_switched_off(server, monkeypatch):
+    monkeypatch.setattr(server, "_proxy_request",
+                        lambda endpoint, pn, cfg, payload, timeout: _json_resp(_OK))
+    resp = server._proxy_cycling_non_streaming(
+        "chat/completions", "t", [("p1", {}, "m1")], {}, 5,
+        route_reason="capacity", virtual_model="llmproxy__free",
+        config={"server": {"report_route": False}},
+    )
+    assert "llmproxy_route" not in json.loads(resp.get_data())
+    # Switching the body field off leaves the headers alone.
+    assert resp.headers["X-LLMProxy-Selected-Model"] == "p1/m1"
+
+
+def test_an_unparseable_body_is_served_unchanged(server, monkeypatch):
+    """Provenance is never worth corrupting an answer over."""
+    raw = b"<!doctype html><p>gateway</p>"
+    monkeypatch.setattr(
+        server, "_proxy_request",
+        lambda endpoint, pn, cfg, payload, timeout: Response(
+            raw, status=200, content_type="application/json"),
+    )
+    resp = server._proxy_cycling_non_streaming(
+        "chat/completions", "t", [("p1", {}, "m1")], {}, 5,
+        route_reason="capacity", virtual_model="llmproxy__free",
+    )
+    # An unusable body fails over and, with nothing left, is returned as-is.
+    assert resp.get_data() == raw
+
+
+def test_an_error_reply_keeps_the_upstream_diagnostic_body(server, monkeypatch):
+    """When every candidate fails the client must still see the real error."""
+    err = {"error": {"message": "upstream exploded"}}
+    monkeypatch.setattr(
+        server, "_proxy_request",
+        lambda endpoint, pn, cfg, payload, timeout: _json_resp(err, status=503),
+    )
+    resp = server._proxy_cycling_non_streaming(
+        "chat/completions", "t", [("p1", {}, "m1")], {}, 5,
+        route_reason="capacity", virtual_model="llmproxy__free",
+    )
+    assert resp.status_code == 503
+    body = json.loads(resp.get_data())
+    assert body == err
+    assert "llmproxy_route" not in body

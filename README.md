@@ -177,6 +177,14 @@ The families are:
 All of these **except fusion** share the same cycling-and-failover machinery
 described next; fusion fans out to a panel instead (see [Fusion](#fusion-virtual-models-multi-model-deliberation)).
 
+The sub-variants are not a separate mechanism. `llmproxy/flagship__free` reaches
+the same cycling engine as `llmproxy/flagship`, differing only in which
+candidates its pool contains and in the ordering passes that run before the walk;
+the failover rules themselves are driven by the upstream's response, never by the
+virtual's name. So every family and every `*/free` and `*/local` slice fails over
+across the models in its own pool, and the per-provider virtuals do too, within
+the one provider they name.
+
 ### How cycling & failover works
 
 When a request targets a (non-fusion) virtual model, llmproxy:
@@ -264,6 +272,18 @@ rotation is accounts-first (same model, fresh credential) before moving on.
 When **every** candidate has failed, llmproxy returns the last upstream response
 (so you still see the real diagnostic body and status) rather than a synthesized
 error; if no candidate was even reachable it returns a `503`.
+
+Two boundaries are worth stating outright, because both are deliberate. The walk
+**never widens past its own pool**: an exhausted `llmproxy/flagship` does not
+spill into `llmproxy/deep`, and `loadbalanced` is the only virtual that crosses
+tiers at all. And a **stream can only fail over before it commits**, because once
+bytes have reached the client there is nothing to fail over to, so a
+mid-generation death is terminated cleanly and the provider demoted rather than
+retried, unless [`server.stream_buffer_full`](#stream_buffer_full) is set.
+
+Which candidate actually answered is reported on every reply, as both a response
+header and, for virtual models, a field in the body. See
+[route provenance](#route-provenance).
 
 You can inspect the live pool behind any virtual model without sending a chat
 request:
@@ -1178,10 +1198,15 @@ of remapping every conversation — measured at ~10% churn when growing a pool f
 8 to 9, against a theoretical floor of 11%. As with every ordering pass, it only
 reorders: a pinned upstream that goes down fails over normally.
 
-### Explaining a routing decision — `X-LLMProxy-Route-Reason`
+<a name="route-provenance"></a>
+### Route provenance: which model actually answered
 
-Five successive passes decide which candidate is tried first. Every response
-served through a virtual model now carries which ones fired:
+A virtual model stands for a pool, so the reply alone never used to say which
+candidate produced it. Every response now reports that, through two channels.
+
+**Response headers, on every reply.** `X-LLMProxy-Selected-Model` names the
+provider and model that served the request, and `X-LLMProxy-Route-Reason` names
+the ordering passes that put it first:
 
 ```
 X-LLMProxy-Route-Reason: capacity,request_fit=standard(tool_signals:dimensions),capability=tools
@@ -1193,6 +1218,62 @@ so the header alone distinguishes *chosen* from *settled for*. When a tier was
 adjusted by tool signals, the log line also records the evidence behind it —
 severity, turn depth, recent read/write/edit counts and the resulting score —
 rather than just the verdict.
+
+The headers are not confined to virtual models or to the OpenAI surface. A pinned
+`provider__model` request reports itself, so a client never has to branch on what
+kind of id it asked for; `/v1/messages`, `/v1/responses` and the Gemini route
+carry them through dialect translation; a fusion reply names its synthesizer, the
+model whose words actually reach you; a cached reply names the model that
+originally produced it; and when *every* candidate fails, the error reply still
+names the last one tried, which is precisely when you most want to know.
+
+**A body field, on virtual models.** Most SDK clients surface a parsed body and
+never expose response headers to their callers, so a virtual-model reply also
+carries an additive top-level `llmproxy_route` object:
+
+```json
+{
+  "id": "chatcmpl-...",
+  "model": "llama-3.3-70b-versatile",
+  "choices": [ ... ],
+  "llmproxy_route": {
+    "object": "route.report",
+    "virtual": "llmproxy__deep/free",
+    "provider": "groq",
+    "model": "llama-3.3-70b-versatile",
+    "selected_model": "groq/llama-3.3-70b-versatile",
+    "route_reason": "capacity,failover#1",
+    "attempt": 1,
+    "failed_over": true
+  }
+}
+```
+
+Strict OpenAI clients ignore unknown top-level keys, which is the same bet the
+[`llmproxy_fusion`](#fusion-virtual-models-multi-model-deliberation) block makes.
+A pinned request does not get the field, since it already names its own model.
+
+Streamed responses carry the same object in a single synthetic
+`chat.completion.chunk` sent ahead of the upstream's own frames. Its `choices`
+array is empty, which is the shape clients already receive from the final usage
+chunk, so it needs no special handling:
+
+```
+data: {"object":"chat.completion.chunk","choices":[],"llmproxy_route":{ ... }}
+data: {"choices":[{"delta":{"content":"Hel"}}]}
+...
+```
+
+Three scope notes. The upstream's own chunks are relayed byte for byte, so the
+block is added rather than merged into an existing frame. Non-OpenAI inbound
+dialects (`/v1/messages`, `/v1/responses`, Gemini, legacy completions) receive
+the headers but not the in-body block, since their renderers build strict
+per-dialect shapes. And provenance never costs you an answer: if a body cannot be
+parsed it is served exactly as the upstream sent it, field omitted.
+
+| Key                   | Default | Meaning |
+|-----------------------|---------|---------|
+| `server.report_route` | `true`  | Emit the `llmproxy_route` body block. Set it to `false` for a client that validates its response schema strictly enough to reject an unknown key; the response headers are unaffected either way. |
 
 <a name="context_aware_routing"></a>
 ### Context-window-aware routing
