@@ -498,8 +498,18 @@ def flagship_tier_cfg(config: dict | None = None) -> dict:
 # and cached here rather than shipped in providers.json or written into the
 # hand-edited config.json. Nothing about it is committed to the repo.
 #
-# Shape: {"last_refresh_at": iso8601, "bar": float, "criteria": {...},
-#         "members": ["provider/model", ...], "scores": {id: {...}}}
+# Shape: {"last_refresh_at": iso8601, "bar": float,
+#         "members": ["provider/model", ...],
+#         "scores": {"provider/model": {"combined": float, "model_key": str}},
+#         "model_scores": {model_key: float},
+#         "distinct_models": [model_key, ...], "free_models": [model_key, ...],
+#         "candidates_considered": int}
+#
+# `members` says who is in the tier; `scores` and `model_scores` say how strong
+# each one is, which is what lets the router walk a flagship pool strongest-first
+# rather than in the arbitrary order `members` happens to carry. `model_scores`
+# is keyed by normalised model rather than by routing target, because a score
+# belongs to the weights and not to the provider serving them.
 
 def get_flagship_state_path(config_path: str | None = None) -> Path:
     return get_config_path(config_path).parent / "flagship_models.json"

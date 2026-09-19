@@ -11,7 +11,9 @@ The rules, in the order they apply:
 1. **Benchmarks rank.** Sources may use unrelated scales, so each is
    rank-normalised to a percentile over the models it covers and the
    percentiles are combined. Raw scores are never averaged, so adding a source
-   on a different scale cannot swamp the existing one.
+   on a different scale cannot swamp the existing one. The combined percentile
+   is *kept*, not only used for admission: it is what orders the tier at
+   request time, so a flagship pool is walked strongest-first.
 2. **Spec gates veto.** Tool-calling and a context floor. These barely
    discriminate on their own, so they are a veto rather than a selector: a
    model that cannot call tools cannot drive an agent loop whatever it scores.
@@ -166,6 +168,16 @@ class Selection:
     free_models: list[str]
     pinned: list[str]
     unverified_pins: list[str]
+    # Lowercased qualified "provider/model" -> {"combined": float, "model_key": str}.
+    # One entry per member we could score, which is what lets the router walk the
+    # tier strongest-first instead of in the arbitrary order of `members`.
+    scores: dict[str, dict] = field(default_factory=dict)
+    # Normalised model key -> combined percentile, for EVERY scored model this
+    # deployment can see, admitted or not. A score belongs to the weights rather
+    # than to the provider serving them, so a routing target that appeared after
+    # the last refresh — or a pinned provider no leaderboard covers by name —
+    # can still join its score through this map.
+    model_scores: dict[str, float] = field(default_factory=dict)
 
 
 def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
@@ -173,7 +185,9 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
 
     Returns qualified ``provider/model`` ids, one per routing target, so a model
     served by several providers contributes several members even though it
-    counts once toward ``min_flagship_free_models``.
+    counts once toward ``min_flagship_free_models``. The combined percentile
+    that admitted each one is returned alongside, keyed both per routing target
+    and per model, so the router can order the tier without recomputing it.
     """
     min_context = int(tier_cfg.get("min_context") or 0)
     require_tools = bool(tier_cfg.get("require_tools", True))
@@ -233,6 +247,16 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
     members |= pin
     members -= exclude
 
+    # Built from `members` rather than from `eligible`, so a pin that a source
+    # happens to cover is still rankable even though it bypassed the bar. A pin
+    # nothing scores simply has no entry, and the router sorts it last.
+    scores = {
+        c.qualified.lower(): {"combined": combined[c.model_key],
+                              "model_key": c.model_key}
+        for c in candidates
+        if c.qualified.lower() in members and c.model_key in combined
+    }
+
     return Selection(
         members=sorted(members),
         bar=bar,
@@ -240,6 +264,8 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
         free_models=[k for k in admitted if k in free_keys],
         pinned=sorted(pin),
         unverified_pins=sorted(pin - verified_pins),
+        scores=scores,
+        model_scores=dict(combined),
     )
 
 

@@ -273,6 +273,12 @@ When **every** candidate has failed, llmproxy returns the last upstream response
 (so you still see the real diagnostic body and status) rather than a synthesized
 error; if no candidate was even reachable it returns a `503`.
 
+The order the walk follows is the pool's own: capacity headroom for the `/free`
+virtuals, the cost waterfall for `loadbalanced`, a random rotation elsewhere, and
+for [flagship](#flagship-ordering) a strict descending benchmark ranking, so a
+flagship failover steps down to the next-strongest model rather than to an
+arbitrary one.
+
 Two boundaries are worth stating outright, because both are deliberate. The walk
 **never widens past its own pool**: an exhausted `llmproxy/flagship` does not
 spill into `llmproxy/deep`, and `loadbalanced` is the only virtual that crosses
@@ -495,7 +501,13 @@ additionally capacity-aware. The `__free` and `__local` variants are also
 [request-fit triaged](#request-fit-triage-every-free-and-local-virtual): within
 a single-tier pool (all `deep`, all `exploratory`, …) the proxy still prefers the
 right-*sized* model for the request — a smaller one for a light prompt, the
-largest for heavy reasoning. The `llmproxy/...` slash form (e.g. `llmproxy/deep`, `llmproxy/deep__free`) and the
+largest for heavy reasoning.
+
+The three `flagship` endpoints are the exception to both. They are the only
+pools with a measured per-model ranking, so they are walked
+[strictly best-first by benchmark score](#flagship-ordering), with capacity and
+health demoting a saturated candidate rather than reordering the rest, and
+neither capacity sampling nor request-fit triage applies. The `llmproxy/...` slash form (e.g. `llmproxy/deep`, `llmproxy/deep__free`) and the
 three-part slash form (e.g. `llmproxy/deep/free`) are also accepted on input.
 
 ```bash
@@ -1219,6 +1231,19 @@ adjusted by tool signals, the log line also records the evidence behind it —
 severity, turn depth, recent read/write/edit counts and the resulting score —
 rather than just the verdict.
 
+A [flagship](#flagship-tier) pool reports `flagship_rank=<ranked>/<total>`
+instead of `capacity` or `cycling`, naming how much of the pool the benchmark
+ranking actually covered:
+
+```
+X-LLMProxy-Route-Reason: flagship_rank=4/5,capability=tools
+```
+
+`4/5` says four of the five candidates carried a score and one did not — an
+unscorable pin, sorted last. A flagship pool whose membership cache holds no
+scores at all reports the ordering it genuinely used (`cycling` or `capacity`)
+rather than claiming a ranking, so the header never overstates what is known.
+
 The headers are not confined to virtual models or to the OpenAI surface. A pinned
 `provider__model` request reports itself, so a client never has to branch on what
 kind of id it asked for; `/v1/messages`, `/v1/responses` and the Gemini route
@@ -1782,6 +1807,56 @@ Four rules, in this order:
 4. **Pins and excludes win.** A pin bypasses both the bar and the spec veto.
    An exclude is applied last and beats everything, including a pin.
 
+<a name="flagship-ordering"></a>
+#### How the pool is ordered
+
+Flagship is the only tier with a measured per-model ranking, so it is the only
+one that is *ordered* rather than rotated or load-spread. The combined
+percentile from rule 1 is not discarded once membership is settled: it is
+written into `flagship_models.json` beside the member list, and the router
+walks the pool **strictly best-first**, so failover descends the ranking rather
+than sampling it. Every flagship entry point does this — `llmproxy/flagship`,
+`flagship__free`, `flagship__local`, and the per-provider
+`llmproxy/<provider>__flagship` slice.
+
+The score is the *primary* key, and nothing continuous is folded into it.
+Remaining quota and provider health break ties only; letting them scale the
+score would quietly turn a strict ranking back into a weighted preference.
+Ties are common, because cross-provider duplicates share one score, so
+remaining capacity breaks them first and the provider name breaks what is left,
+which keeps the order deterministic rather than dependent on iteration order.
+
+Two departures from a pure sort, both deliberate:
+
+- A candidate cooling after a recent `402`/`429`, or one with no headroom left,
+  is demoted to the **back** of the list. It stays reachable, so a saturated top
+  pick never causes an avoidable `503`, but a strict order would otherwise
+  re-attempt a rate-limited leader first on every request until its window
+  cleared.
+- An **unscored** candidate sorts after every scored one. Nothing can rank it on
+  evidence, and promoting it would let one pin preempt a measured
+  top-of-the-field model on every request.
+
+Because the ranking is measured capability, it outranks the softer ordering
+passes, which are suppressed for a ranked flagship pool: [request-fit
+triage](#request-fit-triage-every-free-and-local-virtual) (whose effective key
+inside a single tier is a parameter count guessed from the model id — precisely
+the crude proxy the benchmark score replaces),
+[`favorite_free_models`](#favorite_free_models), and free-tier cache affinity.
+The *hard* passes still win, because they predict an outright failure rather
+than a preference: forced tool/vision/JSON capability ordering, and
+[context fit](#context_aware_routing).
+
+One consequence is worth stating plainly: **`flagship__free` no longer spreads
+load.** It walks the ranking instead of sampling by remaining quota, so the
+top-scored free model absorbs every request until it saturates and drops to the
+back. That is the point of asking for flagship, but it is a real change from how
+the other `/free` virtuals behave.
+
+If the membership cache carries no scores yet — a first run, or a file written
+by an older build — the pool falls back to its previous ordering and says so in
+the route reason, rather than claiming a ranking it does not have.
+
 #### Free is per-provider
 
 The same weights can be free on one provider and paid on another, so free
@@ -1881,6 +1956,16 @@ list is the intended answer:
 A pin bypasses the spec veto too, since an unscraped provider has no
 capability data to check. The refresh logs a warning naming any pinned id it
 could not verify, so an unnoticed typo does not silently do nothing.
+
+**A pin buys membership, not rank.** Scores belong to the model rather than to
+the provider serving it, so a pinned provider whose weights *are* scored under
+some other provider's listing inherits that score and takes its rightful place
+in the [ordering](#flagship-ordering) — which is the common case, since the join
+is on normalised model names. Only a pin whose weights nothing scores at all is
+unrankable, and that one sorts last, behind every measured member. It is still
+reached by failover; it is simply not chosen ahead of a model that was actually
+measured. To make such a model a first pick, address it by name, or use its
+per-provider virtual `llmproxy/<provider>__flagship`.
 
 Where a provider does not publish capability data but serves the same weights
 as a provider that does, the specs and score are carried across by matching

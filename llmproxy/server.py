@@ -248,6 +248,19 @@ _LOCAL_VIRTUAL_MODELS: frozenset[str] = frozenset({
     *(f"llmproxy__{lvl}/local" for lvl in _REASONING_LEVELS),
     *(f"llmproxy/{lvl}/local" for lvl in _REASONING_LEVELS),
 })
+# Virtual models backed by an overlay tier whose membership is computed from
+# benchmark scores (today: flagship). These are the only pools with a measured
+# per-model ranking, so they are ordered by it rather than rotated or
+# load-spread — see _flagship_ordered_candidates. Generated from
+# _OVERLAY_REASONING_LEVELS so a future overlay tier is picked up automatically.
+# The per-provider <provider>/flagship form is recognized separately, via
+# _split_per_provider_virtual in _is_flagship_virtual_model.
+_FLAGSHIP_VIRTUAL_MODELS: frozenset[str] = frozenset({
+    *(f"{pfx}{lvl}" for lvl in _OVERLAY_REASONING_LEVELS
+      for pfx in ("llmproxy__", "llmproxy/")),
+    *(f"{pfx}{lvl}/{dim}" for lvl in _OVERLAY_REASONING_LEVELS
+      for dim in ("free", "local") for pfx in ("llmproxy__", "llmproxy/")),
+})
 # The cost-tiered "just pick something sensible and cheap" virtual. It owns its
 # own ordering (free → local → paid waterfall, optimized per-prompt within each
 # tier) and is the ONLY virtual that crosses tiers, so it is deliberately NOT in
@@ -1914,6 +1927,12 @@ def _recompute_flagship_members(config: dict, config_path: str | None) -> dict |
         "last_refresh_at": datetime.datetime.now(datetime.UTC).isoformat(),
         "bar": selection.bar,
         "members": selection.members,
+        # The score that admitted each member, and the score of every model this
+        # deployment can see. `members` alone says who is in the tier but not how
+        # strong each one is, and the router needs the latter to walk the pool
+        # strongest-first. See _get_flagship_scores.
+        "scores": selection.scores,
+        "model_scores": selection.model_scores,
         "distinct_models": selection.distinct_models,
         "free_models": selection.free_models,
         "candidates_considered": len(candidates),
@@ -2689,6 +2708,15 @@ def get_model(model_id: str) -> Response:
     model_id = _canonicalize_model_id(model_id, load_config())
     if _is_virtual_model(model_id):
         candidates = _get_virtual_candidates(model_id)
+        # A flagship pool is walked in benchmark order, so report it in that
+        # order too: _candidates is the documented way to inspect a pool, and a
+        # list that did not match the actual failover sequence would be worse
+        # than none. Other virtuals order per request (capacity, request fit,
+        # rotation), so there is no single order to show for them.
+        if _is_flagship_virtual_model(model_id):
+            candidates = _flagship_ordered_candidates(
+                candidates, _get_flagship_scores(),
+                _get_normalized_free_limits(load_config()))
         return jsonify({
             "id": _display_id(model_id),
             "object": "model",
@@ -3552,6 +3580,7 @@ def _wants_thinking(payload: dict) -> bool:
 ROUTE_SOURCE_CAPACITY = "capacity"
 ROUTE_SOURCE_LOADBALANCED = "loadbalanced"
 ROUTE_SOURCE_CYCLING = "cycling"
+ROUTE_SOURCE_FLAGSHIP_RANK = "flagship_rank"
 ROUTE_SOURCE_REQUEST_FIT = "request_fit"
 ROUTE_SOURCE_CAPABILITY = "capability"
 ROUTE_SOURCE_FAVORITE = "favorite"
@@ -5429,6 +5458,103 @@ def _quality_ordered_candidates(
     return [c for c, _ in viable] + [c for c, _ in exhausted]
 
 
+# — flagship (benchmark-ranked) ordering —
+#
+# Flagship is the one tier whose membership is decided by a measured score, so
+# it is also the one tier that can be ORDERED by one. Everywhere else the router
+# spreads load (free) or rotates (the rest), because it has no basis to call one
+# member better than another. Here it does, so the pool is walked strongest-first
+# and failover descends it in rank order.
+
+
+def _flagship_candidate_score(
+    provider_name: str, upstream_id: str, scores: dict[str, float]
+) -> float | None:
+    """This candidate's combined benchmark percentile, or None if nothing scores it.
+
+    Tries the provider's own entry first, then the normalised model key, because
+    a score describes the weights rather than the provider serving them: a pinned
+    provider that no leaderboard names still ranks correctly when the same model
+    was scored under another provider's listing.
+    """
+    from .flagship import normalize_model_id
+
+    qualified = f"{provider_name}/{upstream_id}".lower()
+    if qualified in scores:
+        return scores[qualified]
+    return scores.get(normalize_model_id(upstream_id))
+
+
+# Sorts below every real percentile (which live in [0, 1]), so an unscored
+# candidate follows every scored one instead of being guessed at.
+_FLAGSHIP_UNSCORED: float = -1.0
+
+
+def _flagship_ordered_candidates(
+    candidates: list[tuple[str, dict, str]],
+    scores: dict[str, float],
+    free_limits: dict[str, dict],
+) -> list[tuple[str, dict, str]]:
+    """Order a flagship pool strictly best-first by combined benchmark percentile.
+
+    The tier exists to reach the strongest model available, so the highest-ranked
+    candidate is tried first and failover walks the rest in descending order. The
+    score is the *primary* key and nothing continuous is folded into it: capacity
+    and health only break ties, since letting them scale the score would quietly
+    turn a strict ranking back into a weighted preference.
+
+    Two departures from a pure sort, both deliberate:
+
+    * A candidate cooling after a recent 402/429, or one with no headroom left,
+      is demoted to the back of the list — still reachable, so a saturated top
+      pick never causes an avoidable 503, but not re-attempted first on every
+      request until its window clears.
+    * An unscored candidate (an unscraped pin, or a model whose weights no source
+      covers) sorts after every scored one. Nothing can rank it on evidence, and
+      promoting it would let one pin preempt a measured top-of-the-field model on
+      every request.
+
+    Ties are common — cross-provider duplicates share one model key and therefore
+    one score — so remaining capacity breaks them first and the provider/model
+    name breaks what is left, which keeps the order deterministic rather than
+    dependent on route-cache iteration order.
+
+    Returns *candidates* unchanged when nothing in the pool carries a score, so a
+    cache written before scores were persisted keeps today's behaviour instead of
+    collapsing into an arbitrary order.
+    """
+    if not candidates:
+        return candidates
+    if not any(_flagship_candidate_score(pn, um, scores) is not None
+               for pn, _pc, um in candidates):
+        return candidates
+
+    scored: list[tuple[tuple[str, dict, str], float, float]] = []
+    for pn, pc, um in candidates:
+        account_id = provider_account_id(pc)
+        key = _usage_key(pn, um, account_id)
+        limits = free_limits.get(key, {}) or free_limits.get(f"{pn}/{um}".lower(), {})
+        if _is_candidate_saturated(pn, um, account_id):
+            viability = 0.0  # cooling after a recent 402/429 — demote, keep reachable
+        else:
+            used_min, used_day = _get_usage_snapshot(key)
+            used_tok_min, used_tok_day = _get_token_snapshot(key)
+            viability = _capacity_score(
+                used_min, used_day, limits, used_tok_min, used_tok_day)
+            viability *= _health_score(pn, um, account_id)
+        rank = _flagship_candidate_score(pn, um, scores)
+        scored.append(((pn, pc, um), rank if rank is not None else _FLAGSHIP_UNSCORED,
+                       viability))
+
+    def _key(item: tuple[tuple[str, dict, str], float, float]):
+        (pn, _pc, um), rank, viability = item
+        return (-rank, -viability, pn.lower(), um.lower())
+
+    viable = sorted((it for it in scored if it[2] > 0.0), key=_key)
+    exhausted = sorted((it for it in scored if it[2] == 0.0), key=_key)
+    return [c for c, _r, _v in viable] + [c for c, _r, _v in exhausted]
+
+
 # — "free" candidate selector —
 
 def _normalized_believed_free(config: dict) -> set[str]:
@@ -5701,6 +5827,55 @@ def _get_flagship_models(config: dict | None = None,
     if isinstance(exclude, list):
         members -= {m.lower() for m in exclude if isinstance(m, str)}
     return members
+
+
+def _get_flagship_scores(config_path: str | None = None) -> dict[str, float]:
+    """Combined benchmark percentile per flagship routing target, from the cache.
+
+    Keyed by BOTH the lowercased qualified ``provider/model`` id and the
+    normalised model key, mirroring the dual lookup ``_get_flagship_models``'
+    callers already do. The two key spaces cannot collide: ``normalize_model_id``
+    strips everything outside ``[a-z0-9]``, so a model key never contains a "/".
+
+    The model-key entries are what let a pinned provider, or a routing target
+    that appeared after the last refresh, inherit the score of the same weights
+    scored elsewhere. A score is a property of the *model*, not of the provider
+    serving it, so the same weights rank identically wherever they are served.
+
+    Returns ``{}`` for a cache file written before scores were persisted, which
+    is what makes a stale cache degrade to the previous ordering rather than
+    sorting every candidate as unscored.
+    """
+    state = load_flagship_state(config_path)
+    out: dict[str, float] = {}
+
+    def _coerce(raw) -> float | None:
+        # Two shapes are accepted per entry: the {"combined": float, ...} the
+        # refresh writes, and a bare number, so a hand-edited or future cache
+        # file costs an ordering rather than a request.
+        if isinstance(raw, dict):
+            raw = raw.get("combined")
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return None
+        return float(raw)
+
+    for key in ("model_scores", "scores"):
+        block = state.get(key)
+        if block is None:
+            continue
+        if not isinstance(block, dict):
+            logger.warning(
+                "flagship_models.json: %r must be a dict; got %s — ignoring.",
+                key, type(block).__name__,
+            )
+            continue
+        for ident, raw in block.items():
+            if not isinstance(ident, str):
+                continue
+            value = _coerce(raw)
+            if value is not None:
+                out[ident.lower()] = value
+    return out
 
 
 def _get_reasoning_model_candidates(level: str) -> list[tuple[str, dict, str]]:
@@ -6047,6 +6222,20 @@ def _is_local_virtual_model(model_full: str) -> bool:
     membership in _LOCAL_VIRTUAL_MODELS is the complete test.
     """
     return model_full in _LOCAL_VIRTUAL_MODELS
+
+
+def _is_flagship_virtual_model(model_full: str) -> bool:
+    """True for any virtual backed by a benchmark-ranked overlay tier.
+
+    Covers the global forms (``llmproxy__flagship`` and its ``/free`` and
+    ``/local`` sub-virtuals, in both the new and legacy spellings) and the
+    per-provider ``llmproxy__<provider>/flagship`` slice, which is a flagship
+    pool narrowed to one provider and wants the same ordering.
+    """
+    if model_full in _FLAGSHIP_VIRTUAL_MODELS:
+        return True
+    split = _split_per_provider_virtual(model_full)
+    return split is not None and split[1] in _OVERLAY_REASONING_LEVELS
 
 
 def _get_provider_virtual_candidates(provider_name: str, dimension: str) -> list[tuple[str, dict, str]]:
@@ -6830,6 +7019,12 @@ def _proxy_endpoint(
         # virtual stays in the local list.
         is_free_virtual = _is_free_virtual_model(model_full)
         is_local_virtual = _is_local_virtual_model(model_full)
+        is_flagship_virtual = _is_flagship_virtual_model(model_full)
+        # True once the pool has actually been ranked by benchmark score, which
+        # is what licenses suppressing the soft ordering passes below. It stays
+        # False when the membership cache carries no scores yet, so a fresh or
+        # pre-upgrade deployment keeps its previous behaviour untouched.
+        flagship_ranked = False
         # Every pass that reorders the pool records itself here, so the pick can
         # be explained afterwards instead of reconstructed from log archaeology.
         decisions: list[str] = []
@@ -6839,6 +7034,32 @@ def _proxy_endpoint(
             # passes below are stable no-ops over it.
             ordered = _loadbalanced_ordered_candidates(candidates, payload, config)
             decisions.append(ROUTE_SOURCE_LOADBALANCED)
+        elif is_flagship_virtual:
+            # Tested BEFORE is_free_virtual: llmproxy__flagship/free belongs to
+            # both sets, and the benchmark ranking is the stronger signal — it
+            # is the only one measured per model rather than inferred from quota
+            # or a name. Checked after loadbalanced, which crosses tiers and owns
+            # its own waterfall.
+            flagship_scores = _get_flagship_scores()
+            free_limits = _get_normalized_free_limits(config)
+            ranked = sum(
+                1 for pn, _pc, um in candidates
+                if _flagship_candidate_score(pn, um, flagship_scores) is not None
+            )
+            flagship_ranked = ranked > 0
+            if flagship_ranked:
+                ordered = _flagship_ordered_candidates(
+                    candidates, flagship_scores, free_limits)
+                decisions.append(
+                    f"{ROUTE_SOURCE_FLAGSHIP_RANK}={ranked}/{len(candidates)}")
+            elif is_free_virtual:
+                # No scores cached — fall back to what this pool did before, and
+                # report that honestly rather than claiming a ranking we lack.
+                ordered = _capacity_ordered_candidates(candidates, free_limits)
+                decisions.append(ROUTE_SOURCE_CAPACITY)
+            else:
+                ordered = _cycling_candidates(candidates)
+                decisions.append(ROUTE_SOURCE_CYCLING)
         elif is_free_virtual:
             free_limits = _get_normalized_free_limits(config)
             ordered = _capacity_ordered_candidates(candidates, free_limits)
@@ -6868,7 +7089,13 @@ def _proxy_endpoint(
         # (which still wins for forced tools/vision/JSON). Within a constrained
         # sub-virtual like deep/free the tier term is constant, so the size term
         # picks the right-sized model from what's available. Never crosses tiers.
-        if is_free_virtual or is_local_virtual:
+        #
+        # Skipped on a ranked flagship pool. Inside flagship the tier term is
+        # constant too, which leaves _param_count — billions guessed from the
+        # model id — as the effective key, and that is precisely the crude proxy
+        # the benchmark score replaces. Letting it run would invert the ranking
+        # whenever a large model scores below a smaller one.
+        if (is_free_virtual or is_local_virtual) and not flagship_ranked:
             ordered = _order_by_request_fit(ordered, payload, _get_model_reasoning(config))
             tier, tier_source = _target_reasoning_tier_explained(payload)
             decisions.append(f"{ROUTE_SOURCE_REQUEST_FIT}={tier}({tier_source})")
@@ -6890,7 +7117,10 @@ def _proxy_endpoint(
         if needed:
             ordered = _order_by_capability(ordered, needed, _model_capabilities(config))
             decisions.append(f"{ROUTE_SOURCE_CAPABILITY}={'+'.join(sorted(needed))}")
-        if is_free_virtual:
+        # favorite_free_models is a soft preference over an otherwise unranked
+        # free pool. Flagship is ranked on measured capability, which is the
+        # stronger claim, so a favorite does not reorder it.
+        if is_free_virtual and not flagship_ranked:
             before = ordered[0] if ordered else None
             ordered = _apply_favorite_free_ordering(ordered, config)
             if ordered and ordered[0] is not before:
@@ -6898,7 +7128,10 @@ def _proxy_endpoint(
         # Model-level stickiness for free pools, opt-in. Runs after favorites so
         # an explicitly ranked favorite still wins; among the rest, one
         # conversation keeps landing on the same model instead of being spread.
-        if is_free_virtual and _free_tier_cache_affinity_enabled(config):
+        # Not on a ranked flagship pool: pinning a conversation to whichever
+        # member it first landed on directly contradicts best-first.
+        if (is_free_virtual and not flagship_ranked
+                and _free_tier_cache_affinity_enabled(config)):
             akey = _affinity_key(payload)
             if akey and len(ordered) > 1:
                 pinned = ordered[0] if ordered else None
