@@ -36,3 +36,12 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Machine-maintained state, written beside config.json. Never committed:
+# each is specific to one deployment and rewritten on its own cadence.
+routing_metadata.json
+flagship_models.json
+update_state.json
+cost_probe_state.json
+pr_state.json
+config.json.backup-*

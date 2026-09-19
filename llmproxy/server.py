@@ -1581,7 +1581,7 @@ def _supported_parameters(
     params: list[str] = []
     if _model_has_capability(provider_name, upstream_id, "tools", cap_map):
         params += ["tools", "tool_choice"]
-    if reasoning.get(upstream_id.lower()) or reasoning.get(f"{provider_name}/{upstream_id}".lower()):
+    if _lookup_model_fact(reasoning, provider_name, upstream_id):
         params.append("reasoning")
     return params
 
@@ -4009,9 +4009,37 @@ def _model_capabilities(config: dict) -> dict[str, set[str]]:
     return result
 
 
+def _lookup_model_fact(mapping: dict, provider_name: str, upstream_id: str):
+    """Find a per-model fact by qualified id, bare id, then normalized model.
+
+    The first two are how a hand-written override or a provider listing keys
+    things. The third is how the LEARNED layer keys what belongs to the weights
+    rather than to a provider: one entry under ``glm53flash`` answers for
+    ``z-ai/glm-5.3-flash``, ``zai/glm-5.3-flash``, ``zai-org/glm-5.3-flash`` and
+    the bare spelling alike. Without this last form those entries would be
+    written and never read, since none of them is a literal id anyone uses.
+
+    Tried last, so an explicit entry for this exact model on this exact provider
+    always beats a fact inherited from the same weights elsewhere.
+    """
+    if not mapping:
+        return None
+    hit = mapping.get(f"{provider_name}/{upstream_id}".lower())
+    if hit is not None:
+        return hit
+    hit = mapping.get(upstream_id.lower())
+    if hit is not None:
+        return hit
+    try:
+        from .flagship import normalize_model_id
+        return mapping.get(normalize_model_id(upstream_id))
+    except Exception:  # noqa: BLE001 — a lookup must never fail a request
+        return None
+
+
 def _model_has_capability(provider_name: str, upstream_id: str, cap: str, cap_map: dict[str, set[str]]) -> bool:
-    """Two-form lookup (bare id or provider/id) for a single capability."""
-    caps = cap_map.get(upstream_id.lower()) or cap_map.get(f"{provider_name}/{upstream_id}".lower())
+    """Three-form lookup (qualified, bare, normalized) for a single capability."""
+    caps = _lookup_model_fact(cap_map, provider_name, upstream_id)
     return bool(caps and cap in caps)
 
 
@@ -4046,7 +4074,7 @@ def _capability_state(
     *ordering*, where an untagged model deserves to sit between a confirmed
     match and a confirmed mismatch rather than tied with the mismatch.
     """
-    caps = cap_map.get(upstream_id.lower()) or cap_map.get(f"{provider_name}/{upstream_id}".lower())
+    caps = _lookup_model_fact(cap_map, provider_name, upstream_id)
     if not caps:
         return _CAP_UNKNOWN
     return _CAP_KNOWN_CAPABLE if cap in caps else _CAP_KNOWN_INCAPABLE
@@ -6251,8 +6279,7 @@ def _quality_key(provider_name: str, upstream_id: str,
     if flagship_models and (qualified in flagship_models
                             or upstream_id.lower() in flagship_models):
         return (_REASONING_LEVELS.index("flagship"), _param_count(upstream_id))
-    lvl = (reasoning_map.get(upstream_id.lower())
-           or reasoning_map.get(qualified)
+    lvl = (_lookup_model_fact(reasoning_map, provider_name, upstream_id)
            or _infer_reasoning_level(upstream_id))
     if lvl not in _REASONING_LEVELS:
         lvl = _infer_reasoning_level(upstream_id)
@@ -6940,10 +6967,8 @@ def _get_reasoning_model_candidates(level: str) -> list[tuple[str, dict, str]]:
         if overlay:
             matched = qualified in flagship or upstream_id.lower() in flagship
         else:
-            matched = (
-                reasoning.get(upstream_id.lower())
-                or reasoning.get(qualified)
-            ) == level
+            matched = _lookup_model_fact(
+                reasoning, provider_name, upstream_id) == level
         if matched:
             provider_cfg = get_provider(config, provider_name)
             if not provider_cfg:
