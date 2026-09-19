@@ -81,6 +81,7 @@ from flask import (
 
 from . import __version__
 from . import fusion as _fusion
+from . import route_report as _route_report
 from .config import (
     DEFAULT_FREE_TIER_CONFIG,
     RESERVED_PROVIDER_NAMES,
@@ -4443,12 +4444,44 @@ def _carry_route_headers(src: "Response", dst: "Response") -> "Response":
     return dst
 
 
+def _report_route_enabled(config: dict | None = None) -> bool:
+    """Whether to attach the additive ``llmproxy_route`` body block.
+
+    On by default: strict OpenAI clients ignore unknown top-level keys, which is
+    the same bet ``llmproxy_fusion`` already makes. The switch exists for a
+    client that validates its response schema strictly enough to reject one.
+    Turning it off leaves the response headers in place.
+    """
+    return _config_bool("report_route", True, config)
+
+
+def _build_route_report(
+    virtual_model: str,
+    provider_name: str,
+    upstream_model: str,
+    route_reason: str | None,
+    attempt_index: int,
+) -> dict:
+    """Assemble the ``llmproxy_route`` block for the candidate that answered."""
+    return _route_report.build_route_report(
+        virtual=virtual_model,
+        provider=provider_name,
+        model=upstream_model,
+        route_reason=_route_reason_with_attempt(route_reason, attempt_index)
+        if route_reason is not None else None,
+        attempt_index=attempt_index,
+    )
+
+
 def _stamp_route_headers(
     resp: "Response",
     route_reason: str | None,
     provider_name: str,
     upstream_model: str,
     attempt_index: int,
+    *,
+    virtual_model: str | None = None,
+    config: dict | None = None,
 ) -> "Response":
     """Record on *resp* which candidate served it and why it was ranked first.
 
@@ -4457,7 +4490,9 @@ def _stamp_route_headers(
     reason so a header alone distinguishes "chosen" from "settled for".
 
     Also records the selection on the request context, so the after_request
-    stamp can restore the headers if a later rebuild drops them.
+    stamp can restore the headers if a later rebuild drops them, and — when the
+    request named a virtual model — attaches the same facts to the JSON body,
+    since most SDK clients never expose response headers to their callers.
     """
     _note_selected_model(
         provider_name, upstream_model,
@@ -4471,7 +4506,27 @@ def _stamp_route_headers(
         resp.headers[ROUTE_HEADER_SELECTED_MODEL] = f"{provider_name}/{upstream_model}"
     except Exception:  # noqa: BLE001 — never fail a served response over a header
         logger.debug("could not stamp route headers", exc_info=True)
-    return resp
+    if virtual_model is None or not _report_route_enabled(config):
+        return resp
+    # Only JSON bodies: a streamed response carries its provenance in a leading
+    # SSE frame instead, and an error body is left exactly as the upstream sent
+    # it so the client still sees the real diagnostic.
+    try:
+        if not (200 <= resp.status_code < 300):
+            return resp
+        if not (resp.content_type or "").startswith("application/json"):
+            return resp
+        report = _build_route_report(
+            virtual_model, provider_name, upstream_model, route_reason, attempt_index,
+        )
+        injected = _route_report.inject_route_report(resp.get_data(), report)
+        return _carry_route_headers(resp, Response(
+            injected, status=resp.status_code, content_type=resp.content_type,
+        ))
+    except Exception as e:  # noqa: BLE001 — never fail a served response over provenance
+        print(f"[server:_stamp_route_headers] {e}")
+        traceback.print_exc()
+        return resp
 
 
 def _proxy_cycling_non_streaming(
@@ -4482,6 +4537,8 @@ def _proxy_cycling_non_streaming(
     timeout: int,
     on_success: Callable[..., None] | None = None,
     route_reason: str | None = None,
+    virtual_model: str | None = None,
+    config: dict | None = None,
 ) -> Response:
     """Try each candidate in order, returning the first success.
 
@@ -4595,7 +4652,10 @@ def _proxy_cycling_non_streaming(
                             latency_ms=_elapsed_ms, account_id=account_id)
             if on_success is not None:
                 on_success(provider_name, upstream_model, body, account_id)
-            return _stamp_route_headers(resp, route_reason, provider_name, upstream_model, idx)
+            return _stamp_route_headers(
+                resp, route_reason, provider_name, upstream_model, idx,
+                virtual_model=virtual_model, config=config,
+            )
         if _is_quota_error(resp.status_code, resp.get_data()):
             _record_quota_saturation(
                 provider_name, provider_cfg, upstream_model, resp.headers.get("Retry-After")
@@ -4621,6 +4681,7 @@ def _proxy_cycling_streaming(
     *,
     inbound=None,
     route_reason: str | None = None,
+    virtual_model: str | None = None,
 ) -> Response:
     """
     Try each candidate in order.  Checks the HTTP status code — and peeks at the
@@ -4877,12 +4938,28 @@ def _proxy_cycling_streaming(
         captured_model = upstream_model
         captured_prefix = list(buffered)
         captured_rest = rest
+        # A stream has no body to inject into, and rewriting the upstream's own
+        # chunks would forfeit the byte-for-byte relay the buffered prefix
+        # depends on. So the provenance rides one synthetic frame in front.
+        captured_lead = (
+            _route_report.route_chunk(
+                _build_route_report(
+                    virtual_model, provider_name, upstream_model, route_reason, idx,
+                ),
+                upstream_model,
+            )
+            if virtual_model is not None and _report_route_enabled(config)
+            else b""
+        )
 
         @stream_with_context
         def generate(r=captured_resp, pn=captured_provider, um=captured_model,
-                     pfx=captured_prefix, rst=captured_rest, acct=account_id):
+                     pfx=captured_prefix, rst=captured_rest, acct=account_id,
+                     lead=captured_lead):
             tail = bytearray()
             try:
+                if lead:
+                    yield lead
                 with r:
                     first = True
                     for chunk in itertools.chain(pfx, rst):
@@ -6861,12 +6938,13 @@ def _proxy_endpoint(
             return _proxy_cycling_streaming(
                 endpoint, model_full, ordered, payload, timeout,
                 on_success=on_success, config=config, inbound=inbound_adapter,
-                route_reason=route_reason,
+                route_reason=route_reason, virtual_model=model_full,
             )
         timeout = server_cfg.get("request_timeout", 120)
         resp = _proxy_cycling_non_streaming(
             endpoint, model_full, ordered, payload, timeout,
             on_success=on_success, route_reason=route_reason,
+            virtual_model=model_full, config=config,
         )
     else:
         provider_name, provider_cfg, upstream_model, err = _resolve_provider(model_full)

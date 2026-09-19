@@ -371,3 +371,71 @@ def test_budget_escalation_accepts_a_deadline(server):
     sig = inspect.signature(server._escalate_budget_if_starved)
     assert sig.parameters["deadline"].kind is inspect.Parameter.KEYWORD_ONLY
     assert sig.parameters["deadline"].default is None
+
+
+# ── streamed route provenance ───────────────────────────────────────────────
+# A stream has no body to inject into, so the llmproxy_route block rides one
+# synthetic frame ahead of the upstream's own. Rewriting the real chunks would
+# forfeit the byte-for-byte relay the buffered pre-commit prefix depends on.
+
+def _stream_virtual(server, cands=CANDS, config=None):
+    with server.app.test_request_context():
+        return server._proxy_cycling_streaming(
+            "chat/completions", "llmproxy__free", cands, {"messages": []}, 5,
+            config=config, route_reason="capacity", virtual_model="llmproxy__free",
+        )
+
+
+def test_stream_leads_with_the_route_frame(server, monkeypatch):
+    monkeypatch.setattr(server.requests, "post",
+                        lambda *a, **k: FakeStreamResp(200, [TEXT, DONE]))
+    resp = _stream_virtual(server, cands=CANDS[:1])
+    body = b"".join(resp.response)
+
+    frames = [f for f in body.split(b"\n\n") if f.strip()]
+    lead = json.loads(frames[0][len(b"data: "):])
+    assert lead["object"] == "chat.completion.chunk"
+    assert lead["choices"] == []          # same shape as the usage chunk clients already see
+    assert lead["llmproxy_route"]["selected_model"] == "p1/m1"
+    assert lead["llmproxy_route"]["virtual"] == "llmproxy__free"
+    assert lead["llmproxy_route"]["failed_over"] is False
+
+    # Everything the upstream sent follows, untouched and in order.
+    assert body.endswith(TEXT + DONE)
+    assert resp.headers["X-LLMProxy-Selected-Model"] == "p1/m1"
+
+
+def test_streamed_route_frame_marks_a_failover(server, monkeypatch):
+    calls = {"n": 0}
+
+    def fake_post(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return FakeStreamResp(200, [ERRFRAME])
+        return FakeStreamResp(200, [TEXT, DONE])
+
+    monkeypatch.setattr(server.requests, "post", fake_post)
+    resp = _stream_virtual(server)
+    body = b"".join(resp.response)
+    lead = json.loads(body.split(b"\n\n")[0][len(b"data: "):])
+    assert lead["llmproxy_route"]["selected_model"] == "p2/m2"
+    assert lead["llmproxy_route"]["failed_over"] is True
+    assert lead["llmproxy_route"]["route_reason"] == "capacity,failover#1"
+
+
+def test_streamed_route_frame_can_be_switched_off(server, monkeypatch):
+    monkeypatch.setattr(server.requests, "post",
+                        lambda *a, **k: FakeStreamResp(200, [TEXT, DONE]))
+    resp = _stream_virtual(server, cands=CANDS[:1],
+                           config={"server": {"report_route": False}})
+    body = b"".join(resp.response)
+    assert body == TEXT + DONE
+    assert resp.headers["X-LLMProxy-Selected-Model"] == "p1/m1"
+
+
+def test_a_pinned_stream_gets_no_route_frame(server, monkeypatch):
+    """Only virtual models carry the block; a pinned stream stays byte-identical."""
+    monkeypatch.setattr(server.requests, "post",
+                        lambda *a, **k: FakeStreamResp(200, [TEXT, DONE]))
+    resp = _run_stream(server, cands=CANDS[:1])
+    assert b"".join(resp.response) == TEXT + DONE
