@@ -362,6 +362,67 @@ else
   rm -f "$HDRS"
 fi
 
+# ── route provenance ────────────────────────────────────────────────────────
+hdr "Route provenance (which model answered)"
+# Any cycling virtual exercises the same engine, so use whichever this
+# deployment can actually serve. Probe rather than trust the listing: a virtual
+# is advertised whenever a backend looks eligible, which is not the same as its
+# pool being reachable right now.
+PROV_VM=""
+for vm in llmproxy/free llmproxy/loadbalanced llmproxy/local; do
+  has_model "$vm" || continue
+  code=$(req POST /v1/chat/completions "{\"model\":\"$vm\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}")
+  ok2xx "$code" && { PROV_VM="$vm"; break; }
+done
+if [ -z "$PROV_VM" ]; then
+  skip "no cycling virtual could serve a request"
+else
+  echo "  ${DIM}using $PROV_VM${RST}"
+  PHDRS="$(mktemp)"
+  # Non-streaming: the header names the candidate and the body carries the same
+  # facts for clients that never surface response headers.
+  code=$(curl -sS -o "$BODY" -D "$PHDRS" -w '%{http_code}' -X POST \
+    "${BASE_URL}/v1/chat/completions" -H 'Content-Type: application/json' "${AUTH[@]}" \
+    -d "{\"model\":\"$PROV_VM\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}")
+  if ok2xx "$code"; then
+    sel=$(grep -i '^x-llmproxy-selected-model:' "$PHDRS" | tr -d '\r' | cut -d' ' -f2-)
+    if [ -n "$sel" ]; then pass "X-LLMProxy-Selected-Model → ${DIM}${sel}${RST}"
+    else fail "no X-LLMProxy-Selected-Model header on a virtual-model reply"; fi
+    if [ "$HAVE_JQ" -eq 1 ]; then
+      rsel=$(jqr '.llmproxy_route.selected_model // "absent"')
+      if [ "$rsel" != "absent" ] && [ -n "$rsel" ]; then
+        fo=$(jqr '.llmproxy_route.failed_over')
+        pass "llmproxy_route body field ${DIM}(${rsel}, failed_over=${fo})${RST}"
+      else warn "no llmproxy_route body field (server.report_route off, or older build)"; fi
+    fi
+  else warn "chat → $code"; fi
+
+  # Streaming: the provenance rides a leading synthetic chunk; the header works too.
+  stream_body=$(curl -sS -D "$PHDRS" -X POST "${BASE_URL}/v1/chat/completions" \
+    -H 'Content-Type: application/json' "${AUTH[@]}" \
+    -d "{\"model\":\"$PROV_VM\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":8}" 2>/dev/null | head -c 2000)
+  if echo "$stream_body" | head -1 | grep -q 'llmproxy_route'; then
+    pass "streamed reply leads with the route frame"
+  else warn "no leading route frame in the stream (server.report_route off, or older build)"; fi
+  if grep -qi '^x-llmproxy-selected-model:' "$PHDRS"; then
+    pass "streamed reply carries X-LLMProxy-Selected-Model"
+  else warn "no X-LLMProxy-Selected-Model on the streamed reply"; fi
+
+  # The header must survive dialect translation; these surfaces get no body block.
+  for surface in "/v1/messages|{\"model\":\"$PROV_VM\",\"max_tokens\":8,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
+                 "/v1/responses|{\"model\":\"$PROV_VM\",\"input\":\"hi\"}"; do
+    path="${surface%%|*}"; payload="${surface#*|}"
+    code=$(curl -sS -o "$BODY" -D "$PHDRS" -w '%{http_code}' -X POST "${BASE_URL}${path}" \
+      -H 'Content-Type: application/json' "${AUTH[@]}" -d "$payload")
+    if ok2xx "$code"; then
+      if grep -qi '^x-llmproxy-selected-model:' "$PHDRS"; then
+        pass "$path carries X-LLMProxy-Selected-Model through dialect rendering"
+      else fail "$path lost X-LLMProxy-Selected-Model"; fi
+    else warn "$path → $code"; fi
+  done
+  rm -f "$PHDRS"
+fi
+
 # ── input-aware first-pick on the general virtuals ──────────────────────────
 hdr "Input-aware routing (llmproxy/free)"
 if ! has_model llmproxy/free; then
