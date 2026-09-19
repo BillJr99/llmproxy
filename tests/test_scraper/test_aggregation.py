@@ -201,3 +201,74 @@ def test_catalog_source_names_covers_openrouter_and_api_only():
     assert "docs" not in names
     assert "community" not in names
     assert "endpoint_probe" not in names
+
+
+# ── withdrawn models lose their routing metadata ────────────────────────────
+
+def _tagged_sidecar(current_free: list[str], reasoning: dict) -> dict:
+    sidecar = _sidecar("p", current_free)
+    sidecar["providers"]["p"]["model_reasoning"] = dict(reasoning)
+    return sidecar
+
+
+def test_withdrawn_model_is_reported_separately_from_repriced():
+    """A repriced model keeps its tier tag because loadbalanced still ranks it;
+    a withdrawn one has nothing left to route to."""
+    ev = [
+        # Still listed, but now priced — a removal, not a withdrawal.
+        Evidence(provider="p", model_id="p/repriced", is_free=False,
+                 source="openrouter", confidence="high", url="u"),
+    ] + [
+        Evidence(provider="p", model_id=f"p/other{i}", is_free=False,
+                 source="openrouter", confidence="high", url="u")
+        for i in range(CATALOG_MIN_MODELS)
+    ]
+    sidecar = _tagged_sidecar(
+        ["p/repriced", "p/withdrawn"],
+        {"p/repriced": "deep", "p/withdrawn": "exploratory"},
+    )
+    out = aggregate(ev, sidecar, catalog_succeeded={"p"})
+    assert out["p"]["remove"] == ["p/repriced", "p/withdrawn"]
+    assert out["p"]["withdrawn"] == ["p/withdrawn"]
+
+
+def test_withdrawn_includes_tags_for_models_never_in_believed_free():
+    """Tags left behind by earlier sweeps are collected too, so dead routing
+    metadata does not accumulate indefinitely."""
+    ev = [
+        Evidence(provider="p", model_id=f"p/live{i}", is_free=False,
+                 source="openrouter", confidence="high", url="u")
+        for i in range(CATALOG_MIN_MODELS)
+    ]
+    sidecar = _tagged_sidecar([], {"p/long-gone": "deep", "p/live0": "fast"})
+    out = aggregate(ev, sidecar, catalog_succeeded={"p"})
+    assert out["p"]["withdrawn"] == ["p/long-gone"]
+
+
+def test_no_withdrawals_when_absence_is_not_trusted():
+    """Without a trusted catalog, nothing is treated as withdrawn — a docs-only
+    provider must never lose its tags."""
+    ev = [Evidence(provider="p", model_id="p/documented", is_free=True,
+                   source="docs", confidence="high", url="u")]
+    sidecar = _tagged_sidecar(["p/documented"], {"p/anything": "deep"})
+    out = aggregate(ev, sidecar, catalog_succeeded=set())
+    assert out["p"]["withdrawn"] == []
+
+
+def test_apply_updates_prunes_withdrawn_tags_only():
+    from scripts.update_free_models import apply_updates
+
+    sidecar = _tagged_sidecar(
+        ["p/repriced", "p/withdrawn"],
+        {"p/repriced": "deep", "p/withdrawn": "exploratory", "p/paid-but-tagged": "fast"},
+    )
+    updates = {"p": {
+        "add": [], "remove": ["p/repriced", "p/withdrawn"],
+        "withdrawn": ["p/withdrawn"], "limits": {}, "capabilities": {}, "pricing": {},
+    }}
+    assert apply_updates(sidecar, updates) is True
+    reasoning = sidecar["providers"]["p"]["model_reasoning"]
+    assert "p/withdrawn" not in reasoning          # gone upstream → tag dropped
+    assert reasoning["p/repriced"] == "deep"       # still exists → tag kept
+    assert reasoning["p/paid-but-tagged"] == "fast"
+    assert sidecar["providers"]["p"]["believed_free"] == []

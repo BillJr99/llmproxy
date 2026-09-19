@@ -274,6 +274,17 @@ def aggregate(
         trust_absence = _absence_is_trustworthy(
             provider_key, current_free, catalog_seen[provider_key], catalog_succeeded,
         )
+        # Models the provider no longer lists at all. Distinct from a model that
+        # merely stopped being free: a withdrawn model's routing metadata is dead
+        # weight, so apply_updates prunes it, while a repriced model keeps its
+        # tier tag because loadbalanced routing still uses it.
+        withdrawn: list[str] = []
+        if trust_absence:
+            seen = catalog_seen[provider_key]
+            tagged = set(current_free)
+            tagged.update(prov_cfg.get("model_reasoning", {}) or {})
+            tagged.update(prov_cfg.get("model_capabilities", {}) or {})
+            withdrawn = [model_id for model_id in tagged if model_id not in seen]
         for model_id in current_free:
             if model_id.lower() in deny:
                 removes.append(model_id)  # observed paid at runtime
@@ -291,6 +302,7 @@ def aggregate(
         out[provider_key] = {
             "add": sorted(set(adds)),
             "remove": sorted(set(removes)),
+            "withdrawn": sorted(set(withdrawn)),
             "limits": limits,
             "capabilities": capabilities,
             "pricing": pricing,
@@ -378,6 +390,21 @@ def apply_updates(sidecar: dict, updates: dict) -> bool:
 
         # Drop limits for models we just removed.
         for mid in change["remove"]:
+            if mid in fl:
+                del fl[mid]
+                changed = True
+
+        # Drop routing metadata for models the provider no longer lists at all.
+        # A model that merely stopped being free keeps its tier tag, because
+        # loadbalanced routing still ranks it; one that has been withdrawn has
+        # nothing left to route to, and its tags would otherwise accumulate in
+        # the sidecar forever.
+        for mid in change.get("withdrawn", []):
+            for block_name in ("model_reasoning", "model_capabilities"):
+                block = prov.get(block_name)
+                if isinstance(block, dict) and mid in block:
+                    del block[mid]
+                    changed = True
             if mid in fl:
                 del fl[mid]
                 changed = True
