@@ -3290,8 +3290,11 @@ def _promote_sidecar_to_providers(
     if not changed:
         return providers_text, report
     try:
-        from scripts.update_free_models import canonicalize_sidecar, dump_sidecar
-        return dump_sidecar(canonicalize_sidecar(data)), report
+        # dump_sidecar canonicalizes internally; canonicalize_sidecar mutates in
+        # place and returns None, so nesting the two fed it None and silently
+        # fell through to the un-canonicalized fallback below.
+        from scripts.update_free_models import dump_sidecar
+        return dump_sidecar(data), report
     except Exception as e:  # noqa: BLE001 — fall back to plain json
         print(f"[server:_promote_sidecar_to_providers] {e}")
         traceback.print_exc()

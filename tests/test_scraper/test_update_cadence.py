@@ -84,8 +84,17 @@ def test_scrape_records_the_refresh_timestamp(tmp_path, monkeypatch):
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"providers": {}}))
     monkeypatch.setattr(ufm, "apply_updates", lambda *a, **k: True)
+    # Stubbing apply_updates to True sends main() down its "changed" branch,
+    # which writes DATA_PATH — the REPO's llmproxy/providers.json. Redirect both
+    # writes at a tmp path: a test must never mutate a tracked file, and this one
+    # silently did until a canonicalization change made the rewrite visible.
+    monkeypatch.setattr(ufm, "DATA_PATH", tmp_path / "providers.json")
+    monkeypatch.setattr(ufm, "CONFIG_EXAMPLE_PATH", tmp_path / "config.example.json")
+    monkeypatch.setattr(ufm, "write_config_example", lambda *a, **k: None)
 
     assert ufm.main(["--source", "cost_probe", "--config", str(cfg)]) == 0
+    assert (tmp_path / "providers.json").exists(), \
+        "the sidecar write should have gone to the tmp path, not the repo"
 
     assert "last_update_at" in load_update_state(str(cfg))
     assert _free_update_due({"update_frequency_days": 7}, str(cfg)) is False
