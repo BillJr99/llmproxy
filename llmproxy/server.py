@@ -1147,6 +1147,11 @@ _flagship_refresh_inflight: bool = False
 # already carries the fact, but nobody reads a header until something looks
 # wrong — which is exactly how an inert ranking survived a deploy unnoticed.
 _flagship_unranked_warned: bool = False
+# Latched the first time the live flagship free pool is found below its floor
+# with no recompute able to fix it. Saying it once names a tier that cannot
+# meet the guarantee it advertises; saying it every interval tick would bury
+# the log.
+_flagship_floor_warned: bool = False
 _flagship_refresh_lock = threading.Lock()
 _cost_probe_inflight: bool = False
 _cost_probe_lock = threading.Lock()
@@ -2795,7 +2800,45 @@ def _free_update_due(free_tier: dict, config_path: str | None) -> bool:
     return due
 
 
-def _flagship_refresh_due(tier_cfg: dict, config_path: str | None) -> bool:
+def _live_flagship_free_count(config: dict, config_path: str | None) -> int:
+    """Distinct models in the flagship tier that are free *right now*.
+
+    Membership is cached at refresh time, but free-ness is re-evaluated on every
+    read from live config. A member that becomes cost-observed after the refresh
+    therefore drops out of ``flagship__free`` silently, and the tier shrinks
+    below the floor it promised until the next cadence tick — up to
+    ``refresh_frequency_days``, seven by default.
+
+    Counted in distinct models rather than routing targets, matching the unit
+    ``min_flagship_free_models`` is expressed in: the same weights served free
+    by two providers are two members but one model.
+
+    Reads the live member set through ``_get_flagship_models``, so pins and
+    excludes from the current config are already applied.
+    """
+    from .flagship import normalize_model_id
+
+    members = _get_flagship_models(config, config_path)
+    if not members:
+        return 0
+    believed = _normalized_believed_free(config)
+    observed = _normalized_cost_observed(config)
+    scoped = _provider_scoped_ids(config)
+    paid_providers = _cost_observed_providers(config)
+
+    keys: set[str] = set()
+    for qualified in members:
+        provider, _, upstream = qualified.partition("/")
+        if not upstream:
+            continue
+        if _is_model_free_with(provider, upstream, believed, observed, scoped,
+                               paid_providers):
+            keys.add(normalize_model_id(upstream))
+    return len(keys)
+
+
+def _flagship_refresh_due(tier_cfg: dict, config_path: str | None,
+                          config: dict | None = None) -> bool:
     """Whether the flagship membership recompute is due.
 
     Mirrors _free_update_due. A frequency of 0 or less means "every time", and
@@ -2833,7 +2876,56 @@ def _flagship_refresh_due(tier_cfg: dict, config_path: str | None) -> bool:
         return True
     due, _ = _probe_due(state.get("last_refresh_at"),
                         tier_cfg.get("refresh_frequency_days", 7))
-    return due
+    if due:
+        return True
+
+    # The floor is a promise about the tier, not about the bar walk that built
+    # it, so it is re-checked against what the tier holds now. A member that
+    # was free at refresh time and is cost-observed now has already left
+    # `flagship__free`; waiting out the cadence leaves the pool short for up to
+    # a week. Same precedent as the schema check above: an inadequate cache is
+    # a correctness question, and the cadence must not gate it.
+    min_free = int(tier_cfg.get("min_flagship_free_models") or 0)
+    previously = state.get("free_models")
+    if min_free <= 0 or not state.get("members") or not isinstance(previously, list):
+        return False
+    # Only when a recompute could actually help. If the LAST run already came
+    # up short, this deployment simply does not have that many free models, and
+    # recomputing would re-fetch every catalog on every interval tick forever.
+    # Compare against what the previous run achieved, not against the floor
+    # alone.
+    if len(previously) < min_free:
+        _warn_flagship_floor(len(previously), min_free)
+        return False
+    cfg = config if config is not None else load_config()
+    live = _live_flagship_free_count(cfg, config_path)
+    if live >= min_free:
+        return False
+    logger.info(
+        "[flagship] only %d of %d free model(s) remain in the tier "
+        "(excluded, or no longer free) — recomputing ahead of the cadence",
+        live, min_free,
+    )
+    return True
+
+
+def _warn_flagship_floor(achieved: int, min_free: int) -> None:
+    """Say once that the floor cannot be met, naming the shortfall.
+
+    A tier that under-fills for a reason no recompute can fix should say so
+    rather than quietly serving fewer models than its config asks for. Latched,
+    because the check runs on every interval tick.
+    """
+    global _flagship_floor_warned
+    if _flagship_floor_warned:
+        return
+    _flagship_floor_warned = True
+    logger.warning(
+        "[flagship] min_flagship_free_models is %d but the last refresh found "
+        "only %d free model(s) this deployment can reach — serving what there "
+        "is. Add a provider, or lower flagship_tier.min_flagship_free_models.",
+        min_free, achieved,
+    )
 
 
 def _flagship_specs_for(
@@ -3330,7 +3422,7 @@ def _maybe_fire_flagship_refresh(
     without anyone running anything, since the whole point is that models enter
     as they ship and leave as the field moves past them.
     """
-    if not _flagship_refresh_due(tier_cfg, config_path):
+    if not _flagship_refresh_due(tier_cfg, config_path, config):
         return
 
     global _flagship_refresh_inflight
@@ -7304,21 +7396,36 @@ _AFFINITY_MIN_SYSTEM_CHARS = 200
 
 
 def _affinity_key(payload: dict) -> str | None:
-    """Return a stable key identifying this request's cacheable prefix, or None.
+    """Return a stable key identifying this CONVERSATION, or None.
 
     Prefers a client-supplied ``prompt_cache_key`` (top-level or under
     ``metadata``), which is the only source that knows what the client considers
-    one conversation. Otherwise the key is derived from the parts of the message
-    list that will recur:
+    one conversation. Otherwise the key is derived from the conversation's
+    **root**: every system turn, plus the first non-system turn. Those are the
+    only messages an agentic client does not rewrite, so the key is identical on
+    turn 1 and on turn 40.
 
-    * a continuation (the transcript already contains assistant or tool turns)
-      keys on everything *before* the trailing user turn, which is exactly the
-      prefix the upstream will have cached;
-    * a first turn carrying a substantial system prompt keys on that system
-      prompt, since agents resend it verbatim on every request.
+    This used to key on the whole cacheable prefix — everything before the
+    trailing user turn — which is a correct description of what the upstream has
+    cached and completely wrong as an identity. An agent loop appends an
+    assistant turn and a tool result on every iteration, so the prefix, and
+    therefore the key, was different on every single request. Nothing that
+    remembers a choice under that key could ever read it back: the sticky pin
+    was written 40 times and looked up 0 times, and the conversation restarted
+    from the top of the ranking every turn, paying the 429s of every model above
+    its own before reaching the one that had just worked. Keying on the root
+    fixes both users of this key, since an upstream prompt cache is keyed by
+    prefix and the root is a prefix of every turn.
 
-    Returns None for a bare first user turn. There is no reusable prefix there,
-    so pinning would cost load spreading and buy no cache hit.
+    Returns None for a bare first user turn with no substantial system prompt:
+    there is nothing durable to identify the conversation by, so pinning would
+    cost load spreading and buy no cache hit. A later turn of that same
+    conversation does get a key, because by then the first user turn is a
+    settled part of the transcript.
+
+    A client that rewrites its system prompt every turn (injecting a timestamp,
+    say) defeats any derived key. ``prompt_cache_key`` is the escape hatch, and
+    is what an agent framework should send.
     """
     if not isinstance(payload, dict):
         return None
@@ -7347,21 +7454,34 @@ def _affinity_key(payload: dict) -> str | None:
         return ""
 
     roles = [m.get("role") for m in messages if isinstance(m, dict)]
-    if any(r in ("assistant", "tool") for r in roles):
-        # Continuation: hash the stable prefix, excluding the trailing user turn
-        # that differs on every request.
-        prefix = messages[:-1] if roles and roles[-1] == "user" else messages
-        digest = hashlib.sha256()
-        for msg in prefix:
-            digest.update(f"{msg.get('role') if isinstance(msg, dict) else ''}\x00".encode())
-            digest.update(_content(msg).encode("utf-8", "ignore"))
-            digest.update(b"\x01")
-        return f"prefix:{digest.hexdigest()}"
+    system_text = "".join(
+        _content(m) for m in messages
+        if isinstance(m, dict) and m.get("role") == "system"
+    )
+    is_continuation = any(r in ("assistant", "tool") for r in roles)
 
-    system_text = "".join(_content(m) for m in messages if isinstance(m, dict) and m.get("role") == "system")
-    if len(system_text) >= _AFFINITY_MIN_SYSTEM_CHARS:
-        return "system:" + hashlib.sha256(system_text.encode("utf-8", "ignore")).hexdigest()
-    return None
+    # Worth pinning only once the conversation has something durable to be
+    # identified by: a substantial system prompt, or a transcript that has
+    # already progressed past its opening turn.
+    if not is_continuation and len(system_text) < _AFFINITY_MIN_SYSTEM_CHARS:
+        return None
+
+    # The root: system turns, then the first non-system turn. Everything after
+    # it is rewritten as the conversation grows and must not enter the key.
+    first_turn = next(
+        (m for m in messages if isinstance(m, dict) and m.get("role") != "system"),
+        None,
+    )
+    if first_turn is None and not system_text:
+        return None
+
+    digest = hashlib.sha256()
+    digest.update(system_text.encode("utf-8", "ignore"))
+    digest.update(b"\x01")
+    if first_turn is not None:
+        digest.update(f"{first_turn.get('role')}\x00".encode())
+        digest.update(_content(first_turn).encode("utf-8", "ignore"))
+    return f"conv:{digest.hexdigest()}"
 
 
 def _rendezvous_rank(key: str, identity: str) -> int:
@@ -7943,6 +8063,20 @@ _ROUTING_UNION_KEYS = frozenset({"model_capabilities"})
 # "the five keys" means.
 _ROUTING_CONFIG_KEYS = _ROUTING_LIST_KEYS + _ROUTING_DICT_KEYS
 
+# Entries in the two list keys that a PROVIDER declared, rather than a person.
+#
+# A provider template's believed_free is scoped to that provider: Google's own
+# API really does serve google/gemini-3.8-flash free, and that says nothing
+# about a gateway which re-serves the identical upstream id and bills for it.
+# The two spellings are indistinguishable — Google's QUALIFIED id is character
+# for character the gateway's BARE upstream id — so the only thing that can tell
+# them apart is where the claim came from.
+#
+# Deliberately NOT part of _ROUTING_CONFIG_KEYS: it is provenance about those
+# keys, not a sixth routing key, and every consumer that enumerates the five
+# (the admin editors, the config-shape report) must keep seeing exactly five.
+_ROUTING_PROVIDER_SCOPED = "_provider_scoped_ids"
+
 # The sidecar is re-read when it changes on disk. providers.py caches its own
 # data for the process lifetime, which is right for a shipped default and wrong
 # here: the refresh rewrites this file while the server runs, and a cache that
@@ -8071,14 +8205,20 @@ def _defaults_layer() -> dict:
     """
     out: dict = {k: [] for k in _ROUTING_LIST_KEYS}
     out.update({k: {} for k in _ROUTING_DICT_KEYS})
+    out[_ROUTING_PROVIDER_SCOPED] = set()
     try:
         for _provider, info in get_provider_free_info().items():
             # Already qualified in this file — used verbatim. An entry that is
             # not still resolves, because _lookup_model_fact tries the bare form
             # too; over-prefixing is the failure that matches nothing.
+            #
+            # Recorded as provider-scoped: this provider vouched for these ids,
+            # and no other provider may inherit the claim by happening to serve
+            # an upstream id that spells the same.
             for entry in info.get("believed_free") or []:
                 if isinstance(entry, str):
                     out["believed_free"].append(entry.lower())
+                    out[_ROUTING_PROVIDER_SCOPED].add(entry.lower())
             for key in ("model_reasoning", "model_capabilities", "free_limits"):
                 for model, val in (info.get(key) or {}).items():
                     if isinstance(model, str):
@@ -8100,6 +8240,7 @@ def _learned_layer(config_path: str | None = None) -> dict:
     """
     out: dict = {k: [] for k in _ROUTING_LIST_KEYS}
     out.update({k: {} for k in _ROUTING_DICT_KEYS})
+    out[_ROUTING_PROVIDER_SCOPED] = set()
     state = _load_routing_sidecar(config_path)
     try:
         for provider, info in (state.get("by_provider") or {}).items():
@@ -8111,7 +8252,9 @@ def _learned_layer(config_path: str | None = None) -> dict:
             for key in _ROUTING_LIST_KEYS:
                 for entry in info.get(key) or []:
                     if isinstance(entry, str):
-                        out[key].append(f"{provider}/{entry}".lower())
+                        qualified = f"{provider}/{entry}".lower()
+                        out[key].append(qualified)
+                        out[_ROUTING_PROVIDER_SCOPED].add(qualified)
             for model, val in (info.get("free_limits") or {}).items():
                 out["free_limits"][f"{provider}/{model}".lower()] = val
         for model_key, facts in (state.get("by_model") or {}).items():
@@ -8286,6 +8429,13 @@ def _merged_routing_config(config: dict, *, include_curated: bool = True) -> dic
             layers.append(_curated_layer(config))
         layers = tuple(layers)
         merged = dict(config)
+        # Provenance rides alongside the five keys rather than being one of
+        # them. config.json is not a layer here, so anything a person wrote by
+        # hand is absent from this set and keeps matching both ways.
+        scoped: set[str] = set()
+        for layer in layers:
+            scoped |= layer.get(_ROUTING_PROVIDER_SCOPED) or set()
+        merged[_ROUTING_PROVIDER_SCOPED] = scoped
         for key in _ROUTING_LIST_KEYS:
             seen: dict[str, None] = {}
             for layer in layers:
@@ -8364,6 +8514,15 @@ def _normalized_believed_free(config: dict) -> set[str]:
     return valid
 
 
+def _provider_scoped_ids(config: dict) -> set[str]:
+    """Free-tier ids that a provider declared, rather than a person.
+
+    Used to reject a BARE match on them: see ``_is_model_free_with``.
+    """
+    raw = _merged_routing_config(config).get(_ROUTING_PROVIDER_SCOPED)
+    return raw if isinstance(raw, set) else set()
+
+
 def _normalized_cost_observed(config: dict) -> set[str]:
     """Lowercased set of config['cost_observed_free_tier'] qualified ids.
 
@@ -8377,8 +8536,38 @@ def _normalized_cost_observed(config: dict) -> set[str]:
     return {e.lower() for e in raw if isinstance(e, str)}
 
 
+# An entry of this shape in `cost_observed_free_tier` marks the whole provider
+# as paid rather than one model on it.
+_COST_OBSERVED_WILDCARD = "/*"
+
+
+def _cost_observed_providers(config: dict) -> set[str]:
+    """Providers marked entirely paid, via a ``<provider>/*`` entry.
+
+    Aggregators and resellers are the case this exists for. They re-serve other
+    vendors' upstream ids, so a provider with no free tier of its own still
+    collects free-tier beliefs written about those ids elsewhere, and listing
+    its catalog model by model in ``cost_observed_free_tier`` is both tedious
+    and permanently out of date. One entry covers the provider, including
+    models it has not shipped yet.
+
+    Only the explicit ``provider/*`` spelling is recognised. A bare provider
+    name is not, because it is indistinguishable from an unqualified model id,
+    which is a meaningful entry in these lists.
+    """
+    out: set[str] = set()
+    for entry in _normalized_cost_observed(config):
+        if entry.endswith(_COST_OBSERVED_WILDCARD):
+            name = entry[: -len(_COST_OBSERVED_WILDCARD)]
+            if name:
+                out.add(name)
+    return out
+
+
 def _is_cost_observed(provider_name: str, upstream_id: str, config: dict) -> bool:
     """True when this model has been observed reporting a cost at runtime."""
+    if provider_name.lower() in _cost_observed_providers(config):
+        return True
     return f"{provider_name}/{upstream_id}".lower() in _normalized_cost_observed(config)
 
 
@@ -8387,6 +8576,8 @@ def _is_model_free_with(
     upstream_id: str,
     believed_free: set[str],
     cost_observed: set[str],
+    provider_scoped: frozenset[str] | set[str] = frozenset(),
+    cost_observed_providers: frozenset[str] | set[str] = frozenset(),
 ) -> bool:
     """``_is_model_free`` against sets the caller already has.
 
@@ -8398,10 +8589,25 @@ def _is_model_free_with(
     hoisting the invariant out is simply the right shape.
     """
     qualified = f"{provider_name}/{upstream_id}".lower()
+    # A whole provider marked paid outranks every belief about its models,
+    # including an id that literally spells "free". An aggregator that bills
+    # for everything routinely re-serves ":free"-suffixed ids from upstreams
+    # that really are free, and the suffix says nothing about what THIS
+    # provider charges.
+    if provider_name.lower() in cost_observed_providers:
+        return False
     if qualified in cost_observed:
         return False
     uid = upstream_id.lower()
-    return "free" in uid or uid in believed_free or qualified in believed_free
+    if "free" in uid or qualified in believed_free:
+        return True
+    # A BARE match is only honoured when the entry was written by a person, who
+    # meant "this model, wherever I have it". An entry a provider template
+    # declared is scoped to that provider, and matching it bare is how one
+    # vendor's free tier leaked onto a gateway that re-serves the identical
+    # upstream id and bills for it. A qualified match above is unambiguous and
+    # is always honoured.
+    return uid in believed_free and uid not in provider_scoped
 
 
 def _is_model_free(provider_name: str, upstream_id: str, config: dict) -> bool:
@@ -8419,6 +8625,7 @@ def _is_model_free(provider_name: str, upstream_id: str, config: dict) -> bool:
     return _is_model_free_with(
         provider_name, upstream_id,
         _normalized_believed_free(config), _normalized_cost_observed(config),
+        _provider_scoped_ids(config), _cost_observed_providers(config),
     )
 
 
@@ -8436,6 +8643,8 @@ def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
     # costs a full routing-config merge.
     believed_free = _normalized_believed_free(config)
     cost_observed = _normalized_cost_observed(config)
+    provider_scoped = _provider_scoped_ids(config)
+    paid_providers = _cost_observed_providers(config)
     candidates = []
     for provider_name, upstream_id in _get_distinct_routes():
         provider_cfg = get_provider(config, provider_name)
@@ -8446,7 +8655,8 @@ def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
         # Skip local providers — they belong to the /local family, not /free.
         if _is_local_url(provider_base_url(provider_cfg)):
             continue
-        if _is_model_free_with(provider_name, upstream_id, believed_free, cost_observed):
+        if _is_model_free_with(provider_name, upstream_id, believed_free,
+                               cost_observed, provider_scoped, paid_providers):
             candidates.append((provider_name, provider_cfg, upstream_id))
     return candidates
 

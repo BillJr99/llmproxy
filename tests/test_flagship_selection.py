@@ -402,3 +402,80 @@ def test_the_normalized_key_is_not_a_third_way_to_pin(_=None):
     sel = select_flagship(pool, _cfg(start_percentile=0.99, pin=["glm53"]))
     assert "cheapo/glm-5.3" not in sel.members
     assert sel.unverified_pins == ["glm53"]
+
+
+# ── the floor is about the tier, not about the walk ─────────────────────────
+#
+# `min_flagship_free_models` is documented as "lower the bar until at least
+# this many DISTINCT free models qualify", and is read as a promise about what
+# ends up in flagship__free. It was not: excluded targets were counted during
+# the walk and only removed afterwards, so excluding a member left the tier one
+# short, silently. These pin the promise.
+
+def test_an_excluded_free_model_does_not_count_toward_the_floor():
+    """The regression. Excluding the second-best free model must make the bar
+    float further down and admit the third, not leave the tier with one."""
+    sel = select_flagship(_pool(), _cfg(min_flagship_free_models=2,
+                                        exclude=["cf/free-b"]))
+    assert "cf/free-b" not in sel.members
+    assert {"cf/free-a", "cf/free-c"} <= set(sel.members)
+    assert len(sel.free_models) == 2
+
+
+def test_excluding_one_provider_leaves_the_model_counted_via_another():
+    """Exclusion is per routing target. The same weights served free elsewhere
+    still satisfy the floor, because the unit of the floor is the model."""
+    cands = [_c("paid", "top", 100),
+             _c("bad", "shared", 50, free=True),
+             _c("good", "shared", 50, free=True),
+             _c("d", "other-free", 10, free=True)]
+    sel = select_flagship(cands, _cfg(min_flagship_free_models=1,
+                                      exclude=["bad/shared"]))
+    assert "good/shared" in sel.members and "bad/shared" not in sel.members
+    assert "d/other-free" not in sel.members  # floor already met by the survivor
+
+
+def test_reported_free_models_match_what_is_actually_in_the_tier():
+    """`free_models` is written to flagship_models.json and read back by the
+    floor check, so it has to describe the members, not the walk."""
+    sel = select_flagship(_pool(), _cfg(min_flagship_free_models=2,
+                                        exclude=["cf/free-a"]))
+    free_members = {m for m in sel.members if m.startswith("cf/")}
+    assert len(sel.free_models) == len(free_members)
+    assert "cf/free-a" not in sel.members
+
+
+def test_reported_distinct_models_match_the_final_members():
+    """Same contract for the model count: a pin adds one, an exclude removes
+    one, and both have to show up in the reported total."""
+    sel = select_flagship(_pool(), _cfg(min_flagship_free_models=2,
+                                        exclude=["cf/free-a"]))
+    keys = {normalize_model_id(m.split("/", 1)[1]) for m in sel.members}
+    assert len(sel.distinct_models) == len(keys)
+
+
+def test_a_pinned_id_that_is_also_excluded_stays_excluded():
+    """GUARD: exclude still beats pin, now that exclusion also runs first."""
+    sel = select_flagship(_pool(), _cfg(min_flagship_free_models=1,
+                                        pin=["cf/free-c"],
+                                        exclude=["cf/free-c"]))
+    assert "cf/free-c" not in sel.members
+
+
+def test_excluding_everything_free_does_not_loop_or_raise():
+    """GUARD: the floor stays best-effort. Asking for two free models when
+    every free target is excluded yields none rather than walking forever."""
+    sel = select_flagship(_pool(), _cfg(
+        min_flagship_free_models=2,
+        exclude=["cf/free-a", "cf/free-b", "cf/free-c"],
+    ))
+    assert sel.free_models == []
+    assert sel.members  # the paid models are unaffected
+
+
+def test_an_unscored_pin_sorts_last_among_the_reported_models():
+    """GUARD on the new ordering: a pin no benchmark covers has no percentile
+    and must not be reported as the strongest model in the tier."""
+    sel = select_flagship(_pool(), _cfg(min_flagship_free_models=1,
+                                        pin=["cf/free-c"]))
+    assert sel.distinct_models[0] == normalize_model_id("m0")

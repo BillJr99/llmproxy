@@ -239,11 +239,23 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
 
     combined = combine_scores(candidates)
 
-    # Eligible = passes the veto and has a score. Pins are handled separately
-    # precisely because they need neither.
+    # Eligible = not excluded, passes the veto, and has a score. Pins are
+    # handled separately precisely because they need neither.
+    #
+    # Excluding here rather than only at the end is what makes
+    # `min_flagship_free_models` a statement about the tier instead of about
+    # the walk. The walk below stops as soon as that many distinct free models
+    # have been admitted, so an excluded target counted along the way left the
+    # tier one member short of the floor it had just promised, silently,
+    # because the exclusion only took effect afterwards.
+    #
+    # It also fixes `free_keys`: a model whose only free routing target is
+    # excluded no longer counts as free, which is precisely the case a
+    # `cost_observed_free_tier` correction creates.
     eligible = [
         c for c in candidates
-        if c.model_key in combined and passes_spec_gate(c, min_context, require_tools)
+        if c.qualified.lower() not in exclude
+        and c.model_key in combined and passes_spec_gate(c, min_context, require_tools)
     ]
 
     # Distinct models, strongest first. The bar moves over this list, so the
@@ -334,11 +346,35 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
         if c.qualified.lower() in members and c.model_key in combined
     }
 
+    # Reported from the FINAL member set, after pins and excludes, rather than
+    # from `admitted`. What is written to flagship_models.json — and read back
+    # by the floor check — has to describe the tier that will actually be
+    # served, not the state of the walk halfway through it. `bar` still reports
+    # where the walk stopped, which is a different and still useful fact.
+    member_key_of: dict[str, str] = {}
+    member_free_keys: set[str] = set()
+    for c in candidates:
+        q = c.qualified.lower()
+        if q not in members:
+            continue
+        member_key_of[q] = c.model_key
+        if c.is_free:
+            member_free_keys.add(c.model_key)
+
+    # Strongest first, unscored last, so the order still means something to a
+    # reader of the cache file. A pin nothing scored has no percentile and
+    # sorts to the end rather than to the front.
+    final_models = sorted(
+        set(member_key_of.values()),
+        key=lambda k: (k in combined, combined.get(k, 0.0)),
+        reverse=True,
+    )
+
     return Selection(
         members=sorted(members),
         bar=bar,
-        distinct_models=admitted,
-        free_models=[k for k in admitted if k in free_keys],
+        distinct_models=final_models,
+        free_models=[k for k in final_models if k in member_free_keys],
         pinned=sorted(pin),
         unverified_pins=sorted(pin - verified_pins),
         scores=scores,
