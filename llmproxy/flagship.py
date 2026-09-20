@@ -224,6 +224,10 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
     counts once toward ``min_flagship_free_models``. The combined percentile
     that admitted each one is returned alongside, keyed both per routing target
     and per model, so the router can order the tier without recomputing it.
+
+    ``pin`` accepts a qualified id or a bare upstream id; the latter admits
+    every provider serving that model. See the pin block below for how the two
+    are told apart, and why the normalized key is not a third option.
     """
     min_context = int(tier_cfg.get("min_context") or 0)
     require_tools = bool(tier_cfg.get("require_tools", False))
@@ -278,9 +282,46 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
     # Pins bypass the bar and the veto. A pinned id that no candidate matches
     # is still honoured — the model may be reachable even though nothing we
     # scraped describes it — but it is reported so the caller can warn.
+    #
+    # A pin may be written either way, matching `believed_free`, the key it is
+    # normally paired with:
+    #
+    #   "gmi/google/gemini-3.7-flash"  -> that one routing target
+    #   "gemini-3.7-flash"             -> every provider serving that model
+    #
+    # `/` cannot tell the two apart — upstream ids routinely contain one
+    # (`gmi` serves `google/gemini-3.8-flash`, `openrouter` serves
+    # `qwen/qwen3.8-27b:free`) — so resolution is by precedence instead:
+    # an exact qualified match first, the bare upstream id second. The more
+    # specific reading wins, deterministically.
+    #
+    # The NORMALIZED key is deliberately not matched. That join is heuristic,
+    # and a wrong one would pin a model the user never named — the same failure
+    # the spec gate was fixed to stop making. A pin is an explicit instruction
+    # and stays literal.
     known = {c.qualified.lower() for c in candidates}
-    verified_pins = {p for p in pin if p in known}
-    members |= pin
+    by_upstream: dict[str, set[str]] = {}
+    for c in candidates:
+        by_upstream.setdefault(c.upstream_id.lower(), set()).add(c.qualified.lower())
+
+    pinned_targets: set[str] = set()
+    verified_pins: set[str] = set()
+    for p in pin:
+        if p in known:
+            pinned_targets.add(p)
+            verified_pins.add(p)
+        elif p in by_upstream:
+            pinned_targets |= by_upstream[p]
+            verified_pins.add(p)
+        else:
+            # Unresolvable against anything this deployment can see. Honoured
+            # anyway, per the note above, and reported to the caller.
+            pinned_targets.add(p)
+
+    members |= pinned_targets
+    # Applied last, so an exclude still beats a pin — including beating one arm
+    # of an expanded bare pin, which is how you pin a model everywhere except
+    # on the one provider whose copy of it is broken.
     members -= exclude
 
     # Built from `members` rather than from `eligible`, so a pin that a source
