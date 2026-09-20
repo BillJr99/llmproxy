@@ -398,10 +398,17 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
         new_key = ""
     api_key = new_key if new_key else existing_key
 
+    # Seed the filter from the template. A provider that publishes no catalog
+    # (Unbiased AI) contributes nothing without it, because discovery finds
+    # nothing to synthesize from; one whose catalog carries ids that cannot
+    # serve completions (Agnes AI's image and video models) would otherwise put
+    # them in the rotation. Templates without a curated list still get None,
+    # which means "allow everything the catalog returns".
+    template_filter = tmpl.get("example_model_filter")
     cfg = {
         "base_url": base_url.rstrip("/"),
         "api_key": api_key,
-        "model_filter": None,
+        "model_filter": list(template_filter) if template_filter else None,
     }
     # Carry forward optional model-discovery overrides for providers whose
     # /models endpoint lives at a non-standard path / shape (e.g. GitHub's

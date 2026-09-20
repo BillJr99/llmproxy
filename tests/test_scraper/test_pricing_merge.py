@@ -66,3 +66,37 @@ def test_litellm_outage_keeps_existing_baseline(monkeypatch):
     assert changed is True
     assert sidecar["pricing"]["p/other"] == _C   # existing baseline preserved
     assert sidecar["pricing"]["p/m"] == _A        # live override still applied
+
+
+def test_pinned_pricing_survives_a_baseline_refresh(monkeypatch):
+    """GUARD: the block is rebuilt each run, so an unsourced rate needs pinning.
+
+    Unbiased AI publishes no catalog, so no live source will ever carry
+    unbiased-ai/pareto and LiteLLM has no entry for llmproxy's provider key.
+    Without _PINNED_PRICING the rate would vanish on the next scrape and the
+    loadbalanced virtual would have nothing to rank the model by.
+    """
+    monkeypatch.setattr(ufm, "fetch_pricing_map", lambda *a, **k: {"p/m": _B})
+    sidecar = _sidecar({})
+    _merge_pricing(sidecar, _updates_with_live_price(), litellm_ran=True)
+    assert sidecar["pricing"]["unbiased-ai/pareto"] == {
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 7.5e-06,
+    }
+
+
+def test_a_live_source_still_beats_a_pinned_rate(monkeypatch):
+    """Pinned rates are hand-transcribed, so fresher live data must win."""
+    live = {"input_cost_per_token": 9e-9, "output_cost_per_token": 9e-9}
+    ev = [Evidence(provider="unbiased-ai", model_id="unbiased-ai/pareto", is_free=False,
+                   source="openrouter", confidence="high", url="u", pricing=live)]
+    sidecar = _sidecar({})
+    sidecar["providers"]["unbiased-ai"] = {
+        "believed_free": [], "model_reasoning": {}, "free_limits": {},
+        "base_url": "u", "display": "Unbiased AI",
+    }
+    sidecar["provider_order"].append("unbiased-ai")
+    updates = aggregate(ev, sidecar, catalog_succeeded=set())
+    monkeypatch.setattr(ufm, "fetch_pricing_map", lambda *a, **k: {})
+    _merge_pricing(sidecar, updates, litellm_ran=True)
+    assert sidecar["pricing"]["unbiased-ai/pareto"] == live

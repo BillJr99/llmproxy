@@ -232,6 +232,37 @@ def test_from_template_carries_a_free_allowance(client, cfg_path):
     assert saved["free_allowance"] == ms["free_allowance"]
 
 
+def test_from_template_seeds_model_filter_from_the_template(client, cfg_path):
+    """GUARD: a curated model list is inert unless it reaches the config.
+
+    Unbiased AI publishes no catalog (an authenticated GET /v1/models returns
+    404 'unknown_url'), so discovery finds nothing and llmproxy has nothing to
+    synthesize from unless model_filter names its one model. The template has
+    carried example_model_filter since the entry was added, but both
+    template-to-config paths hardcoded null, so adding the provider from a
+    template produced an entry that loaded cleanly and then sat inert.
+    """
+    resp = client.post("/admin/api/providers/from-template", json={
+        "template_key": "unbiased-ai", "name": "ub", "api_key": "sk_x",
+    })
+    assert resp.status_code == 201
+    assert _read_config(cfg_path)["providers"]["ub"]["model_filter"] == ["pareto"]
+
+
+def test_from_template_leaves_model_filter_null_without_a_curated_list(client, cfg_path):
+    """GUARD: the seed must not turn into an empty allow-list.
+
+    model_filter is three-valued in config.py: None allows everything, [] allows
+    nothing. A template with no example_model_filter has to yield None, or every
+    ordinary provider would be silently muted.
+    """
+    resp = client.post("/admin/api/providers/from-template", json={
+        "template_key": "groq", "name": "gq", "api_key": "gsk_x",
+    })
+    assert resp.status_code == 201
+    assert _read_config(cfg_path)["providers"]["gq"]["model_filter"] is None
+
+
 def test_from_template_unknown(client):
     resp = client.post("/admin/api/providers/from-template", json={"template_key": "nope"})
     assert resp.status_code == 404

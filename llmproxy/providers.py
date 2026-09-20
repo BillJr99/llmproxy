@@ -48,6 +48,11 @@ _TEMPLATE_FIELDS = frozenset({
     # metadata because it has to reach the config entry to do anything: the
     # loadbalanced virtual reads it off the provider block, not off this file.
     "free_allowance",
+    # The curated model list for providers that cannot be discovered (no
+    # catalog endpoint) or that publish ids which cannot serve completions.
+    # Same reason as free_allowance: it is only worth anything once it lands
+    # on the config entry as model_filter.
+    "example_model_filter",
 })
 
 # Fields that belong to the free-tier metadata view.
