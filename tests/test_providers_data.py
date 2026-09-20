@@ -33,6 +33,28 @@ def test_every_believed_free_id_is_prefixed_by_its_provider(pkey):
         )
 
 
+@pytest.mark.parametrize("pkey", list(SIDE["providers"].keys()))
+def test_every_cost_observed_id_is_prefixed_by_its_provider(pkey):
+    """Same invariant as believed_free, and for the same reason: the key is the
+    negative counterpart to it, and the defaults layer records both as
+    provider-scoped so a bare id cannot leak the claim onto another provider
+    that happens to serve the same upstream name."""
+    prov = SIDE["providers"][pkey]
+    for mid in prov.get("cost_observed_free_tier", []):
+        assert mid.startswith(f"{pkey}/"), (
+            f"{pkey}.cost_observed_free_tier entry {mid!r} should start with {pkey!r}/"
+        )
+
+
+@pytest.mark.parametrize("pkey", list(SIDE["providers"].keys()))
+def test_cost_observed_is_a_list_of_strings(pkey):
+    """GUARD: promotion writes a sorted list; a hand edit must not turn it into
+    a dict or sneak a non-string in."""
+    raw = SIDE["providers"][pkey].get("cost_observed_free_tier", [])
+    assert isinstance(raw, list)
+    assert all(isinstance(mid, str) for mid in raw)
+
+
 # OpenRouter is special: free models are detected at runtime via the ":free"
 # id suffix, so they never appear in believed_free even though free_limits and
 # model_reasoning entries do exist for them.

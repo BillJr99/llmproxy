@@ -4062,15 +4062,29 @@ def _promote_sidecar_to_providers(
         entry = known[provider_name]
         if not isinstance(entry, dict):
             continue
-        free = [f"{provider_name}/{m}".lower() for m in info.get("believed_free") or []
-                if isinstance(m, str)]
-        if free:
-            existing = entry.setdefault("believed_free", [])
-            added = [m for m in free if m not in existing]
+        # Both list keys promote the same way, and they are a PAIR: one adds a
+        # model to the free pool, the other takes it back out. Promoting only
+        # the first would ship the claim without the correction.
+        #
+        # The sidecar stores these BARE and providers.json stores them
+        # QUALIFIED, so they are prefixed exactly once on the way across.
+        # Prefixing unconditionally on both sides is what once produced
+        # "google/google/..." for 603 entries; see the note above
+        # _defaults_layer.
+        for list_key in ("believed_free", "cost_observed_free_tier"):
+            promoted = [f"{provider_name}/{m}".lower()
+                        for m in info.get(list_key) or [] if isinstance(m, str)]
+            if not promoted:
+                continue
+            existing = entry.setdefault(list_key, [])
+            added = [m for m in promoted if m not in existing]
             if added:
-                entry["believed_free"] = sorted(set(existing) | set(free))
+                entry[list_key] = sorted(set(existing) | set(promoted))
                 changed = True
                 for _ in added:
+                    # by_provider carries no *_source field, so there is no
+                    # better grade to read: a cost observation is a measurement
+                    # this deployment made.
                     _bump(provider_name, "observed")
         for model, limits in (info.get("free_limits") or {}).items():
             if not isinstance(model, str) or not isinstance(limits, dict):
@@ -4132,6 +4146,17 @@ def _promotion_body(report: dict) -> str:
                  "anything a provider published. They are worth more scrutiny than the "
                  "rest, because a wrong capability tag here routes every deployment's "
                  "request to a model that cannot serve it.")
+    lines.append("")
+    # Billing is the most deployment-specific fact of the five: trial credits,
+    # promotional tiers and per-account pricing all make one deployment's 402 a
+    # poor default for everyone. It is worth proposing anyway -- it is a real
+    # measurement, and it is how a provider that bills for a "free" model gets
+    # corrected for everybody -- but the reviewer should know which kind of
+    # claim they are merging.
+    lines.append("Any `cost_observed_free_tier` entries are **one deployment's billing "
+                 "observation**, not a catalog reading. Trial credits and promotional "
+                 "tiers differ per account, and merging one removes the model from "
+                 "every deployment's free pool.")
     lines.append("")
     lines.append("| provider | " + " | ".join(order) + " |")
     lines.append("|---|" + "---|" * len(order))
@@ -8445,10 +8470,11 @@ def _defaults_layer() -> dict:
             # Recorded as provider-scoped: this provider vouched for these ids,
             # and no other provider may inherit the claim by happening to serve
             # an upstream id that spells the same.
-            for entry in info.get("believed_free") or []:
-                if isinstance(entry, str):
-                    out["believed_free"].append(entry.lower())
-                    out[_ROUTING_PROVIDER_SCOPED].add(entry.lower())
+            for list_key in ("believed_free", "cost_observed_free_tier"):
+                for entry in info.get(list_key) or []:
+                    if isinstance(entry, str):
+                        out[list_key].append(entry.lower())
+                        out[_ROUTING_PROVIDER_SCOPED].add(entry.lower())
             for key in ("model_reasoning", "model_capabilities", "free_limits"):
                 for model, val in (info.get(key) or {}).items():
                     if isinstance(model, str):
