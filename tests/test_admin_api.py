@@ -322,6 +322,82 @@ def test_put_free_limits_ok(client, cfg_path):
 
 
 # --------------------------------------------------------------------------- #
+# Routing metadata: the effective view, and per-model editing
+
+def test_routing_metadata_reports_effective_values_and_their_layers(client):
+    """The grid must show what is IN EFFECT and where it came from.
+
+    Reading config.json alone rendered every model un-free and untagged once the
+    five keys migrated out, and saving that view wrote the blanks back as
+    overrides outranking everything learned.
+    """
+    resp = client.get("/admin/api/routing-metadata?limit=5")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["total"] > 0
+    assert body["layers"] == ["providers.json", "learned", "listing", "curated"]
+    for row in body["models"]:
+        assert set(row) >= {"id", "free", "reasoning", "capabilities",
+                            "free_limits", "layers", "grades"}
+
+
+def test_routing_metadata_pages_and_filters_server_side(client):
+    """Paging is server-side because a grid of thousands re-rendered per
+    keystroke, with six listeners per row, is what the old page did."""
+    everything = client.get("/admin/api/routing-metadata?limit=500").get_json()
+    assert len(everything["models"]) <= 500
+    page = client.get("/admin/api/routing-metadata?offset=1&limit=1").get_json()
+    assert len(page["models"]) == 1
+    assert page["offset"] == 1
+    narrowed = client.get("/admin/api/routing-metadata?q=zzz-no-such-model").get_json()
+    assert narrowed["total"] == 0
+
+
+def test_routing_metadata_put_records_one_model_as_curated(client, cfg_path):
+    """Per-model, so editing one row cannot blank the rest — which is exactly
+    how the old whole-section save could wipe the learned layer in one click."""
+    resp = client.put("/admin/api/routing-metadata", json={
+        "model": "groq/test-model", "capabilities": ["tools", "json"],
+        "reasoning": "deep", "free": True,
+        "free_limits": {"requests_per_minute": 15},
+    })
+    assert resp.status_code == 200
+    curated = _read_curated(cfg_path)
+    assert curated["model_capabilities"]["groq/test-model"] == ["json", "tools"]
+    assert curated["model_reasoning"]["groq/test-model"] == "deep"
+    assert "groq/test-model" in curated["believed_free"]
+    assert curated["free_limits"]["groq/test-model"]["requests_per_minute"] == 15
+
+
+def test_clearing_a_field_hands_the_model_back_to_what_was_learned(client, cfg_path):
+    """An override must be removable. Otherwise a correction made once freezes
+    the model forever and no later refresh can improve it."""
+    client.put("/admin/api/routing-metadata",
+               json={"model": "groq/test-model", "reasoning": "deep"})
+    assert _read_curated(cfg_path)["model_reasoning"].get("groq/test-model") == "deep"
+    client.put("/admin/api/routing-metadata",
+               json={"model": "groq/test-model", "reasoning": ""})
+    assert "groq/test-model" not in _read_curated(cfg_path)["model_reasoning"]
+
+
+@pytest.mark.parametrize("payload", [
+    {"capabilities": ["tools"]},                       # no model
+    {"model": "m", "capabilities": ["telepathy"]},     # unknown capability
+    {"model": "m", "reasoning": "ultra"},              # unknown level
+    {"model": "m", "reasoning": "flagship"},           # computed overlay
+    {"model": "m", "free_limits": {"bogus": 1}},       # unknown limit key
+    {"model": "m", "free_limits": {"requests_per_minute": "lots"}},
+    {"model": "m", "free": "yes"},
+])
+def test_routing_metadata_put_rejects_bad_payloads(client, payload):
+    assert client.put("/admin/api/routing-metadata", json=payload).status_code == 400
+
+
+def test_refresh_rejects_an_unknown_target(client):
+    assert client.post("/admin/api/refresh", json={"what": "nope"}).status_code == 400
+
+
+# --------------------------------------------------------------------------- #
 # Virtual-model preview + validate/heal
 
 def test_virtual_models_preview(client):
