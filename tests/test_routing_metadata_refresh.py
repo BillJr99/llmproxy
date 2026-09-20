@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 CATALOG_PROFILE_KEYS = {"scores", "context_length", "supports_tools",
-                        "capabilities", "model_id"}
+                        "capabilities", "model_id", "by_id"}
 
 
 # ── fixtures ────────────────────────────────────────────────────────────────
