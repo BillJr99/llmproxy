@@ -210,12 +210,79 @@ class Selection:
     # One entry per member we could score, which is what lets the router walk the
     # tier strongest-first instead of in the arbitrary order of `members`.
     scores: dict[str, dict] = field(default_factory=dict)
+    # Lowercased qualified id -> the percentile a pin assigned it. Reported so
+    # the refresh can say which placements displaced a measured score, which is
+    # otherwise invisible: the override is silent by design.
+    pinned_placements: dict[str, float] = field(default_factory=dict)
     # Normalised model key -> combined percentile, for EVERY scored model this
     # deployment can see, admitted or not. A score belongs to the weights rather
     # than to the provider serving them, so a routing target that appeared after
     # the last refresh — or a pinned provider no leaderboard covers by name —
     # can still join its score through this map.
     model_scores: dict[str, float] = field(default_factory=dict)
+
+
+# A pin may carry a placement as well as a name. Percentiles live in [0, 1]
+# internally, matching `start_percentile`, but "98" is the natural thing to
+# write, so both are accepted under one unambiguous rule: a value <= 1 is a
+# fraction, a value > 1 is a percentage. There is no boundary case where the
+# reading is in doubt.
+_PIN_PERCENTILE_MAX_FRACTION = 1.0
+
+
+def parse_pins(raw) -> dict[str, float | None]:
+    """``flagship_tier.pin`` as ``{lowercased name: percentile or None}``.
+
+    Two entry shapes, freely mixed in one list::
+
+        "pin": ["atria-asi/Atria-Dawn-Preview",
+                {"name": "Atria-Dawn-Preview", "percentile": 98}]
+
+    A bare string pins without saying where to place it, which is the original
+    behaviour: nothing scores it, so it sorts after every scored candidate. That
+    is safe but it is rarely what the author wanted — you pin a model because
+    you want it used, and it ends up last in the failover queue.
+
+    A percentile says where it belongs. It is honoured even when a benchmark
+    also scores the model, because a pin is an explicit instruction rather than
+    a hint; that is what makes it possible to demote a model you distrust as
+    well as promote one you hold credits on. The caller logs when an override
+    actually displaces a measured score.
+
+    Malformed entries degrade to a plain pin rather than raising: a typo in a
+    percentile should cost placement, not the tier.
+    """
+    out: dict[str, float | None] = {}
+    for entry in raw or []:
+        if isinstance(entry, str):
+            out.setdefault(entry.lower(), None)
+            continue
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name") or entry.get("model") or entry.get("id")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        out[name.strip().lower()] = coerce_pin_percentile(entry.get("percentile"))
+    return out
+
+
+def coerce_pin_percentile(raw) -> float | None:
+    """A pin's ``percentile`` as a [0, 1] fraction, or None when unusable.
+
+    ``bool`` is rejected explicitly: it is an ``int`` subclass, so ``True``
+    would otherwise read as the 100th percentile.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = float(raw)
+    if value > _PIN_PERCENTILE_MAX_FRACTION:
+        value /= 100.0
+    if value < 0.0:
+        return None
+    # A percentile above the top of the scale is a typo (`percentile: 980`),
+    # and clamping keeps it meaning "first" rather than silently sorting it
+    # somewhere arbitrary.
+    return min(value, 1.0)
 
 
 def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
@@ -236,7 +303,8 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
     min_free = int(tier_cfg.get("min_flagship_free_models") or 0)
     start_percentile = float(tier_cfg.get("start_percentile") or 0.0)
     max_models = tier_cfg.get("max_models")
-    pin = {p.lower() for p in (tier_cfg.get("pin") or []) if isinstance(p, str)}
+    pin_percentiles = parse_pins(tier_cfg.get("pin"))
+    pin = set(pin_percentiles)
     exclude = {e.lower() for e in (tier_cfg.get("exclude") or []) if isinstance(e, str)}
 
     combined = combine_scores(candidates)
@@ -340,13 +408,35 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
 
     # Built from `members` rather than from `eligible`, so a pin that a source
     # happens to cover is still rankable even though it bypassed the bar. A pin
-    # nothing scores simply has no entry, and the router sorts it last.
+    # nothing scores, and which names no percentile, simply has no entry, and
+    # the router sorts it last.
     scores = {
         c.qualified.lower(): {"combined": combined[c.model_key],
                               "model_key": c.model_key}
         for c in candidates
         if c.qualified.lower() in members and c.model_key in combined
     }
+
+    # A pin that names a percentile places itself. Written last so it wins over
+    # a measured score: a pin is an explicit instruction, which is what lets it
+    # demote a model you distrust as well as promote one nothing has scored.
+    # `pinned_placements` reports every override so the caller can say which
+    # ones displaced real evidence.
+    key_of = {c.qualified.lower(): c.model_key for c in candidates}
+    pinned_placements: dict[str, float] = {}
+    for name, percentile in pin_percentiles.items():
+        if percentile is None:
+            continue
+        # One pin may name a bare model and expand to several routing targets;
+        # each inherits the placement.
+        targets = by_upstream.get(name, {name}) if name not in known else {name}
+        for target in targets:
+            if target not in members:
+                continue
+            pinned_placements[target] = percentile
+            scores[target] = {"combined": percentile,
+                              "model_key": key_of.get(target, target),
+                              "pinned": True}
 
     # Reported from the FINAL member set, after pins and excludes, rather than
     # from `admitted`. What is written to flagship_models.json — and read back
@@ -378,6 +468,7 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
         distinct_models=final_models,
         free_models=[k for k in final_models if k in member_free_keys],
         pinned=sorted(pin),
+        pinned_placements=pinned_placements,
         unverified_pins=sorted(pin - verified_pins),
         scores=scores,
         model_scores=dict(combined),

@@ -3172,7 +3172,7 @@ values, so upgrading needs no edit.
 | `min_context` | `200000` | Spec veto: minimum context window. `0` disables the check. |
 | `require_tools` | `false` | **Opt-in** spec veto restricting *membership* to tool-callers. Off by default: a request that needs tools already cannot select a model that lacks them (see [capability enforcement](#capability-enforcement)), so vetoing here as well only made the floating bar hunt further down the ranking for free models carrying the tag — admitting weaker models on the strength of a capability rather than a score. Turn it on when you want the tier itself restricted. |
 | `max_models` | `null` | Optional hard cap on distinct models. `null` means uncapped. |
-| `pin` | `[]` | Qualified `provider/model` ids always admitted, bypassing both the bar and the spec veto. |
+| `pin` | `[]` | Ids always admitted, bypassing both the bar and the spec veto. A qualified `provider/model` id pins one routing target; a bare upstream id pins every provider serving it. An entry may instead be `{"name": …, "percentile": …}` to place it in the ranking — see [saying where a pin belongs](#pin-placement). |
 | `exclude` | `[]` | Qualified ids never admitted. Applied last, so it beats a pin. |
 | `sources` | `["openrouter_aa", "epoch"]` | Which benchmark sources to combine. |
 | `refresh_frequency_days` | `7` | How often membership is recomputed. `0` recomputes every time the interval is checked. |
@@ -3250,6 +3250,71 @@ The *normalized* key is deliberately **not** a third option. That join is
 heuristic — it is what lets one benchmark score cover several spellings of the
 same weights — and honouring it here would let a pin reach models you never
 named. A pin is an explicit instruction, so it stays literal.
+
+<a name="pin-placement"></a>
+#### Saying where a pin belongs
+
+Admitting a model is only half of it. Nothing scores a pinned model — that is
+usually *why* you pinned it — so it sorted below every scored candidate and
+ended up **last in the failover queue**. You asked for the model and got it only
+after everything else had been tried.
+
+An entry may instead be an object carrying a `percentile`:
+
+```json
+"flagship_tier": {
+  "pin": [{"name": "atria-asi/Atria-Dawn-Preview", "percentile": 100}]
+}
+```
+
+`100` places it first. Bare strings and objects mix freely in one list, and
+**`percentile` is optional**: an entry without one behaves exactly as before,
+admitted but unplaced.
+
+| You write | Meaning |
+| --- | --- |
+| `"atria-asi/Atria-Dawn-Preview"` | Admit it; place it nowhere (sorts last if unscored). |
+| `{"name": "…", "percentile": 100}` | Admit it and place it first. |
+| `{"name": "…", "percentile": 98}` | Admit it and place it at the 98th percentile. |
+| `{"name": "…"}` | Same as the bare string. |
+
+**Either scale works.** Percentiles are `[0, 1]` internally, matching
+`start_percentile`, but `98` is the natural thing to write. One rule settles it:
+a value **≤ 1 is a fraction**, a value **> 1 is a percentage**. No value is
+ambiguous between the two readings, and an out-of-range value such as `980` is
+clamped to the top rather than wrapping.
+
+**A percentile overrides a measured score.** A pin is an explicit instruction,
+consistent with it already bypassing the bar and the spec veto, so this is also
+how you *demote* a model you have reason to distrust:
+
+```json
+"pin": [{"name": "someprov/overrated-model", "percentile": 10}]
+```
+
+Because an override displacing real evidence is otherwise invisible, it is
+logged once per model:
+
+```
+[flagship] pin places someprov/overrated-model at 0.100, overriding its
+measured percentile of 0.950
+```
+
+A bare name places **every** provider serving those weights; a qualified id
+places only that routing target. Pins resolve against the live route cache by
+the same precedence as above, rather than through the normalized key — that key
+strips the provider, so `atria-asi/Atria-Dawn-Preview` and
+`Atria-Dawn-Preview` collapse onto the same entry, and placing a qualified pin
+through it would silently move every provider serving the model.
+
+Placement takes effect on the **next request**, not the next refresh, so you can
+retune a percentile without waiting out `refresh_frequency_days`.
+
+> **Placement is not immunity.** A candidate cooling after a `402`/`429`, or
+> with no headroom left, is demoted to the back of the list whatever its rank.
+> A `percentile: 100` pin cannot spend every turn retrying the one model already
+> known to be rate limited, and it does not exempt the model from the spec gate
+> at refresh time either — `exclude` still beats it outright.
 
 Because `exclude` is applied last, it still beats a pin, including beating one
 arm of an expanded bare pin — which is how you pin a model everywhere except on
