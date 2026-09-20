@@ -997,11 +997,13 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
 
 > **Routing metadata is not in `config.json` any more.** `believed_free`,
 > `cost_observed_free_tier`, `model_reasoning`, `model_capabilities` and
-> `free_limits` are resolved across four layers, with your `config.json` holding
-> only what you choose to override — see
-> [where routing metadata lives](#routing-metadata). Entries still in your
-> config are honoured, so nothing breaks; they are just frozen where the layers
-> keep themselves current.
+> `free_limits` are resolved across four layers, none of which is your config
+> file. It is an inbox instead: the server drains those five keys out of it at
+> startup, into the curated layer of `routing_metadata.json`, backing the file
+> up first. Anything shown here is therefore honoured, and honoured at the same
+> precedence it always had, but after the first boot it lives in the sidecar and
+> `config.json` holds none of it. See
+> [where routing metadata lives](#routing-metadata).
 
 > **Config layout (free_tier / providers_pr).** The free-tier maintenance
 > switches and the auto-PR settings live under two grouped objects, `free_tier`
@@ -2134,13 +2136,16 @@ curl http://localhost:8080/v1/usage | jq
   accounts. Single-credential providers omit `account` and read exactly as above.
 
   On the **first** such observation the proxy also appends the model's qualified
-  id to **`cost_observed_free_tier`** in your live `config.json` (a best-effort,
-  idempotent, operator-editable denylist). The updater treats anything in that
-  list as a hard *"not free"* signal: it is **never re-added** to `believed_free`
-  and is **removed** if present — both during a full scrape and during the
-  per-boot startup sync. This stops a paid model from being repeatedly re-added
-  (and re-opening a providers PR) every restart, without needing the cost probe.
-  The proxy still never edits `believed_free` directly at runtime.
+  id to **`cost_observed_free_tier`** in the
+  [learned layer](#routing-metadata) of `routing_metadata.json`, under the
+  provider that billed it (a best-effort, idempotent, operator-editable
+  denylist). It is written there rather than to `config.json`, which the proxy
+  no longer writes at all: a machine process editing the file a person
+  hand-edits is what the layering exists to stop. The same write drops the model
+  from the learned `believed_free`, so the sidecar does not assert both at once,
+  and routing avoids it from the next request onward. This stops a paid model
+  from being repeatedly re-added (and re-opening a providers PR) every restart,
+  without needing the cost probe.
 
 `POST /v1/usage/reset` clears the counters for the current worker; it is gated by
 the same auth policy as the [admin API](#security--localhost-only-by-default)
@@ -2305,20 +2310,38 @@ Two related settings sit nearby and are easy to confuse:
   a cadence at all.
 
 <a name="the-two-cadences"></a>
-#### There are two independent cadences
+<a name="the-three-cadences"></a>
+#### There are three independent cadences
 
-llmproxy runs two scheduled background jobs. They are unrelated, have separate
+llmproxy runs three scheduled background jobs. They are unrelated, have separate
 settings, and keep separate state files, so tuning one does not affect the
-other:
+others:
 
 | Job | What it refreshes | Setting | Default | State file |
 |-----|-------------------|---------|---------|------------|
 | **Free-models sweep** | `believed_free`, `free_limits`, `pricing` — which models are free and what their limits are | `free_tier.update_frequency_days` | 7 | `update_state.json` |
+| **Routing-metadata refresh** | What each model this deployment serves can do and which tier it sits in, for [the learned layer](#routing-metadata) | `routing_metadata.refresh_frequency_days` | 7 | `routing_metadata.json` |
 | **Flagship recompute** | Which models are near the state of the art, for [`llmproxy/flagship`](#flagship-tier) | `flagship_tier.refresh_frequency_days` | 7 | `flagship_models.json` |
 
-Both default to weekly and both run at startup when due, but they are otherwise
-independent: the free-models sweep scrapes provider docs and catalogs, while the
-flagship recompute reads benchmark scores and re-ranks what you can reach.
+All three default to weekly and all three run at startup when due, but they are
+otherwise independent: the free-models sweep scrapes provider docs and catalogs,
+the routing-metadata refresh reads provider listings and the OpenRouter catalog
+and then infers what neither covers, and the flagship recompute reads benchmark
+scores and re-ranks what you can reach. Each has its own master switch
+(`free_tier.update_on_startup`, `routing_metadata.enabled`,
+`flagship_tier.enabled`), so turning one off leaves the others running.
+
+> **The interval keys are not spelled alike, and the nesting differs too.** The
+> routing-metadata refresh and the flagship recompute both use
+> `refresh_frequency_days`, one level down from the top of their block. The
+> free-models sweep uses `update_frequency_days` at the same depth. The cost
+> probe is the odd one out on both counts: it sits a level deeper, inside
+> `free_tier.cost_probe`, and spells its interval plain `frequency_days`. So
+> `free_tier.cost_probe.frequency_days` is the current spelling, and
+> `free_tier.probe.frequency_days` is the older one, still accepted and lifted
+> into place by the config loader. `free_tier.frequency_days` and
+> `free_tier.cost_probe.refresh_frequency_days` match nothing and are silently
+> ignored.
 
 **Everything else is a throttle, not a cadence.** Within the free-models sweep,
 individual sources have their own frequency settings that limit how often *that
@@ -2617,7 +2640,7 @@ frequency to `0` to get a first run.
 
 This is a **separate cadence** from the free-models sweep
 (`free_tier.update_frequency_days`), with its own setting and its own state
-file. See [There are two independent cadences](#the-two-cadences).
+file. See [There are three independent cadences](#the-three-cadences).
 
 The candidate pool is everything this deployment can actually reach: every
 model of every configured provider, paid included. That is why the list is

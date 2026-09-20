@@ -8242,6 +8242,18 @@ def _resolve_provider(model_full: str) -> tuple[str | None, dict | None, str | N
     return provider_name, provider_cfg, upstream_model, None
 
 
+# Where a routing tag actually comes from. The hints used to name
+# config['model_reasoning'] and config['model_capabilities'], which sent anyone
+# hitting an empty pool to a file that is no longer a routing layer — and, once
+# the refresh had wiped a tier, to the one place that could not explain why.
+_WHERE_TAGS_LIVE = (
+    "Tags are learned into routing_metadata.json on the "
+    "routing_metadata.refresh_frequency_days cadence, seeded from "
+    "llmproxy/providers.json, and can be set by hand in the admin UI "
+    "(Models tab) which records them as curated so no refresh undoes them."
+)
+
+
 def _virtual_model_hint(model_full: str) -> str:
     """Return a one-sentence config hint for an unavailable virtual model."""
     split = _split_per_provider_virtual(model_full)
@@ -8252,18 +8264,22 @@ def _virtual_model_hint(model_full: str) -> str:
         if dim == "free":
             return (
                 f"Provider '{provider_name}' has no free-tier model "
-                f"(upstream ID contains 'free', or add it to config['believed_free'])."
+                f"(upstream ID contains 'free', or mark one free in the admin UI). "
+                f"{_WHERE_TAGS_LIVE}"
             )
         if dim in _REASONING_LEVELS:
-            return f"Tag at least one of provider '{provider_name}'s models with '{dim}' in config['model_reasoning']."
-        return f"Tag at least one of provider '{provider_name}'s models with '{dim}' in config['model_capabilities']."
+            return (f"No model of provider '{provider_name}' is tagged '{dim}'. "
+                    f"{_WHERE_TAGS_LIVE}")
+        return (f"No model of provider '{provider_name}' is known to support "
+                f"'{dim}'. {_WHERE_TAGS_LIVE}")
     name = _strip_virtual_prefix(model_full)
     if name == "loadbalanced":
         return "Check that at least one provider exposes any model to virtual routing."
     if name == "free":
         return (
             "Check that at least one provider exposes a free-tier model "
-            "(upstream ID contains 'free', or add it to config['believed_free'])."
+            "(upstream ID contains 'free', or mark one free in the admin UI). "
+            + _WHERE_TAGS_LIVE
         )
     if name == "local":
         return "Check that at least one provider has a localhost base_url."
@@ -8292,7 +8308,7 @@ def _virtual_model_hint(model_full: str) -> str:
                 )
             continue
         if name == level:
-            return f"Tag at least one model with '{level}' in config['model_reasoning']."
+            return (f"No model is tagged '{level}'. {_WHERE_TAGS_LIVE}")
         if name == f"{level}/free":
             return (
                 f"Need a model tagged '{level}' in config['model_reasoning'] "
