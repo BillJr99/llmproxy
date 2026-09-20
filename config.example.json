@@ -269,7 +269,7 @@
     "min_flagship_free_models": 5,
     "start_percentile": 0.9,
     "min_context": 200000,
-    "require_tools": true,
+    "require_tools": false,
     "max_models": null,
     "pin": [],
     "exclude": [],

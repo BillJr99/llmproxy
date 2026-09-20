@@ -733,9 +733,12 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         #                             instance is its own routing target
         #   start_percentile          where the bar starts before floating
         #   min_context               spec veto: minimum context window
-        #   require_tools             spec veto: tool-calling required, since a
-        #                             model that cannot call tools cannot drive
-        #                             an agent loop whatever it scores
+        #   require_tools             OPT-IN spec veto, off by default:
+        #                             restrict membership itself to models that
+        #                             can call tools. Off because a request that
+        #                             needs tools already cannot select a model
+        #                             that lacks them; vetoing here as well made
+        #                             the bar float further down the ranking
         #   max_models                optional hard cap (null = uncapped)
         #   pin / exclude             always-in / always-out qualified ids; a
         #                             pin bypasses both the bar and the spec

@@ -468,7 +468,11 @@ FLAGSHIP_TIER_DEFAULTS: dict = {
     "min_flagship_free_models": 5,
     "start_percentile": 0.9,
     "min_context": 200000,
-    "require_tools": True,
+    # Off by default: a request that needs tools is already prevented from
+    # selecting a model that cannot serve it, per request, by the server's
+    # capability gate. Vetoing at membership time as well made the floating bar
+    # hunt further down the ranking for free models that cleared the veto.
+    "require_tools": False,
     "max_models": None,
     "pin": [],
     "exclude": [],
