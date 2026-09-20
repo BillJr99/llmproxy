@@ -36,8 +36,43 @@ def _load_server(monkeypatch, config_path: Path):
     importlib.reload(server_mod)
     monkeypatch.setattr(server_mod, "_run_startup_tasks_once", lambda *a, **k: None)
     monkeypatch.setattr(server_mod, "_maybe_fire_interval_probes", lambda *a, **k: None)
+    # Production runs this synchronously at startup, before anything else reads
+    # routing metadata, and the ordering is load bearing: it drains config.json
+    # into the sidecar so the sync has a single place to prune. Skipping it here
+    # would test a sequence that never happens.
+    server_mod._migrate_config_routing_keys(str(config_path))
     return server_mod
 
+
+
+def _synced(config_path: Path) -> dict:
+    """What the local sync recorded, read from where it now writes.
+
+    The sync used to rewrite config.json. That made a machine process the author
+    of the file a person hand-edits, which is how a migration could strip the
+    five routing keys and find them re-seeded on the next startup. It writes the
+    sidecar's curated section instead, so these assertions follow it there.
+    """
+    side = config_path.parent / "routing_metadata.json"
+    if not side.exists():
+        return {}
+    curated = json.loads(side.read_text()).get("curated")
+    return curated if isinstance(curated, dict) else {}
+
+
+def _assert_config_untouched(config_path: Path) -> None:
+    """No routing metadata may be left in, or written back to, config.json.
+
+    The migration drains it at startup and the sync writes the sidecar, so a
+    non-empty key here means one of them regressed to editing the file the user
+    hand-edits — which is how a strip could be silently undone on the next boot.
+    """
+    cfg = json.loads(config_path.read_text())
+    for key in ("believed_free", "free_limits", "model_reasoning"):
+        assert not cfg.get(key), (
+            f"config.json[{key!r}]={cfg.get(key)!r} after startup; "
+            "routing metadata belongs in the sidecar"
+        )
 
 @pytest.fixture
 def config_with_polluted_local(tmp_path: Path) -> Path:
@@ -113,7 +148,8 @@ def test_sync_prunes_local_from_believed_free(monkeypatch, config_with_polluted_
             server_mod._sync_local_provider_models_once()
 
     # Re-read what got saved
-    saved = json.loads(config_with_polluted_local.read_text())
+    saved = _synced(config_with_polluted_local)
+    _assert_config_untouched(config_with_polluted_local)
     assert "ollama/llama3.2-3b" not in saved["believed_free"], \
         f"local model leaked into believed_free: {saved['believed_free']}"
     assert "ollama/qwen2.5-14b" not in saved["believed_free"]
@@ -138,7 +174,8 @@ def test_sync_prunes_local_from_free_limits(monkeypatch, config_with_polluted_lo
         with patch.object(_real_threading, "Thread", _ImmediateThread):
             server_mod._sync_local_provider_models_once()
 
-    saved = json.loads(config_with_polluted_local.read_text())
+    saved = _synced(config_with_polluted_local)
+    _assert_config_untouched(config_with_polluted_local)
     assert "ollama/llama3.2-3b" not in saved["free_limits"]
     # Cloud entry retained
     assert "groq/llama-3.3-70b" in saved["free_limits"]
@@ -162,7 +199,8 @@ def test_sync_still_populates_model_reasoning(monkeypatch, config_with_polluted_
         with patch.object(_real_threading, "Thread", _ImmediateThread):
             server_mod._sync_local_provider_models_once()
 
-    saved = json.loads(config_with_polluted_local.read_text())
+    saved = _synced(config_with_polluted_local)
+    _assert_config_untouched(config_with_polluted_local)
     # Newly-discovered local models get a reasoning level so /local/<level> works.
     assert "ollama/new-model-3b" in saved["model_reasoning"]
     assert "ollama/huge-70b" in saved["model_reasoning"]

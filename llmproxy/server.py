@@ -58,8 +58,10 @@ import itertools
 import json
 import logging
 import math
+import os
 import random
 import re
+import shutil
 import sys
 import threading
 import time
@@ -89,6 +91,7 @@ from .config import (
     RESERVED_PROVIDER_NAMES,
     account_bound_cfg,
     flagship_tier_cfg,
+    get_config_path,
     get_provider,
     get_routing_metadata_path,
     load_config,
@@ -121,6 +124,11 @@ from .signals import (
     score_signals,
     tier_adjustment,
 )
+
+try:
+    import fcntl  # POSIX advisory file locking
+except ImportError:  # pragma: no cover - non-POSIX (e.g. Windows)
+    fcntl = None
 from .usage import (
     ModelUsage,
     compute_cost,
@@ -729,13 +737,10 @@ def _persist_cost_observed(qualified_id: str) -> None:
     is logged and swallowed — usage accounting must never break a request.
     """
     try:
-        with _cost_observed_persist_lock:
-            provider, _, model = qualified_id.partition("/")
-            if not provider or not model:
-                return
-            state = load_routing_metadata()
-            if not isinstance(state, dict):
-                state = {}
+        provider, _, model = qualified_id.partition("/")
+        if not provider or not model:
+            return
+        with _routing_sidecar_txn() as state:
             by_provider = state.setdefault("by_provider", {})
             if not isinstance(by_provider, dict):
                 return
@@ -757,8 +762,6 @@ def _persist_cost_observed(qualified_id: str) -> None:
                     m for m in believed
                     if not (isinstance(m, str) and m.lower() == model.lower())
                 ]
-            save_routing_metadata(state)
-            _reset_routing_sidecar_cache()
             logger.info(
                 "[usage] recorded %s as cost-observed in routing_metadata.json",
                 qualified_id,
@@ -1992,9 +1995,15 @@ def _sync_local_provider_models_once() -> None:
         if not local_providers:
             return
 
-        existing_kf: list = config.setdefault("believed_free", [])
-        existing_mr: dict = config.setdefault("model_reasoning", {})
-        existing_fl: dict = config.setdefault("free_limits", {})
+        # These land in the sidecar's curated section, not config.json. This
+        # sync is a machine process, and having it rewrite the file a person
+        # hand-edits is what made config.json unusable as a record of intent —
+        # it silently re-seeded the very keys a migration had just stripped.
+        with _routing_sidecar_txn() as _state:
+            _curated = _curated_facts(_state)
+            existing_kf: list = _curated.setdefault("believed_free", [])
+            existing_mr: dict = _curated.setdefault("model_reasoning", {})
+            existing_fl: dict = _curated.setdefault("free_limits", {})
         modified = False
 
         for provider_key, provider_cfg in local_providers.items():
@@ -2053,7 +2062,14 @@ def _sync_local_provider_models_once() -> None:
                     logger.info("[local-sync] Added model_reasoning: %s -> %s", qualified, existing_mr[qualified])
 
         if modified:
-            save_config(config)
+            # Re-read under the lock and re-apply, rather than writing back the
+            # copy taken before the network calls: a refresh or a cost
+            # observation may have landed in between.
+            with _routing_sidecar_txn() as state:
+                curated = _curated_facts(state)
+                curated["believed_free"] = existing_kf
+                curated["model_reasoning"] = existing_mr
+                curated["free_limits"] = existing_fl
 
     import threading as _t
     _t.Thread(target=_run, daemon=True, name="local-model-sync").start()
@@ -2682,19 +2698,15 @@ def _recompute_routing_metadata(config: dict, config_path: str | None) -> dict |
         )
         return None
 
-    previous = load_routing_metadata(config_path)
-    merged, counts = _merge_model_facts(previous.get("by_model") or {}, learned)
-
-    state = {
-        "last_refresh_at": datetime.datetime.now(datetime.UTC).isoformat(),
-        "by_model": merged,
-        # Preserve what runtime observation recorded per provider; this pass
-        # relearns nothing about free status or quota.
-        "by_provider": previous.get("by_provider") or {},
-        "models_considered": len(routes),
-    }
-    save_routing_metadata(state, config_path)
-    _reset_routing_sidecar_cache()
+    # Everything above is network work, done before the lock is taken so a slow
+    # catalog fetch cannot hold it against a cost observation.
+    with _routing_sidecar_txn(config_path) as state:
+        merged, counts = _merge_model_facts(state.get("by_model") or {}, learned)
+        state["last_refresh_at"] = datetime.datetime.now(datetime.UTC).isoformat()
+        state["by_model"] = merged
+        state["models_considered"] = len(routes)
+        # by_provider and curated are left exactly as found: this pass relearns
+        # nothing about free status, quota, or anything a person set by hand.
     logger.info(
         "[routing-metadata] %d model(s) known: %d observed, %d by family, %d tiers "
         "inferred; %d fact(s) written, %d refused to a stronger source, from %d route(s)",
@@ -2886,6 +2898,139 @@ def _maybe_fire_pr_if_due(config: dict, config_path: str | None) -> None:
     _maybe_open_providers_pr(config, providers_text)
 
 
+_config_migration_done: bool = False
+_config_migration_lock = threading.Lock()
+
+
+# One lock for every read-modify-write of routing_metadata.json. Before this
+# the refresh took none at all and _persist_cost_observed took a different one,
+# so the two could interleave and lose an update; and neither took a FILE lock,
+# so under gunicorn nothing serialised the workers against each other.
+_routing_sidecar_write_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def _routing_sidecar_txn(config_path: str | None = None):
+    """Exclusive read-modify-write of the sidecar, yielding the state to mutate.
+
+    Saves and invalidates the read cache on a clean exit; an exception leaves
+    the file untouched. Callers must do their NETWORK work before entering, so a
+    slow catalog fetch cannot hold the lock against a cost observation.
+
+    Mirrors ``admin._locked``: a thread lock for this process and an advisory
+    file lock for the others, degrading to the thread lock alone where fcntl is
+    unavailable rather than blocking every write.
+    """
+    with _routing_sidecar_write_lock:
+        handle = None
+        try:
+            if fcntl is not None:
+                lock_path = str(get_routing_metadata_path(config_path)) + ".lock"
+                try:
+                    os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+                    handle = open(lock_path, "w")
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                except OSError as e:  # noqa: BLE001 — degrade, never block writes
+                    print(f"[server:_routing_sidecar_txn] {e}")
+                    traceback.print_exc()
+                    if handle is not None:
+                        handle.close()
+                        handle = None
+            state = load_routing_metadata(config_path)
+            yield state
+            save_routing_metadata(state, config_path)
+            _reset_routing_sidecar_cache()
+        finally:
+            if handle is not None:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                finally:
+                    handle.close()
+
+
+def _curated_facts(state: dict) -> dict:
+    """The sidecar's hand-set section, created if absent."""
+    curated = state.setdefault("curated", {})
+    if not isinstance(curated, dict):
+        curated = state["curated"] = {}
+    return curated
+
+
+def _migrate_config_routing_keys(config_path: str | None = None) -> dict | None:
+    """Move the five routing keys out of config.json into the sidecar.
+
+    config.json stopped being a routing layer because it could not be a stable
+    record of intent: it is the file a person hand edits, and machine processes
+    were writing it too — the local-model sync tags every model a local provider
+    serves and saves the file back. Anything already there is intent, though, so
+    it is carried over rather than dropped, landing in the sidecar's `curated`
+    section at the same precedence it had.
+
+    The shape is preserved exactly, so the migrated data resolves through the
+    same lookup it always did and moving it cannot change a routing decision.
+
+    Existing curated entries WIN over the incoming config, so running this again
+    after someone has edited a fact in the admin UI cannot resurrect the older
+    config.json value over their correction.
+
+    Backs up config.json first. Returns a report of what moved, or None when
+    there was nothing to move.
+    """
+    config = load_config(config_path, force_reload=True)
+    present = {k: config.get(k) for k in _ROUTING_CONFIG_KEYS if config.get(k)}
+    if not present:
+        return None
+
+    try:
+        cfg_file = get_config_path(config_path)
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = cfg_file.with_name(f"{cfg_file.name}.backup-{stamp}")
+        shutil.copy2(cfg_file, backup)
+    except Exception as e:  # noqa: BLE001 — never migrate without a way back
+        print(f"[server:_migrate_config_routing_keys] {e}")
+        traceback.print_exc()
+        logger.warning("[config-migration] could not back up %s — not migrating", config_path)
+        return None
+
+    report: dict[str, int] = {}
+    with _routing_sidecar_txn(config_path) as state:
+        curated = _curated_facts(state)
+        for key, value in present.items():
+            if key in _ROUTING_LIST_KEYS and isinstance(value, list):
+                existing = curated.get(key)
+                existing = list(existing) if isinstance(existing, list) else []
+                seen = dict.fromkeys(e.lower() for e in existing if isinstance(e, str))
+                added = 0
+                for entry in value:
+                    if isinstance(entry, str) and entry.lower() not in seen:
+                        seen[entry.lower()] = None
+                        added += 1
+                curated[key] = list(seen)
+                report[key] = added
+            elif key in _ROUTING_DICT_KEYS and isinstance(value, dict):
+                existing = curated.get(key)
+                target = dict(existing) if isinstance(existing, dict) else {}
+                added = 0
+                for k, v in value.items():
+                    if isinstance(k, str) and k.lower() not in target:
+                        target[k.lower()] = v      # an existing curated fact wins
+                        added += 1
+                curated[key] = target
+                report[key] = added
+
+    for key in present:
+        config.pop(key, None)
+    save_config(config, config_path)
+
+    logger.info(
+        "[config-migration] moved %s from config.json into the sidecar's curated "
+        "section (backup: %s)",
+        ", ".join(f"{k}={n}" for k, n in sorted(report.items()) if n) or "nothing new",
+        backup.name,
+    )
+    return report
+
+
 def _run_startup_tasks_once(config_path: str | None = None) -> None:
     """Run the one-time per-worker startup tasks in a background daemon thread.
 
@@ -2912,6 +3057,19 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
         if _startup_update_done:
             return
         _startup_update_done = True
+
+    # Synchronous, and before the background work: until this has run, a
+    # config.json written against the old layering is the only record of the
+    # user's hand-set facts, and nothing reads it any more.
+    global _config_migration_done
+    with _config_migration_lock:
+        if not _config_migration_done:
+            _config_migration_done = True
+            try:
+                _migrate_config_routing_keys(config_path)
+            except Exception as e:  # noqa: BLE001 — never fail startup over it
+                print(f"[server:_run_startup_tasks_once] {e}")
+                traceback.print_exc()
 
     def _run() -> None:
         # 1. Warm immediately so virtual models exist before the first request.
@@ -6667,6 +6825,11 @@ _ROUTING_DICT_KEYS = ("model_reasoning", "model_capabilities", "free_limits")
 # so layers and lookup forms combine instead of shadowing one another.
 _ROUTING_UNION_KEYS = frozenset({"model_capabilities"})
 
+# Every routing-metadata key that used to live in config.json. Named once so the
+# migration, the admin editors and the layer builders cannot disagree about what
+# "the five keys" means.
+_ROUTING_CONFIG_KEYS = _ROUTING_LIST_KEYS + _ROUTING_DICT_KEYS
+
 # The sidecar is re-read when it changes on disk. providers.py caches its own
 # data for the process lifetime, which is right for a shipped default and wrong
 # here: the refresh rewrites this file while the server runs, and a cache that
@@ -6762,6 +6925,49 @@ def _learned_layer(config_path: str | None = None) -> dict:
     return out
 
 
+def _curated_layer(config: dict | None = None, config_path: str | None = None) -> dict:
+    """The facts a person set by hand: the sidecar's curated section, over config.
+
+    This is where config.json's five routing keys went. Their ORIGINAL shape is
+    kept — flat lists and flat dicts, keyed however the user keyed them — rather
+    than re-derived into per-provider buckets, so migrated data resolves through
+    exactly the same lookup it always did and moving it cannot change a single
+    routing decision.
+
+    config.json is still READ, because a deployment that has not migrated yet
+    has its intent recorded nowhere else and silently dropping it would be worse
+    than the staleness this change set out to fix. It is an inbox rather than a
+    layer: ``_migrate_config_routing_keys`` drains it into the curated section
+    at startup, after which it holds none of these keys and contributes nothing.
+    Anything added to it by hand afterwards is honoured until the next restart
+    absorbs it. The curated section wins where both speak, so a correction made
+    in the admin UI is never undone by a stale config.json.
+    """
+    layers: list[dict] = []
+    if isinstance(config, dict):
+        layers.append(config)
+    state = _load_routing_sidecar(config_path)
+    curated = state.get("curated")
+    if isinstance(curated, dict):
+        layers.append(curated)
+
+    out: dict = {}
+    for layer in layers:
+        for key in _ROUTING_LIST_KEYS:
+            val = layer.get(key)
+            if isinstance(val, list):
+                merged = dict.fromkeys(out.get(key) or [])
+                merged.update(dict.fromkeys(v.lower() for v in val if isinstance(v, str)))
+                out[key] = list(merged)
+        for key in _ROUTING_DICT_KEYS:
+            val = layer.get(key)
+            if isinstance(val, dict):
+                acc = dict(out.get(key) or {})
+                acc.update({k.lower(): v for k, v in val.items() if isinstance(k, str)})
+                out[key] = acc
+    return out
+
+
 def _listing_layer() -> dict:
     """What each provider currently says its own models can do.
 
@@ -6782,7 +6988,14 @@ def _merged_routing_config(config: dict) -> dict:
     an un-migrated deployment behave bit-for-bit as it did before.
     """
     try:
-        layers = (_defaults_layer(), _learned_layer(), _listing_layer(), config)
+        # config.json is deliberately NOT a layer. It is the file a person hand
+        # edits, and machine processes were writing it too — the local-model
+        # sync tagged every model a local provider served and saved it back —
+        # so it could never be a stable record of intent. Hand-set facts live in
+        # the sidecar's `curated` section instead, which occupies the same top
+        # position and is what the admin UI writes.
+        layers = (_defaults_layer(), _learned_layer(), _listing_layer(),
+                  _curated_layer(config))
         merged = dict(config)
         for key in _ROUTING_LIST_KEYS:
             seen: dict[str, None] = {}
