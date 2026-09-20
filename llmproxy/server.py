@@ -2457,6 +2457,15 @@ def _recompute_flagship_members(config: dict, config_path: str | None) -> dict |
     return state
 
 
+# How many models of a family must carry observed capabilities before the family
+# is allowed to lend its unanimous set to a sibling that carries none. Two
+# models agreeing is not evidence about a third; measured against the shipped
+# providers.json, three is where the families that emerge are ones you would
+# recognise (glm -> reasoning, gemma -> vision) rather than accidents.
+# Overridable as routing_metadata.min_family_members.
+_DEFAULT_MIN_FAMILY_MEMBERS = 3
+
+
 def _routing_metadata_due(meta_cfg: dict, config_path: str | None) -> bool:
     """Whether the routing-metadata recompute is due. Mirrors the flagship gate."""
     if not meta_cfg.get("enabled", True):
@@ -2476,65 +2485,221 @@ def _routing_metadata_due(meta_cfg: dict, config_path: str | None) -> bool:
     return due
 
 
+def _family_capability_profiles(
+    observed: dict[str, set[str]],
+    raw_for_key: dict[str, str],
+    min_members: int,
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """What every model in a family agrees it can do.
+
+    Returns ``(by_generation, by_bare)`` mapping a family key to the capability
+    set UNANIMOUS among its members that carry observed data. Unanimity, not a
+    majority: a family spanning coder, omni and vision variants agrees on what
+    the weights share and disagrees on the rest, and only the agreement is safe
+    to lend to a sibling we know nothing about. Measured against the shipped
+    providers.json, this is what makes ``glm`` a reasoning family while ``qwen``
+    contributes only ``tools`` across its twenty members.
+
+    Families smaller than *min_members* say nothing, because one or two models
+    agreeing is not evidence about a third.
+    """
+    from .providers import family_key
+
+    gen_members: dict[str, list[set[str]]] = {}
+    bare_members: dict[str, list[set[str]]] = {}
+    for key, caps in observed.items():
+        if not caps:
+            continue
+        raw = raw_for_key.get(key) or key
+        gen = family_key(raw)
+        bare = family_key(raw, generation=False)
+        if gen:
+            gen_members.setdefault(gen, []).append(set(caps))
+        if bare:
+            bare_members.setdefault(bare, []).append(set(caps))
+
+    def _unanimous(groups: dict[str, list[set[str]]]) -> dict[str, set[str]]:
+        out: dict[str, set[str]] = {}
+        for fam, sets in groups.items():
+            if len(sets) < min_members:
+                continue
+            shared = set.intersection(*sets)
+            if shared:
+                out[fam] = shared
+        return out
+
+    return _unanimous(gen_members), _unanimous(bare_members)
+
+
+def _merge_model_facts(
+    previous: dict, learned: dict[str, dict], fact_keys: tuple[str, ...] = ("capabilities", "reasoning"),
+) -> tuple[dict[str, dict], dict[str, int]]:
+    """Fold this pass's findings into what earlier passes knew.
+
+    Two rules, and the whole point of the function is that neither was honoured
+    before: a model this pass could not see KEEPS what it had, so one provider
+    being down at refresh time cannot thin the routing data; and a fact may be
+    replaced only by one of equal or greater provenance, so an inference can
+    never overwrite a reading and nothing can overwrite a hand correction.
+
+    Replacing ``by_model`` wholesale, as this used to, destroyed every
+    ``reasoning`` tag on the first run — the refresh writes only capabilities,
+    so there was nothing to carry the tiers forward.
+    """
+    from .providers import fact_rank
+
+    merged: dict[str, dict] = {}
+    for key, facts in (previous or {}).items():
+        if isinstance(key, str) and isinstance(facts, dict):
+            merged[key] = dict(facts)
+
+    counts = {"kept": 0, "written": 0, "refused": 0}
+    for key, facts in learned.items():
+        entry = merged.setdefault(key, {})
+        for fact in fact_keys:
+            if fact not in facts:
+                continue
+            incoming_rank = fact_rank(facts.get(f"{fact}_source"))
+            if fact in entry and fact_rank(entry.get(f"{fact}_source")) > incoming_rank:
+                counts["refused"] += 1
+                continue
+            entry[fact] = facts[fact]
+            entry[f"{fact}_source"] = facts.get(f"{fact}_source", "observed")
+            counts["written"] += 1
+    counts["kept"] = len(merged) - len(learned) if len(merged) > len(learned) else 0
+    return merged, counts
+
+
 def _recompute_routing_metadata(config: dict, config_path: str | None) -> dict | None:
     """Relearn what this deployment's models are and can do.
 
-    Two sources, the provider's own listing winning over the OpenRouter catalog:
-    a gateway knows its own deployment, while the catalog is the broad base that
-    covers models the gateway describes only as a bare OpenAI object.
+    Four sources, weakest first, each recorded with its provenance so a later
+    pass can tell a reading from a guess:
+
+      inferred  the model's own name, via ``infer_reasoning_level``
+      family    unanimous across the models sharing its family
+      observed  the OpenRouter catalog, then the provider's own listing
 
     Capabilities are recorded per NORMALIZED MODEL rather than per routing
     target, so one fact covers every provider serving those weights — the same
     join that turns one benchmark score into a correctly ranked flagship tier.
-    Free status and rate limits stay per provider, because that is what they
-    actually describe: the same weights can be free on one provider and metered
-    on another.
+    They are UNIONED across providers, never assigned: a gateway that omits a
+    tag is silent, not authoritative, so a terse listing must not erase a richer
+    one. Free status and rate limits stay per provider, because that is what
+    they actually describe.
+
+    Every derivation reads the RAW upstream id. ``normalize_model_id`` strips
+    separators, so a regex run against its output reads digits that were never a
+    parameter count: ``llama-3.1-8b`` becomes ``llama318b`` and infers "deep".
 
     Returns the state written, or None when nothing could be learned.
     """
     from .flagship import fetch_openrouter_profiles, normalize_model_id
+    from .providers import infer_reasoning_level
 
-    by_model: dict[str, dict] = {}
+    meta_cfg = routing_metadata_cfg(config)
+    min_members = meta_cfg.get("min_family_members", _DEFAULT_MIN_FAMILY_MEMBERS)
+    infer_tiers = meta_cfg.get("infer_reasoning", True)
+    infer_family = meta_cfg.get("infer_family_capabilities", True)
+
+    observed: dict[str, set[str]] = {}
+    raw_for_key: dict[str, str] = {}
+
+    def _observe(raw_id: str, caps: set[str]) -> None:
+        key = normalize_model_id(raw_id)
+        if not key:
+            return
+        raw_for_key.setdefault(key, raw_id)
+        if caps:
+            observed.setdefault(key, set()).update(caps)
 
     # Base layer: the catalog. Reuses the fetch the flagship refresh already
-    # makes, which until now kept only `tools` and threw the rest away.
+    # makes. Until now this read a `capabilities` key that fetch_openrouter_
+    # profiles never set, so the whole layer was dead and models whose gateway
+    # publishes a bare OpenAI object could never earn a tag.
     try:
         for key, profile in (fetch_openrouter_profiles() or {}).items():
-            caps = sorted(profile.get("capabilities") or ())
+            caps = set(profile.get("capabilities") or ())
+            raw_for_key.setdefault(key, profile.get("model_id") or key)
             if caps:
-                by_model[key] = {"capabilities": caps}
+                observed.setdefault(key, set()).update(caps)
     except Exception as exc:  # noqa: BLE001 — a dead catalog degrades, never fails
         logger.warning("[routing-metadata] catalog fetch failed: %s", exc)
 
-    # Overlay: each provider's own listing, which wins where it says anything.
-    listings = _get_model_capability_snapshot()
-    for qualified, caps in listings.items():
-        if not caps:
-            continue
+    # Overlay: each provider's own listing. Unioned with the catalog rather than
+    # replacing it, and unioned across providers serving the same weights.
+    for qualified, caps in _get_model_capability_snapshot().items():
         upstream = qualified.split("/", 1)[1] if "/" in qualified else qualified
-        by_model.setdefault(normalize_model_id(upstream), {})["capabilities"] = sorted(caps)
+        _observe(upstream, set(caps or ()))
 
-    if not by_model:
+    # Every distinct route, not just the ones carrying capabilities — a model
+    # with no capability data is exactly the one that needs a tier inferred.
+    routes: list[tuple[str, str]] = []
+    try:
+        for provider_name, upstream_id in _get_distinct_routes():
+            routes.append((provider_name, upstream_id))
+            _observe(upstream_id, set())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[routing-metadata] route enumeration failed: %s", exc)
+
+    learned: dict[str, dict] = {}
+    for key, caps in observed.items():
+        learned[key] = {"capabilities": sorted(caps), "capabilities_source": "observed"}
+
+    # Family layer: lend a family's unanimous capabilities to a member that has
+    # none of its own. Never to one that does — a reading always beats a guess.
+    n_family = 0
+    if infer_family:
+        from .providers import family_key
+
+        by_gen, by_bare = _family_capability_profiles(observed, raw_for_key, min_members)
+        for key, raw_id in raw_for_key.items():
+            if observed.get(key):
+                continue
+            # Generation first, so llama-4's tools never reach llama-2; the bare
+            # family is the fallback for a generation too sparse to speak.
+            shared = by_gen.get(family_key(raw_id) or "") or by_bare.get(
+                family_key(raw_id, generation=False) or "")
+            if shared:
+                learned.setdefault(key, {}).update(
+                    {"capabilities": sorted(shared), "capabilities_source": "family"})
+                n_family += 1
+
+    # Tier layer: inferred from the raw id. Weakest grade, so a curated or
+    # migrated tier already in the sidecar survives untouched.
+    n_tier = 0
+    if infer_tiers:
+        for key, raw_id in raw_for_key.items():
+            tier = infer_reasoning_level(raw_id)
+            if tier:
+                learned.setdefault(key, {}).update(
+                    {"reasoning": tier, "reasoning_source": "inferred"})
+                n_tier += 1
+
+    if not learned:
         logger.warning(
             "[routing-metadata] learned nothing this pass; keeping the previous state"
         )
         return None
 
-    # Preserve what earlier passes and runtime observation recorded per provider;
-    # this pass only relearns capabilities.
     previous = load_routing_metadata(config_path)
+    merged, counts = _merge_model_facts(previous.get("by_model") or {}, learned)
+
     state = {
         "last_refresh_at": datetime.datetime.now(datetime.UTC).isoformat(),
-        "by_model": by_model,
+        "by_model": merged,
+        # Preserve what runtime observation recorded per provider; this pass
+        # relearns nothing about free status or quota.
         "by_provider": previous.get("by_provider") or {},
-        "models_considered": len(listings),
+        "models_considered": len(routes),
     }
     save_routing_metadata(state, config_path)
     _reset_routing_sidecar_cache()
     logger.info(
-        "[routing-metadata] learned capabilities for %d distinct model(s) "
-        "from %d routing target(s)",
-        len(by_model), len(listings),
+        "[routing-metadata] %d model(s) known: %d observed, %d by family, %d tiers "
+        "inferred; %d fact(s) written, %d refused to a stronger source, from %d route(s)",
+        len(merged), len(observed), n_family, n_tier,
+        counts["written"], counts["refused"], len(routes),
     )
     return state
 
@@ -4009,6 +4174,23 @@ def _model_capabilities(config: dict) -> dict[str, set[str]]:
     return result
 
 
+def _model_fact_keys(provider_name: str, upstream_id: str) -> tuple[str, ...]:
+    """The id forms a per-model fact may be filed under, most specific first.
+
+    Qualified and bare are how an override or a provider listing keys things;
+    normalized is how the LEARNED layer keys what belongs to the weights rather
+    than to one provider, so a single entry answers for every spelling.
+    """
+    forms = [f"{provider_name}/{upstream_id}".lower(), upstream_id.lower()]
+    try:
+        from .flagship import normalize_model_id
+        forms.append(normalize_model_id(upstream_id))
+    except Exception as e:  # noqa: BLE001 — a lookup must never fail a request
+        print(f"[server:_model_fact_keys] {e}")
+        traceback.print_exc()
+    return tuple(dict.fromkeys(f for f in forms if f))
+
+
 def _lookup_model_fact(mapping: dict, provider_name: str, upstream_id: str):
     """Find a per-model fact by qualified id, bare id, then normalized model.
 
@@ -4024,23 +4206,42 @@ def _lookup_model_fact(mapping: dict, provider_name: str, upstream_id: str):
     """
     if not mapping:
         return None
-    hit = mapping.get(f"{provider_name}/{upstream_id}".lower())
-    if hit is not None:
-        return hit
-    hit = mapping.get(upstream_id.lower())
-    if hit is not None:
-        return hit
-    try:
-        from .flagship import normalize_model_id
-        return mapping.get(normalize_model_id(upstream_id))
-    except Exception:  # noqa: BLE001 — a lookup must never fail a request
-        return None
+    for form in _model_fact_keys(provider_name, upstream_id):
+        hit = mapping.get(form)
+        if hit is not None:
+            return hit
+    return None
+
+
+def _lookup_capabilities(
+    cap_map: dict[str, set[str]], provider_name: str, upstream_id: str
+) -> set[str]:
+    """Every capability known for this model, across all three id forms.
+
+    Unlike ``_lookup_model_fact``, which stops at the first hit, this UNIONS the
+    qualified, bare and normalized entries. A capability set is evidence rather
+    than a setting: the per-provider listing says what this gateway documents,
+    the normalized entry says what these weights are known to do anywhere, and
+    neither retracts the other.
+
+    First-match-wins was wrong here in a way that actively hurt. A gateway
+    publishing a partial ``supported_parameters`` shadowed the joined entry, so
+    ``_capability_state`` returned KNOWN_INCAPABLE — ranking the model BELOW an
+    untagged one for a capability it demonstrably has.
+    """
+    if not cap_map:
+        return set()
+    out: set[str] = set()
+    for form in _model_fact_keys(provider_name, upstream_id):
+        hit = cap_map.get(form)
+        if hit:
+            out |= set(hit)
+    return out
 
 
 def _model_has_capability(provider_name: str, upstream_id: str, cap: str, cap_map: dict[str, set[str]]) -> bool:
-    """Three-form lookup (qualified, bare, normalized) for a single capability."""
-    caps = _lookup_model_fact(cap_map, provider_name, upstream_id)
-    return bool(caps and cap in caps)
+    """Whether this model is known to support *cap*, across all three id forms."""
+    return cap in _lookup_capabilities(cap_map, provider_name, upstream_id)
 
 
 def _needed_capabilities(payload: dict) -> set[str]:
@@ -4074,7 +4275,7 @@ def _capability_state(
     *ordering*, where an untagged model deserves to sit between a confirmed
     match and a confirmed mismatch rather than tied with the mismatch.
     """
-    caps = _lookup_model_fact(cap_map, provider_name, upstream_id)
+    caps = _lookup_capabilities(cap_map, provider_name, upstream_id)
     if not caps:
         return _CAP_UNKNOWN
     return _CAP_KNOWN_CAPABLE if cap in caps else _CAP_KNOWN_INCAPABLE
@@ -6462,6 +6663,9 @@ def _flagship_ordered_candidates(
 
 _ROUTING_LIST_KEYS = ("believed_free", "cost_observed_free_tier")
 _ROUTING_DICT_KEYS = ("model_reasoning", "model_capabilities", "free_limits")
+# Of those, the ones whose value is a SET OF FACTS rather than a single value,
+# so layers and lookup forms combine instead of shadowing one another.
+_ROUTING_UNION_KEYS = frozenset({"model_capabilities"})
 
 # The sidecar is re-read when it changes on disk. providers.py caches its own
 # data for the process lifetime, which is right for a shipped default and wrong
@@ -6589,11 +6793,27 @@ def _merged_routing_config(config: dict) -> dict:
             merged[key] = list(seen)
         for key in _ROUTING_DICT_KEYS:
             acc: dict = {}
+            union = key in _ROUTING_UNION_KEYS
             for layer in layers:
                 raw = layer.get(key)
-                if isinstance(raw, dict):
-                    acc.update({k.lower(): v for k, v in raw.items()
-                                if isinstance(k, str)})
+                if not isinstance(raw, dict):
+                    continue
+                for k, v in raw.items():
+                    if not isinstance(k, str):
+                        continue
+                    k = k.lower()
+                    # Capabilities are a SET belonging to the weights, so layers
+                    # add to each other. Replacing would let a gateway that
+                    # publishes a thin `supported_parameters` retract what the
+                    # catalog or another provider asserted about the same model.
+                    # A reasoning tier and a rate limit are single-valued, so
+                    # for those the higher layer rightly wins outright.
+                    if union and isinstance(v, list) and isinstance(acc.get(k), list):
+                        seen = dict.fromkeys(acc[k])
+                        seen.update(dict.fromkeys(v))
+                        acc[k] = list(seen)
+                    else:
+                        acc[k] = v
             merged[key] = acc
         return merged
     except Exception as e:  # noqa: BLE001 — never fail a request over a merge

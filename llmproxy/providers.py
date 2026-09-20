@@ -193,6 +193,109 @@ def infer_reasoning_level(model_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Provenance
+# ---------------------------------------------------------------------------
+
+# How strongly a learned routing fact is believed, weakest to strongest. The
+# sidecar carries one of these beside each fact as ``<fact>_source``, because it
+# holds machine-learned and hand-set values together and a refresh must be able
+# to tell them apart. Without it the inference pass would overwrite the very
+# corrections a user made to fix what inference got wrong.
+#
+#   inferred  derived from this model's own name
+#   family    unanimous across the models sharing its family
+#   observed  a provider listing or the OpenRouter catalog said so
+#   curated   set by hand, in the admin UI or migrated from a config.json
+#
+# Order is load bearing: ``fact_rank`` is the index, and a refresh may replace a
+# fact of equal or weaker rank and never a stronger one.
+FACT_SOURCES: tuple[str, ...] = ("inferred", "family", "observed", "curated")
+
+# What a fact with no recorded provenance counts as. Sidecars written before
+# provenance existed carry none, and treating those as the weakest grade would
+# let the first refresh overwrite hand-migrated data — exactly the loss this
+# field exists to prevent. They are therefore read as "observed".
+DEFAULT_FACT_SOURCE = "observed"
+
+
+def fact_rank(source: str | None) -> int:
+    """Rank a provenance grade. Unknown or missing reads as DEFAULT_FACT_SOURCE."""
+    if not isinstance(source, str) or source not in FACT_SOURCES:
+        source = DEFAULT_FACT_SOURCE
+    return FACT_SOURCES.index(source)
+
+
+# ---------------------------------------------------------------------------
+# Family derivation
+# ---------------------------------------------------------------------------
+
+# Tokens that mark a size or a tuning rather than a generation, so they end the
+# family rather than extending it.
+_FAMILY_VERSION_RE = re.compile(r"^[a-z]\d+$")     # "m2", "r1" — a lettered series
+_FAMILY_SPLIT_RE = re.compile(r"[-_.]+")
+
+# At most this many leading alphabetic tokens form the base ("gpt"+"oss",
+# "command"+"a"), and at most this many numeric tokens form the generation
+# ("5"+"3" for glm-5.3). Both caps stop a long descriptive id from collapsing
+# into a family of one.
+_FAMILY_MAX_BASE_TOKENS = 2
+_FAMILY_MAX_VERSION_TOKENS = 2
+
+
+def family_key(model_id: str, *, generation: bool = True) -> str | None:
+    """Group a model with its siblings: ``z-ai/glm-5.3-flash`` -> ``glm5``/``glm``.
+
+    Two granularities. With *generation* the key carries the major version, so
+    ``llama-2-7b`` and ``llama-4-scout`` land in different families and cannot
+    lend each other capabilities they do not share. Without it they share
+    ``llama``, which is coarser but covers models whose generation is too sparse
+    to say anything on its own.
+
+    Derived from the RAW id, never from ``normalize_model_id``'s output. That
+    function strips separators, so ``llama-2-7b`` becomes ``llama27b`` and any
+    version read afterwards is a number that was never a version: the family
+    would come out ``llama27``. Same hazard as ``infer_reasoning_level``.
+
+    Returns None when the id yields nothing usable to group on.
+    """
+    if not isinstance(model_id, str):
+        return None
+    s = model_id.lower().strip().split("/")[-1]
+    s = s.split(":", 1)[0]
+    tokens = [t for t in _FAMILY_SPLIT_RE.split(s) if t]
+    if not tokens:
+        return None
+
+    # The first token may already embed its generation ("qwen3"), so peel it.
+    head = tokens[0]
+    m = re.match(r"^([a-z]+)(\d*)$", head)
+    if not m or len(m.group(1)) < 2:
+        return None
+    base, version = m.group(1), m.group(2)
+
+    base_tokens = 1
+    version_tokens = 1 if version else 0
+    for tok in tokens[1:]:
+        if not version and tok.isalpha() and base_tokens < _FAMILY_MAX_BASE_TOKENS:
+            base += tok                       # "gpt"+"oss", "command"+"a"
+            base_tokens += 1
+            continue
+        if tok.isdigit() and version_tokens < _FAMILY_MAX_VERSION_TOKENS:
+            version += tok                    # "5"+"3" for glm-5.3
+            version_tokens += 1
+            continue
+        if not version and _FAMILY_VERSION_RE.match(tok):
+            version += tok                    # "m2" for minimax-m2.7
+            version_tokens += 1
+            continue
+        break
+
+    if not generation:
+        return base or None
+    return (base + version) or None
+
+
+# ---------------------------------------------------------------------------
 # Capability derivation
 # ---------------------------------------------------------------------------
 

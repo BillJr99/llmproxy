@@ -553,6 +553,14 @@ def save_flagship_state(state: dict, config_path: str | None = None) -> bool:
 ROUTING_METADATA_DEFAULTS: dict = {
     "enabled": True,
     "refresh_frequency_days": 7,
+    # Derive a reasoning tier from the model's name when nothing stronger says
+    # otherwise. Recorded as "inferred", the weakest provenance, so a reading or
+    # a hand correction always wins and a later pass can upgrade it.
+    "infer_reasoning": True,
+    # Lend a family its unanimous capabilities to members that publish none.
+    "infer_family_capabilities": True,
+    # Members carrying observed capabilities needed before a family may do that.
+    "min_family_members": 3,
 }
 
 
