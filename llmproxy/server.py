@@ -1290,12 +1290,18 @@ def _record_failure(
     kind: str = "upstream",
     detail: bytes | str | None = None,
     virtual_model: str | None = None,
+    duration_ms: float | None = None,
 ) -> None:
     """Append one structured failure record to the ring.
 
-    *kind* classifies the failure for the report: ``timeout``, ``quota``,
-    ``capability``, ``oversize``, ``stream`` or ``upstream``. Never raises: a
-    diagnostic that can fail a request is worse than no diagnostic.
+    *kind* classifies the failure for the report: ``timeout``, ``connection``,
+    ``quota``, ``capability``, ``oversize``, ``stream``, ``server`` or
+    ``upstream``. Never raises: a diagnostic that can fail a request is worse
+    than no diagnostic.
+
+    *duration_ms* is what separates "this pool answers fast and wrongly" from
+    "this pool burns a full candidate timeout each time", which are different
+    operational problems with the same status code.
     """
     try:
         record = {
@@ -1308,6 +1314,7 @@ def _record_failure(
             "status": status,
             "kind": kind,
             "detail": _failure_detail(detail),
+            "duration_ms": round(duration_ms, 1) if duration_ms is not None else None,
         }
         with _failure_log_lock:
             _failure_log.append(record)
@@ -1405,6 +1412,52 @@ def _classify_failure(
         return "quota"
     if status is not None and status >= 500:
         return "server"
+    return "upstream"
+
+
+def _note_candidate_failure(
+    attempted: list[tuple[str, str, int | None]],
+    provider_name: str,
+    upstream_model: str,
+    *,
+    status: int | None = None,
+    kind: str = "upstream",
+    detail: bytes | str | None = None,
+    virtual_model: str | None = None,
+    duration_ms: float | None = None,
+) -> str:
+    """Record one candidate's failure, for both the report and the final status.
+
+    Returns the scrubbed detail it recorded, so a caller that must describe the
+    failure later (the exhausted-pool reply) reuses exactly what the report
+    shows rather than re-deriving it from a raw body.
+
+    Recording a failover takes two coupled steps — the cycling loop's roll-call
+    of what it tried, and the ring the failure report reads — and keeping them
+    as separate statements is how six of the streaming loop's eight failover
+    paths ended up recording neither. They are one call now so a new path cannot
+    silently record half of it.
+    """
+    attempted.append((provider_name, upstream_model, status))
+    _record_failure(
+        provider_name, upstream_model,
+        status=status, kind=kind, detail=detail,
+        virtual_model=virtual_model, duration_ms=duration_ms,
+    )
+    return _failure_detail(detail)
+
+
+def _exception_failure_kind(exc: BaseException) -> str:
+    """Bucket a connect- or stream-level exception for the report.
+
+    A timeout and a refused connection look alike in a log line and mean quite
+    different things: one is an upstream that accepted the socket and then went
+    quiet, the other is one that was never there.
+    """
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "timeout"
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "connection"
     return "upstream"
 
 
@@ -6713,18 +6766,18 @@ def _proxy_cycling_non_streaming(
         _cap = _note_capability_rejection(
             provider_name, upstream_model, resp.status_code, _body
         )
-        _record_failure(
-            provider_name, upstream_model,
+        _note_candidate_failure(
+            _attempted, provider_name, upstream_model,
             status=resp.status_code,
             kind=_classify_failure(resp.status_code, _body, capability=_cap,
                                    timed_out=_is_timeout_response(resp)),
             detail=_body,
             virtual_model=virtual_model,
+            duration_ms=_elapsed_ms,
         )
         logger.warning(
             "  [%s] %s/%s returned %d, trying next", label, provider_name, upstream_model, resp.status_code
         )
-        _attempted.append((provider_name, upstream_model, resp.status_code))
         last = resp
 
     if last is None:
@@ -6789,6 +6842,7 @@ def _proxy_cycling_streaming(
     total = len(candidates)
     last_error: tuple[bytes, int, str] | None = None
     _attempted: list[tuple[str, str, int | None]] = []
+    _last_detail: str = ""
 
     for idx, (provider_name, provider_cfg, upstream_model) in enumerate(candidates):
         # As on the non-streaming path, candidate 0 always gets its attempt.
@@ -6838,6 +6892,7 @@ def _proxy_cycling_streaming(
         # Open the upstream. Transient failures fail over to the next candidate
         # immediately unless this is the last one (then same-candidate retries).
         resp = None
+        _open_started = time.monotonic()
         for attempt in range(max_attempts):
             logger.info("  [%s] trying %s/%s  [streaming]", label, provider_name, upstream_model)
             try:
@@ -6854,12 +6909,24 @@ def _proxy_cycling_streaming(
                 logger.warning("  [%s] %s/%s error: %s, trying next", label, provider_name, upstream_model, e)
                 _record_outcome(provider_name, upstream_model, False, account_id=account_id)
                 _cool_on_timeout(e, label, provider_name, provider_cfg, upstream_model)
+                _last_detail = _note_candidate_failure(
+                    _attempted, provider_name, upstream_model,
+                    kind=_exception_failure_kind(e), detail=str(e),
+                    virtual_model=virtual_model,
+                    duration_ms=(time.monotonic() - _open_started) * 1000.0,
+                )
                 resp = None
                 break
             except Exception as e:
                 if _is_upstream_failure(e):
                     _record_outcome(provider_name, upstream_model, False, account_id=account_id)
                 logger.warning("  [%s] %s/%s error: %s, trying next", label, provider_name, upstream_model, e)
+                _last_detail = _note_candidate_failure(
+                    _attempted, provider_name, upstream_model,
+                    kind=_exception_failure_kind(e), detail=str(e),
+                    virtual_model=virtual_model,
+                    duration_ms=(time.monotonic() - _open_started) * 1000.0,
+                )
                 resp = None
                 break
             if resp.status_code < 400 or not _is_transient_status(resp.status_code):
@@ -6901,14 +6968,14 @@ def _proxy_cycling_streaming(
             _cap = _note_capability_rejection(
                 provider_name, upstream_model, resp.status_code, _body
             )
-            _record_failure(
-                provider_name, upstream_model,
+            _last_detail = _note_candidate_failure(
+                _attempted, provider_name, upstream_model,
                 status=resp.status_code,
                 kind=_classify_failure(resp.status_code, _body, capability=_cap),
                 detail=_body,
                 virtual_model=virtual_model,
+                duration_ms=(time.monotonic() - _open_started) * 1000.0,
             )
-            _attempted.append((provider_name, upstream_model, resp.status_code))
             resp.close()
             logger.warning(
                 "  [%s] %s/%s -> %d, trying next", label, provider_name, upstream_model, resp.status_code
@@ -6944,6 +7011,13 @@ def _proxy_cycling_streaming(
                     _record_quota_saturation(provider_name, provider_cfg, upstream_model, None)
                 last_error = (error_body, 502, "text/event-stream")
                 _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+                _last_detail = _note_candidate_failure(
+                    _attempted, provider_name, upstream_model,
+                    status=200,
+                    kind=("quota" if _is_quota_error(None, error_body) else "stream"),
+                    detail=error_body, virtual_model=virtual_model,
+                    duration_ms=(time.monotonic() - _open_started) * 1000.0,
+                )
                 resp.close()
                 logger.warning(
                     "  [%s] %s/%s -> 200 then stream error, trying next",
@@ -6960,6 +7034,13 @@ def _proxy_cycling_streaming(
                     "text/event-stream",
                 )
                 _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+                _last_detail = _note_candidate_failure(
+                    _attempted, provider_name, upstream_model,
+                    status=200, kind="stream",
+                    detail="Upstream stream produced no output.",
+                    virtual_model=virtual_model,
+                    duration_ms=(time.monotonic() - _open_started) * 1000.0,
+                )
                 resp.close()
                 logger.warning(
                     "  [%s] %s/%s -> 200 but the stream produced no output, trying next",
@@ -6969,6 +7050,12 @@ def _proxy_cycling_streaming(
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
             _record_outcome(provider_name, upstream_model, False, account_id=account_id)
             _cool_on_timeout(e, label, provider_name, provider_cfg, upstream_model)
+            _last_detail = _note_candidate_failure(
+                _attempted, provider_name, upstream_model,
+                kind=_exception_failure_kind(e), detail=str(e),
+                virtual_model=virtual_model,
+                duration_ms=(time.monotonic() - _open_started) * 1000.0,
+            )
             logger.warning("  [%s] %s/%s error mid-peek: %s, trying next", label, provider_name, upstream_model, e)
             resp.close()
             continue
@@ -6995,6 +7082,13 @@ def _proxy_cycling_streaming(
                     "text/event-stream",
                 )
                 _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+                _last_detail = _note_candidate_failure(
+                    _attempted, provider_name, upstream_model,
+                    status=200, kind="stream",
+                    detail=f"Upstream stream failed before completion ({detail}).",
+                    virtual_model=virtual_model,
+                    duration_ms=(time.monotonic() - _open_started) * 1000.0,
+                )
                 logger.warning(
                     "  [%s] %s/%s died mid-stream (%s); buffering let us fail over, trying next",
                     label, provider_name, upstream_model, detail,
@@ -7009,6 +7103,14 @@ def _proxy_cycling_streaming(
                     "text/event-stream",
                 )
                 _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+                _last_detail = _note_candidate_failure(
+                    _attempted, provider_name, upstream_model,
+                    status=200,
+                    kind=("quota" if _is_quota_error(None, whole) else "stream"),
+                    detail=whole or "Upstream stream produced no output.",
+                    virtual_model=virtual_model,
+                    duration_ms=(time.monotonic() - _open_started) * 1000.0,
+                )
                 logger.warning(
                     "  [%s] %s/%s buffered stream was unusable, trying next",
                     label, provider_name, upstream_model,
@@ -7128,6 +7230,22 @@ def _proxy_cycling_streaming(
                     _exhausted_pool_body(label, _attempted, _failure_detail(body)), sanitized
                 )
         return Response(body, status=status, content_type=ct)
+    if _attempted:
+        # Every candidate died before producing a response body at all — the
+        # classic all-timeouts walk. There is no upstream reply to relay, but
+        # candidates WERE tried, so this is an exhausted pool rather than an
+        # empty one and must say so with the same roll-call: a bare 503 here
+        # told the caller nothing about which models it had just spent minutes
+        # on, and read as "nothing to try" when five things had been tried.
+        logger.warning(
+            "  [%s] every candidate failed without answering (%s); returning 502",
+            label, ", ".join(
+                f"{pn}/{um}={'-' if st is None else st}" for pn, um, st in _attempted
+            ),
+        )
+        return _error_body_response(
+            _exhausted_pool_body(label, _attempted, _last_detail), 502
+        )
     return _error(f"All '{label}' model candidates failed or are unavailable.", status=503)
 
 
@@ -10169,10 +10287,16 @@ def failure_report() -> Response:
                 "last_status": row.get("status"),
                 "last_seen": row.get("at"),
                 "last_detail": row.get("detail") or "",
+                "slowest_ms": None,
                 "kinds": {},
                 "statuses": {},
             }
         entry["failures"] += 1
+        # A pool that burns a full candidate timeout every attempt and one that
+        # returns fast 404s are different problems wearing the same status code.
+        took = row.get("duration_ms")
+        if took is not None and (entry["slowest_ms"] is None or took > entry["slowest_ms"]):
+            entry["slowest_ms"] = took
         kind = row.get("kind") or "upstream"
         entry["kinds"][kind] = entry["kinds"].get(kind, 0) + 1
         status = row.get("status")

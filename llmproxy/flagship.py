@@ -167,12 +167,25 @@ def combine_scores(candidates: list[Candidate]) -> dict[str, float]:
     return combined
 
 
-def passes_spec_gate(cand: Candidate, min_context: int, require_tools: bool) -> bool:
-    """Whether *cand* can plausibly drive an agent loop.
+def passes_spec_gate(cand: Candidate, min_context: int, require_tools: bool = False) -> bool:
+    """Whether *cand* clears the tier's hard minimums.
 
-    Unknown capability data fails the gate. Admitting a model we cannot verify
+    The context floor is the substantive check: a window too small to hold an
+    agentic conversation makes a model unusable for this tier whatever it
+    scores. Unknown context fails it, since admitting a model we cannot verify
     would quietly fill the tier with whatever a provider happens not to
     document; a pin is the deliberate way to override that.
+
+    ``require_tools`` is an opt-in capability veto and is **off by default**. It
+    used to default on, and that was the wrong layer. A request that needs tools
+    is already prevented from selecting a model that cannot serve it, per
+    request, by the server's capability gate — so vetoing at MEMBERSHIP time
+    was both redundant and harmful: it made the floating bar hunt further down
+    the ranking for free models that happened to clear the veto, filling the
+    tier with weaker models on the strength of a capability tag rather than a
+    benchmark score. Turn it on when you want the tier itself restricted to
+    tool-callers; leave it off to have membership decided on merit and
+    capability decided per request.
     """
     if require_tools and not cand.supports_tools:
         return False
@@ -213,7 +226,7 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
     and per model, so the router can order the tier without recomputing it.
     """
     min_context = int(tier_cfg.get("min_context") or 0)
-    require_tools = bool(tier_cfg.get("require_tools", True))
+    require_tools = bool(tier_cfg.get("require_tools", False))
     min_free = int(tier_cfg.get("min_flagship_free_models") or 0)
     start_percentile = float(tier_cfg.get("start_percentile") or 0.0)
     max_models = tier_cfg.get("max_models")

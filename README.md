@@ -1081,29 +1081,40 @@ chat reply is not. Paste this into the `server` block:
 ```json
 "server": {
   "free_tier_cache_affinity": true,
-  "stream_buffer_full": true,
   "context_aware_routing": true,
-  "cycle_deadline_seconds": 240
+  "cycle_deadline_seconds": 240,
+  "virtual_timeout_seconds": 120
 }
 ```
 
 | Setting | Why it helps an agent |
 |---|---|
 | [`free_tier_cache_affinity`](#free_tier_cache_affinity) | Keeps one conversation on one model, so tool-calling conventions and instruction-following do not change mid-task and the upstream prompt cache keeps paying. The load being spread by the default was yours anyway. |
-| [`stream_buffer_full`](#stream_buffer_full) | Genuine end-to-end failover on a streamed request: a provider that dies four fifths of the way through is retried instead of leaving the agent holding half a tool call. |
 | [`context_aware_routing`](#context_aware_routing) | A long agentic session outgrows small windows; this sinks candidates known not to fit instead of walking the pool collecting `400 context_length_exceeded`. |
 | [`cycle_deadline_seconds`](#cycle_deadline_seconds) | Bounds the whole candidate walk. Without it a run of slow upstreams can keep a client waiting for minutes, which presents to the user as "the proxy is broken". |
+| [`virtual_timeout_seconds`](#virtual-timeout-agentic) | Raises the per-candidate idle bound above its hard-coded 60s, which the deadline above otherwise clamps the first-token wait down to. Reasoning models routinely think for longer than a minute before emitting anything. |
 
-Three things worth knowing before you enable these:
+[`stream_buffer_full`](#stream_buffer_full) is deliberately **absent** from that
+block. It gives genuine end-to-end failover on a streamed request, which suits
+an agent well, but it also means the client receives nothing until generation
+completes — and an agent SDK's own read timeout is measured against exactly that
+silence. Enable it only once the pool is healthy and your client's read timeout
+comfortably exceeds your longest generation.
 
+Four things worth knowing before you enable these:
+
+- **Stream.** All of llmproxy's streaming bounds measure *silence*, never total
+  duration, so a model producing tokens steadily is never cut off however long
+  it runs. A non-streamed request gets no such protection: the upstream sends
+  nothing until the whole reply is ready, so the read timeout necessarily bounds
+  total generation time and a slow-but-healthy model is indistinguishable from a
+  dead one. Streaming is what makes that distinction possible at all.
 - **`stream_commit_on_content` is not needed alongside `stream_buffer_full`.**
   Buffering runs after the pre-commit window and re-validates the entire
-  response with the same checks, so the narrower window is subsumed. Leave it
-  off.
-- **With `stream_buffer_full` on, your client's read timeout is what bounds
+  response with the same checks, so the narrower window is subsumed.
+- **If you do enable `stream_buffer_full`, your client's read timeout bounds
   time-to-first-byte, not `cycle_deadline_seconds`.** The deadline bounds
-  time-to-*commit*, and buffering moves the commit to the end of generation, so
-  set the client's timeout above your longest expected response.
+  time-to-*commit*, and buffering moves the commit to the end of generation.
 - **Reasoning effort and any fallback provider belong in your agent's config,
   not llmproxy's.** llmproxy routes; it does not set reasoning effort on your
   behalf. `flagship` is also rejected if you try to set it in
@@ -1434,7 +1445,8 @@ The rule is narrow, so only the misleading case changes:
 
 | Situation | Returned | Why |
 |---|---|---|
-| No candidates at all | `503` | Unchanged; "there was nothing to try" |
+| No candidates at all | `503` | "There was nothing to try" |
+| Candidates tried, none answered at all (every one timed out or refused the connection) | **`502`** | Nothing to relay, but five minutes were spent on five models; the roll-call reports each with `status: null` |
 | Every candidate agreed on `400` / `413` / `422` | that status | If all of them reject it identically, the request really is the problem |
 | Every candidate returned `429` | `429` + `Retry-After` | Accurate, and it clears by itself |
 | Every candidate returned the same `5xx` | that status | Already says "server side"; relaying preserves the diagnostic |
@@ -1504,15 +1516,28 @@ curl -s localhost:8080/v1/failures | jq '.by_model'
 Two views of the same data: `by_model` aggregates per routing target, busiest
 first, so a repeatedly failing model reads as one row with a count rather than
 forty lines; `recent` is the flat newest-first list, each entry carrying the
-virtual model that was requested. Each failure is classified as `timeout`,
-`quota`, `capability`, `oversize`, `server` or `upstream`, which is what
-separates "this model is rate limited" from "this model cannot do what you
-asked" at a glance.
+virtual model that was requested. Each failure is classified as `timeout` (went quiet),
+`connection` (was never there), `stream` (opened and then died, produced no
+output, or failed mid-generation), `quota`, `capability`, `oversize`, `server`
+or `upstream`. That is what separates "this model is rate limited" from "this
+model cannot do what you asked" from "this model is simply not answering" at a
+glance.
+
+Every failover path records, not merely the ones that returned an HTTP status.
+A connect timeout is the most common way a free-tier pool fails and was, for one
+release, the one thing this report could not see.
 
 | Parameter | Default | Meaning |
 |---|---|---|
 | `limit` | `50` | How many entries the flat `recent` list carries. `by_model` is never truncated. |
 | `since` | — | A unix timestamp or a relative age (`30s`, `15m`, `2h`, `1d`). An unparseable value means "no filter" rather than a `400`: a diagnostic endpoint should not fail on a typo. |
+
+Each record carries `duration_ms`, and each `by_model` row a `slowest_ms`. That
+distinction matters more than it sounds: a pool returning fast `404`s and one
+burning a full candidate timeout on every attempt produce the same status code
+and want opposite responses — the first is a routing or capability problem, the
+second a patience one (see
+[raising `virtual_timeout_seconds`](#virtual-timeout-agentic)).
 
 `POST /v1/failures/reset` clears the ring and is gated by the same admin auth
 guard as [`/v1/usage/reset`](#usage-accounting).
@@ -1821,6 +1846,48 @@ connect, first byte, and — the case nothing else reaches — the gap between c
 cut off, however long it runs, which is the thing a total budget gets wrong and
 why this is not simply a deadline.
 
+<a name="virtual-timeout-agentic"></a>
+#### Raising it for agentic use
+
+There is one case where the default is too tight, and it is easy to hit without
+realising why: **a reasoning model that thinks before it speaks.**
+
+Because the bound is idle time, a model emitting tokens steadily is never cut
+off. The exposure is entirely *time to the first* token — before a stream
+commits, the same bound covers connect and first byte, and a model that reasons
+for ninety seconds before emitting anything is, on the wire, indistinguishable
+from a dead one.
+
+What makes this surprising is its interaction with
+[`cycle_deadline_seconds`](#cycle_deadline_seconds):
+
+| `cycle_deadline_seconds` | Silence tolerated before the first token |
+|---|---|
+| `0` (default) | `server.stream_timeout` — 300s by default |
+| set, e.g. `240` | collapses to the **per-candidate** timeout, 60s |
+
+Enabling the deadline therefore cuts first-token patience from five minutes to
+one, because the per-candidate timeout is what the read bound is clamped to. On
+a pool of reasoning models that is often the difference between a working
+request and a walk of spurious timeouts.
+
+`virtual_timeout_seconds` is the lever, because the per-candidate timeout is
+`min(stream_timeout, virtual_timeout_seconds or 60)` — so setting it *raises*
+the floor that the clamp lands on:
+
+```json
+"server": {
+  "cycle_deadline_seconds": 240,
+  "virtual_timeout_seconds": 120
+}
+```
+
+That gives each candidate 120 seconds to produce *something* while still
+bounding the whole walk at 240, which is roughly two candidates per request.
+That is the trade: fewer candidates reached, each given a fair hearing. Lower it
+to 90 to reach more of them, or leave the deadline at `0` for maximum patience
+and no wall-clock bound at all.
+
 **A timeout is then treated as a `429`.** Both tell the next request the same
 thing: this candidate is not answering. The candidate is cooled for
 `server.saturation_cooldown_seconds` (60s by default) and demoted to the
@@ -1960,7 +2027,18 @@ streaming and needs no changes.
 The trade is real and worth being explicit about: **time-to-first-token becomes
 time-to-last-token.** For an interactive chat UI that is the wrong choice. For a
 tool-calling coding agent, which cannot act on half a tool call anyway and mostly
-renders a turn once it is complete, it is frequently the right one.
+renders a turn once it is complete, it is often the right one.
+
+> **It can make an agentic client time out.** Because nothing reaches the client
+> until generation completes, the client sees a silent connection for the whole
+> turn — and most agent SDKs apply their own read timeout to exactly that. A
+> model that takes three minutes to produce a long tool call is, from the
+> client's point of view, indistinguishable from a dead one. llmproxy will not
+> time out (its own bounds measure *silence*, and it is receiving tokens), but
+> the client may abandon the request underneath it. If you enable this, raise
+> the client's read timeout above your longest expected generation; if you
+> cannot, leave it off and accept the narrower
+> [pre-commit window](#stream_commit_on_content) instead.
 `server.stream_buffer_max_bytes` (default 8 MiB) caps the buffer; past it the
 response commits and the remainder streams incrementally as usual.
 
@@ -2746,11 +2824,18 @@ Four rules, in this order:
    percentiles are combined with a median. Raw scores are never averaged. A
    model missing from one source is ranked on the sources that do cover it
    rather than penalised for the gap.
-2. **Spec gates veto.** Tool-calling support and a context-window floor. These
-   are a veto rather than a selector: on their own they admit almost
-   everything, but they correctly reject a model that cannot call tools, which
-   cannot drive an agent loop whatever it scores. A model whose capabilities
-   cannot be determined fails the gate.
+2. **Spec gates veto.** A context-window floor, and optionally tool-calling
+   support. These are a veto rather than a selector: on their own they admit
+   almost everything. A model whose context window cannot be determined fails
+   the gate.
+
+   **Capability is not vetoed here by default.** `require_tools` exists but is
+   off, because capability belongs to the *request*, not to membership: a call
+   that needs tools already cannot be routed to a model that lacks them. Having
+   it on at membership time as well was actively harmful — it made the floating
+   bar descend further hunting for free models that happened to carry the tag,
+   so the tier filled with weaker models chosen on a capability rather than a
+   score. Membership is decided on merit; capability is decided per request.
 
    Specs are read **per routing target**, from the most specific source that
    has anything to say: the provider's own listing for that exact
@@ -2877,7 +2962,7 @@ values, so upgrading needs no edit.
   "min_flagship_free_models": 5,
   "start_percentile": 0.9,
   "min_context": 200000,
-  "require_tools": true,
+  "require_tools": false,
   "max_models": null,
   "pin": [],
   "exclude": [],
@@ -2892,7 +2977,7 @@ values, so upgrading needs no edit.
 | `min_flagship_free_models` | `5` | Lower the bar until at least this many **distinct** free models qualify. Cross-provider duplicates count once. Best-effort: if the free pool is smaller, you get what there is. |
 | `start_percentile` | `0.9` | Where the bar starts before floating downward. Raise it for a stricter tier; the free floor may still pull it below this. |
 | `min_context` | `200000` | Spec veto: minimum context window. `0` disables the check. |
-| `require_tools` | `true` | Spec veto: the model must support tool calling. Set false at your own risk — a model that cannot call tools cannot run an agent loop. |
+| `require_tools` | `false` | **Opt-in** spec veto restricting *membership* to tool-callers. Off by default: a request that needs tools already cannot select a model that lacks them (see [capability enforcement](#capability-enforcement)), so vetoing here as well only made the floating bar hunt further down the ranking for free models carrying the tag — admitting weaker models on the strength of a capability rather than a score. Turn it on when you want the tier itself restricted. |
 | `max_models` | `null` | Optional hard cap on distinct models. `null` means uncapped. |
 | `pin` | `[]` | Qualified `provider/model` ids always admitted, bypassing both the bar and the spec veto. |
 | `exclude` | `[]` | Qualified ids never admitted. Applied last, so it beats a pin. |
