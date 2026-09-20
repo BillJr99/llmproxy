@@ -159,12 +159,27 @@
     <h2>Models &amp; Categorizations</h2>
     <div class="card">
       <div class="inline" style="justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-        <div class="muted">Tag models to drive the <code>llmproxy/*</code> virtual endpoints. Discovery queries each provider's <code>/models</code>.</div>
-        <button class="btn" id="discover">Discover models</button>
+        <div class="muted">What each model is <em>currently</em> taken to be, across every layer. Editing a
+          row records a correction that outranks anything the refresh learns, and nothing else on the page
+          is touched. Clearing a field hands the model back to whatever was learned about it.</div>
+        <div class="inline" style="gap:8px">
+          <button class="btn" id="discover">Discover models</button>
+          <button class="btn" id="refresh-routing">Refresh now</button>
+        </div>
       </div>
-      <input type="text" id="model-filter" placeholder="Filter models…" style="margin-top:12px" />
+      <div class="inline" style="gap:8px;margin-top:12px;flex-wrap:wrap">
+        <input type="text" id="model-filter" placeholder="Filter models…" style="flex:1;min-width:200px" />
+        <input type="text" id="model-add" placeholder="add a model id (provider/model)…" style="flex:1;min-width:200px" />
+        <button class="btn" id="model-add-btn">Add</button>
+      </div>
       <div id="model-grid" class="grid-models" style="margin-top:12px"></div>
-      <div class="actions"><button class="btn primary" id="save-cats">Save categorizations</button></div>
+      <div class="inline" id="model-pager" style="gap:8px;margin-top:12px;justify-content:space-between">
+        <span class="muted" id="model-count"></span>
+        <span class="inline" style="gap:8px">
+          <button class="btn" id="page-prev">Prev</button>
+          <button class="btn" id="page-next">Next</button>
+        </span>
+      </div>
     </div>
     <div class="card">
       <h3>Favorite free models</h3>
@@ -444,57 +459,160 @@ function renderProviderCard(name, p, isNew) {
 }
 
 // ---- Models & categorizations ----
+// The grid is paged and filtered SERVER-side. It used to render every model in
+// the universe on every keystroke, attaching six listeners per row and
+// appending each straight into the live DOM: at a few thousand models that is
+// tens of thousands of listeners per character typed. Rows are built into a
+// fragment and events are delegated from the container instead.
+let MODEL_PAGE = { offset: 0, limit: 100, total: 0, rows: [] };
+let FILTER_TIMER = null;
+
 $("#discover").addEventListener("click", async () => {
   toast("Discovering…");
-  try { const r = await api("/models"); DISCOVERED = r.models || []; renderModels(); renderFavPicker(); toast(`Discovered ${DISCOVERED.length} models`); }
-  catch (e) { toast(e.message, true); }
-});
-$("#model-filter").addEventListener("input", renderModels);
-
-function modelUniverse() {
-  const set = new Set(DISCOVERED);
-  CATS.believed_free.forEach(m => set.add(m));
-  Object.keys(CATS.model_reasoning).forEach(m => set.add(m));
-  Object.keys(CATS.model_capabilities).forEach(m => set.add(m));
-  Object.keys(CATS.free_limits).forEach(m => { if (m !== "_note") set.add(m); });
-  return Array.from(set).sort();
-}
-function renderModels() {
-  const filter = $("#model-filter").value.toLowerCase();
-  const grid = $("#model-grid"); grid.innerHTML = "";
-  const models = modelUniverse().filter(m => m.toLowerCase().includes(filter));
-  if (!models.length) { grid.innerHTML = `<p class="muted">No models. Click “Discover models”, or add one to a category.</p>`; return; }
-  for (const m of models) {
-    const row = document.createElement("div"); row.className = "model-row";
-    const lvl = CATS.model_reasoning[m] || "";
-    const caps = CATS.model_capabilities[m] || [];
-    const free = CATS.believed_free.includes(m);
-    row.innerHTML = `
-      <code>${esc(m)}</code>
-      <label class="switch"><input type="checkbox" data-free ${free?"checked":""}/> free</label>
-      <select data-lvl><option value="">— reasoning —</option>${META.valid_reasoning_levels.map(l=>`<option ${l===lvl?"selected":""}>${esc(l)}</option>`).join("")}</select>
-      <span class="inline">${META.valid_capabilities.map(c=>`<label class="switch"><input type="checkbox" data-cap="${esc(c)}" ${caps.includes(c)?"checked":""}/>${esc(c)}</label>`).join(" ")}</span>`;
-    row.querySelector("[data-free]").addEventListener("change", e => {
-      if (e.target.checked) { if (!CATS.believed_free.includes(m)) CATS.believed_free.push(m); }
-      else CATS.believed_free = CATS.believed_free.filter(x => x !== m);
-    });
-    row.querySelector("[data-lvl]").addEventListener("change", e => {
-      if (e.target.value) CATS.model_reasoning[m] = e.target.value; else delete CATS.model_reasoning[m];
-    });
-    row.querySelectorAll("[data-cap]").forEach(cb => cb.addEventListener("change", e => {
-      const c = e.target.dataset.cap; const cur = new Set(CATS.model_capabilities[m] || []);
-      if (e.target.checked) cur.add(c); else cur.delete(c);
-      if (cur.size) CATS.model_capabilities[m] = Array.from(cur); else delete CATS.model_capabilities[m];
-    }));
-    grid.appendChild(row);
-  }
-}
-$("#save-cats").addEventListener("click", async () => {
   try {
-    await api("/believed-free", { method: "PUT", body: JSON.stringify(CATS.believed_free) });
-    await api("/model-reasoning", { method: "PUT", body: JSON.stringify(CATS.model_reasoning) });
-    await api("/model-capabilities", { method: "PUT", body: JSON.stringify(CATS.model_capabilities) });
-    toast("Categorizations saved"); loadVirtual();
+    const r = await api("/models");
+    DISCOVERED = r.models || [];
+    await loadRouting();
+    renderFavPicker();
+    toast(`Discovered ${DISCOVERED.length} models`);
+  } catch (e) { toast(e.message, true); }
+});
+
+$("#refresh-routing").addEventListener("click", async () => {
+  toast("Refreshing routing metadata…");
+  try {
+    const r = await api("/refresh", { method: "POST", body: JSON.stringify({ what: "routing_metadata" }) });
+    toast(`Relearned ${r.models} model(s)`);
+    await loadRouting();
+  } catch (e) { toast(e.message, true); }
+});
+
+$("#model-filter").addEventListener("input", () => {
+  clearTimeout(FILTER_TIMER);
+  FILTER_TIMER = setTimeout(() => { MODEL_PAGE.offset = 0; loadRouting(); }, 200);
+});
+$("#page-prev").addEventListener("click", () => {
+  MODEL_PAGE.offset = Math.max(0, MODEL_PAGE.offset - MODEL_PAGE.limit); loadRouting();
+});
+$("#page-next").addEventListener("click", () => {
+  if (MODEL_PAGE.offset + MODEL_PAGE.limit < MODEL_PAGE.total) {
+    MODEL_PAGE.offset += MODEL_PAGE.limit; loadRouting();
+  }
+});
+$("#model-add-btn").addEventListener("click", async () => {
+  const id = $("#model-add").value.trim();
+  if (!id) return;
+  try {
+    // A model discovery has not returned — a provider that lists nothing, or
+    // one you are tagging ahead of adding. There was no way to enter one before.
+    await saveModel(id, { reasoning: "" });
+    $("#model-add").value = "";
+    $("#model-filter").value = id;
+    MODEL_PAGE.offset = 0;
+    await loadRouting();
+    toast("Added " + id);
+  } catch (e) { toast(e.message, true); }
+});
+
+async function loadRouting() {
+  const q = encodeURIComponent($("#model-filter").value || "");
+  try {
+    const r = await api(`/routing-metadata?q=${q}&offset=${MODEL_PAGE.offset}&limit=${MODEL_PAGE.limit}`);
+    MODEL_PAGE = { offset: r.offset, limit: r.limit, total: r.total, rows: r.models || [] };
+    renderModels();
+  } catch (e) { toast(e.message, true); }
+}
+
+function provenanceBadge(row, fact) {
+  // Which layers spoke, and for a learned fact how strongly it is believed.
+  const layers = (row.layers || {})[fact] || [];
+  const grade = (row.grades || {})[fact === "model_capabilities" ? "capabilities" : "reasoning"];
+  if (!layers.length) return "";
+  const winner = layers[layers.length - 1];
+  const detail = winner === "learned" && grade ? `${winner}:${grade}` : winner;
+  const title = layers.length > 1 ? `contributing layers: ${layers.join(" < ")}` : `from ${winner}`;
+  return `<span class="muted" style="font-size:11px" title="${esc(title)}">${esc(detail)}</span>`;
+}
+
+function renderModels() {
+  const grid = $("#model-grid");
+  grid.innerHTML = "";
+  $("#model-count").textContent = MODEL_PAGE.total
+    ? `${MODEL_PAGE.offset + 1}–${Math.min(MODEL_PAGE.offset + MODEL_PAGE.limit, MODEL_PAGE.total)} of ${MODEL_PAGE.total}`
+    : "";
+  if (!MODEL_PAGE.rows.length) {
+    grid.innerHTML = `<p class="muted">No models match. Click “Discover models”, or add an id above.</p>`;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const row of MODEL_PAGE.rows) {
+    const el = document.createElement("div");
+    el.className = "model-row";
+    el.dataset.model = row.id;
+    const caps = row.capabilities || [];
+    el.innerHTML = `
+      <code>${esc(row.id)}</code>
+      <label class="switch"><input type="checkbox" data-free ${row.free ? "checked" : ""}/> free</label>
+      ${provenanceBadge(row, "believed_free")}
+      <select data-lvl><option value="">— reasoning —</option>${
+        META.valid_reasoning_levels.map(l => `<option ${l === row.reasoning ? "selected" : ""}>${esc(l)}</option>`).join("")
+      }</select>
+      ${provenanceBadge(row, "model_reasoning")}
+      <span class="inline">${
+        META.valid_capabilities.map(c => `<label class="switch"><input type="checkbox" data-cap="${esc(c)}" ${caps.includes(c) ? "checked" : ""}/>${esc(c)}</label>`).join(" ")
+      }</span>
+      ${provenanceBadge(row, "model_capabilities")}
+      <span class="inline">${
+        META.free_limit_keys.map(k => `<input type="number" min="0" data-limit="${esc(k)}" placeholder="${esc(k.split("_").map(w => w[0]).join(""))}" title="${esc(k)}" value="${(row.free_limits || {})[k] ?? ""}" style="width:72px" />`).join(" ")
+      }</span>
+      ${row.cost_observed ? `<span class="muted" style="font-size:11px" title="observed billing a real cost while marked free">cost-observed</span>` : ""}`;
+    frag.appendChild(el);
+  }
+  grid.appendChild(frag);
+}
+
+async function saveModel(id, patch) {
+  return api("/routing-metadata", {
+    method: "PUT",
+    body: JSON.stringify(Object.assign({ model: id }, patch)),
+  });
+}
+
+function rowOf(target) {
+  const el = target.closest("[data-model]");
+  return el ? { el, id: el.dataset.model } : null;
+}
+
+// One delegated listener for the whole grid, rather than six per row.
+$("#model-grid").addEventListener("change", async (ev) => {
+  const row = rowOf(ev.target);
+  if (!row) return;
+  const patch = {};
+  if (ev.target.matches("[data-free]")) {
+    patch.free = ev.target.checked;
+  } else if (ev.target.matches("[data-lvl]")) {
+    patch.reasoning = ev.target.value;
+  } else if (ev.target.matches("[data-cap]")) {
+    patch.capabilities = Array.from(row.el.querySelectorAll("[data-cap]"))
+      .filter(cb => cb.checked).map(cb => cb.dataset.cap);
+  } else if (ev.target.matches("[data-limit]")) {
+    const limits = {};
+    row.el.querySelectorAll("[data-limit]").forEach(inp => {
+      const v = inp.value.trim();
+      if (v !== "") limits[inp.dataset.limit] = parseInt(v, 10);
+    });
+    patch.free_limits = limits;
+  } else {
+    return;
+  }
+  try {
+    const r = await saveModel(row.id, patch);
+    // Re-render just this row from what the server says is now in effect, so
+    // the provenance badge reflects the save rather than the pre-edit state.
+    const idx = MODEL_PAGE.rows.findIndex(m => m.id === row.id);
+    if (idx >= 0 && r.model) { MODEL_PAGE.rows[idx] = r.model; renderModels(); }
+    toast("Saved " + row.id);
+    loadVirtual();
   } catch (e) { toast(e.message, true); }
 });
 
@@ -516,6 +634,20 @@ $("#refresh-vm").addEventListener("click", loadVirtual);
 
 // ---- Favorite free models ----
 let FAVS = [];
+
+function modelUniverse() {
+  // Every id worth offering as a favourite: whatever discovery returned, plus
+  // whatever the merged routing view already knows about. CATS holds the
+  // EFFECTIVE values now, not config.json's slice, so this no longer collapses
+  // to nothing once the five keys migrate out of config.
+  const set = new Set(DISCOVERED);
+  (CATS.believed_free || []).forEach(m => set.add(m));
+  Object.keys(CATS.model_reasoning || {}).forEach(m => set.add(m));
+  Object.keys(CATS.model_capabilities || {}).forEach(m => set.add(m));
+  Object.keys(CATS.free_limits || {}).forEach(m => { if (m !== "_note") set.add(m); });
+  MODEL_PAGE.rows.forEach(r => set.add(r.id));
+  return Array.from(set).sort();
+}
 
 function renderFavPicker() {
   const sel = $("#fav-pick");
@@ -603,7 +735,7 @@ async function bootstrap() {
     TEMPLATES = (await api("/provider-templates")).templates;
     renderTemplateSelect();
     await loadProviders();
-    renderModels();
+    await loadRouting();
     await loadFavs();
   } catch (e) {
     setAuthState(false, "auth required");

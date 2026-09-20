@@ -234,8 +234,23 @@ def test_provider_free_is_capacity_aware(server, monkeypatch):
 # ── hints ───────────────────────────────────────────────────────────────────
 
 def test_hints(server):
+    """An empty pool must point at where tags actually come from.
+
+    These used to name config['model_reasoning'] and
+    config['model_capabilities'], sending anyone who hit a 503 to a file that is
+    no longer a routing layer — and, when a refresh had just wiped a tier, to
+    the one place that could not explain why the pool emptied.
+    """
     h = server._virtual_model_hint
-    assert "visible" in h("llmproxy__visible/deep") and "model_reasoning" in h("llmproxy__visible/deep")
-    assert "model_capabilities" in h("llmproxy__visible/tools")
+    for model in ("llmproxy__visible/deep", "llmproxy__visible/tools",
+                  "llmproxy__visible/free"):
+        hint = h(model)
+        assert "routing_metadata.json" in hint, hint
+        assert "admin UI" in hint, hint
+        assert "config['model_reasoning']" not in hint
+        assert "config['model_capabilities']" not in hint
+    assert "visible" in h("llmproxy__visible/deep")
+    assert "deep" in h("llmproxy__visible/deep")
+    assert "tools" in h("llmproxy__visible/tools")
     assert "free" in h("llmproxy__visible/free")
     assert "route cache" in h("llmproxy__visible")

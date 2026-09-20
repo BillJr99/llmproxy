@@ -58,8 +58,10 @@ import itertools
 import json
 import logging
 import math
+import os
 import random
 import re
+import shutil
 import sys
 import threading
 import time
@@ -89,6 +91,7 @@ from .config import (
     RESERVED_PROVIDER_NAMES,
     account_bound_cfg,
     flagship_tier_cfg,
+    get_config_path,
     get_provider,
     get_routing_metadata_path,
     load_config,
@@ -121,6 +124,11 @@ from .signals import (
     score_signals,
     tier_adjustment,
 )
+
+try:
+    import fcntl  # POSIX advisory file locking
+except ImportError:  # pragma: no cover - non-POSIX (e.g. Windows)
+    fcntl = None
 from .usage import (
     ModelUsage,
     compute_cost,
@@ -729,13 +737,10 @@ def _persist_cost_observed(qualified_id: str) -> None:
     is logged and swallowed — usage accounting must never break a request.
     """
     try:
-        with _cost_observed_persist_lock:
-            provider, _, model = qualified_id.partition("/")
-            if not provider or not model:
-                return
-            state = load_routing_metadata()
-            if not isinstance(state, dict):
-                state = {}
+        provider, _, model = qualified_id.partition("/")
+        if not provider or not model:
+            return
+        with _routing_sidecar_txn() as state:
             by_provider = state.setdefault("by_provider", {})
             if not isinstance(by_provider, dict):
                 return
@@ -757,8 +762,6 @@ def _persist_cost_observed(qualified_id: str) -> None:
                     m for m in believed
                     if not (isinstance(m, str) and m.lower() == model.lower())
                 ]
-            save_routing_metadata(state)
-            _reset_routing_sidecar_cache()
             logger.info(
                 "[usage] recorded %s as cost-observed in routing_metadata.json",
                 qualified_id,
@@ -1992,9 +1995,25 @@ def _sync_local_provider_models_once() -> None:
         if not local_providers:
             return
 
-        existing_kf: list = config.setdefault("believed_free", [])
-        existing_mr: dict = config.setdefault("model_reasoning", {})
-        existing_fl: dict = config.setdefault("free_limits", {})
+        # These land in the sidecar's curated section, not config.json. This
+        # sync is a machine process, and having it rewrite the file a person
+        # hand-edits is what made config.json unusable as a record of intent —
+        # it silently re-seeded the very keys a migration had just stripped.
+        #
+        # Read without the write lock: this is a read, and taking the
+        # transaction here would rewrite the file just to look at it.
+        _curated = (_load_routing_sidecar() or {}).get("curated") or {}
+        existing_kf: list = list(_curated.get("believed_free") or [])
+        existing_mr: dict = dict(_curated.get("model_reasoning") or {})
+        existing_fl: dict = dict(_curated.get("free_limits") or {})
+        # Deltas rather than a wholesale snapshot. The network calls below take
+        # seconds, and assigning the whole section afterwards would discard any
+        # edit made in between — including an admin correction to a model this
+        # sync knows nothing about.
+        drop_kf: set[str] = set()
+        drop_fl: set[str] = set()
+        drop_mr: set[str] = set()
+        add_mr: dict[str, str] = {}
         modified = False
 
         for provider_key, provider_cfg in local_providers.items():
@@ -2021,7 +2040,7 @@ def _sync_local_provider_models_once() -> None:
             # never belong here (one-time cleanup for historically polluted configs).
             stale_kf = [e for e in existing_kf if e.startswith(prefix)]
             for e in stale_kf:
-                existing_kf.remove(e)
+                drop_kf.add(e)
                 modified = True
                 logger.info(
                     "[local-sync] Removed %s from believed_free "
@@ -2032,7 +2051,7 @@ def _sync_local_provider_models_once() -> None:
             # free-tier scheduler.
             stale_fl = [k for k in existing_fl if isinstance(k, str) and k.startswith(prefix)]
             for k in stale_fl:
-                del existing_fl[k]
+                drop_fl.add(k)
                 modified = True
                 logger.info("[local-sync] Removed %s from free_limits.", k)
 
@@ -2040,7 +2059,7 @@ def _sync_local_provider_models_once() -> None:
             # contributed but no longer serves.
             stale_mr = [k for k in existing_mr if k.startswith(prefix) and k not in expected]
             for k in stale_mr:
-                del existing_mr[k]
+                drop_mr.add(k)
                 modified = True
                 logger.info("[local-sync] Pruned stale model_reasoning: %s", k)
 
@@ -2048,12 +2067,26 @@ def _sync_local_provider_models_once() -> None:
             for qualified in expected:
                 if qualified not in existing_mr:
                     model_id = qualified[len(prefix):]
-                    existing_mr[qualified] = _infer_local_reasoning_level(model_id)
+                    add_mr[qualified] = _infer_local_reasoning_level(model_id)
                     modified = True
-                    logger.info("[local-sync] Added model_reasoning: %s -> %s", qualified, existing_mr[qualified])
+                    logger.info("[local-sync] Added model_reasoning: %s -> %s",
+                                qualified, add_mr[qualified])
 
         if modified:
-            save_config(config)
+            # Apply the deltas to whatever the file says NOW, so nothing written
+            # while the providers were being polled is lost.
+            with _routing_sidecar_txn() as state:
+                curated = _curated_facts(state)
+                kf = curated.setdefault("believed_free", [])
+                curated["believed_free"] = [e for e in kf if e not in drop_kf]
+                fl = curated.setdefault("free_limits", {})
+                for k in drop_fl:
+                    fl.pop(k, None)
+                mr = curated.setdefault("model_reasoning", {})
+                for k in drop_mr:
+                    mr.pop(k, None)
+                for k, level in add_mr.items():
+                    mr.setdefault(k, level)   # never over-write a later edit
 
     import threading as _t
     _t.Thread(target=_run, daemon=True, name="local-model-sync").start()
@@ -2457,6 +2490,15 @@ def _recompute_flagship_members(config: dict, config_path: str | None) -> dict |
     return state
 
 
+# How many models of a family must carry observed capabilities before the family
+# is allowed to lend its unanimous set to a sibling that carries none. Two
+# models agreeing is not evidence about a third; measured against the shipped
+# providers.json, three is where the families that emerge are ones you would
+# recognise (glm -> reasoning, gemma -> vision) rather than accidents.
+# Overridable as routing_metadata.min_family_members.
+_DEFAULT_MIN_FAMILY_MEMBERS = 3
+
+
 def _routing_metadata_due(meta_cfg: dict, config_path: str | None) -> bool:
     """Whether the routing-metadata recompute is due. Mirrors the flagship gate."""
     if not meta_cfg.get("enabled", True):
@@ -2476,65 +2518,243 @@ def _routing_metadata_due(meta_cfg: dict, config_path: str | None) -> bool:
     return due
 
 
+def _family_capability_profiles(
+    observed: dict[str, set[str]],
+    raw_for_key: dict[str, str],
+    min_members: int,
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """What every model in a family agrees it can do.
+
+    Returns ``(by_generation, by_bare)`` mapping a family key to the capability
+    set UNANIMOUS among its members that carry observed data. Unanimity, not a
+    majority: a family spanning coder, omni and vision variants agrees on what
+    the weights share and disagrees on the rest, and only the agreement is safe
+    to lend to a sibling we know nothing about. Measured against the shipped
+    providers.json, this is what makes ``glm`` a reasoning family while ``qwen``
+    contributes only ``tools`` across its twenty members.
+
+    Families smaller than *min_members* say nothing, because one or two models
+    agreeing is not evidence about a third.
+    """
+    from .providers import family_key
+
+    gen_members: dict[str, list[set[str]]] = {}
+    bare_members: dict[str, list[set[str]]] = {}
+    for key, caps in observed.items():
+        if not caps:
+            continue
+        raw = raw_for_key.get(key) or key
+        gen = family_key(raw)
+        bare = family_key(raw, generation=False)
+        if gen:
+            gen_members.setdefault(gen, []).append(set(caps))
+        if bare:
+            bare_members.setdefault(bare, []).append(set(caps))
+
+    def _unanimous(groups: dict[str, list[set[str]]]) -> dict[str, set[str]]:
+        out: dict[str, set[str]] = {}
+        for fam, sets in groups.items():
+            if len(sets) < min_members:
+                continue
+            shared = set.intersection(*sets)
+            if shared:
+                out[fam] = shared
+        return out
+
+    return _unanimous(gen_members), _unanimous(bare_members)
+
+
+def _merge_model_facts(
+    previous: dict, learned: dict[str, dict], fact_keys: tuple[str, ...] = ("capabilities", "reasoning"),
+) -> tuple[dict[str, dict], dict[str, int]]:
+    """Fold this pass's findings into what earlier passes knew.
+
+    Two rules, and the whole point of the function is that neither was honoured
+    before: a model this pass could not see KEEPS what it had, so one provider
+    being down at refresh time cannot thin the routing data; and a fact may be
+    replaced only by one of equal or greater provenance, so an inference can
+    never overwrite a reading and nothing can overwrite a hand correction.
+
+    Replacing ``by_model`` wholesale, as this used to, destroyed every
+    ``reasoning`` tag on the first run — the refresh writes only capabilities,
+    so there was nothing to carry the tiers forward.
+    """
+    from .providers import fact_rank
+
+    merged: dict[str, dict] = {}
+    for key, facts in (previous or {}).items():
+        if isinstance(key, str) and isinstance(facts, dict):
+            merged[key] = dict(facts)
+
+    counts = {"kept": 0, "written": 0, "refused": 0}
+    for key, facts in learned.items():
+        entry = merged.setdefault(key, {})
+        for fact in fact_keys:
+            if fact not in facts:
+                continue
+            incoming_rank = fact_rank(facts.get(f"{fact}_source"))
+            if fact in entry and fact_rank(entry.get(f"{fact}_source")) > incoming_rank:
+                counts["refused"] += 1
+                continue
+            entry[fact] = facts[fact]
+            entry[f"{fact}_source"] = facts.get(f"{fact}_source", "observed")
+            counts["written"] += 1
+    # Models this pass never mentioned, which is what "carried forward" means.
+    # Subtracting the two sizes counted nothing of the sort once they overlapped,
+    # and read 0 on a pass that carried hundreds — misleading exactly the person
+    # reading this log after the next data-loss report.
+    counts["kept"] = len(set(merged) - set(learned))
+    return merged, counts
+
+
 def _recompute_routing_metadata(config: dict, config_path: str | None) -> dict | None:
     """Relearn what this deployment's models are and can do.
 
-    Two sources, the provider's own listing winning over the OpenRouter catalog:
-    a gateway knows its own deployment, while the catalog is the broad base that
-    covers models the gateway describes only as a bare OpenAI object.
+    Four sources, weakest first, each recorded with its provenance so a later
+    pass can tell a reading from a guess:
+
+      inferred  the model's own name, via ``infer_reasoning_level``
+      family    unanimous across the models sharing its family
+      observed  the OpenRouter catalog, then the provider's own listing
 
     Capabilities are recorded per NORMALIZED MODEL rather than per routing
     target, so one fact covers every provider serving those weights — the same
     join that turns one benchmark score into a correctly ranked flagship tier.
-    Free status and rate limits stay per provider, because that is what they
-    actually describe: the same weights can be free on one provider and metered
-    on another.
+    They are UNIONED across providers, never assigned: a gateway that omits a
+    tag is silent, not authoritative, so a terse listing must not erase a richer
+    one. Free status and rate limits stay per provider, because that is what
+    they actually describe.
+
+    Every derivation reads the RAW upstream id. ``normalize_model_id`` strips
+    separators, so a regex run against its output reads digits that were never a
+    parameter count: ``llama-3.1-8b`` becomes ``llama318b`` and infers "deep".
 
     Returns the state written, or None when nothing could be learned.
     """
     from .flagship import fetch_openrouter_profiles, normalize_model_id
+    from .providers import infer_reasoning_level
 
-    by_model: dict[str, dict] = {}
+    meta_cfg = routing_metadata_cfg(config)
+    min_members = meta_cfg.get("min_family_members", _DEFAULT_MIN_FAMILY_MEMBERS)
+    infer_tiers = meta_cfg.get("infer_reasoning", True)
+    infer_family = meta_cfg.get("infer_family_capabilities", True)
+
+    observed: dict[str, set[str]] = {}
+    raw_for_key: dict[str, str] = {}
+
+    # Keys this deployment actually serves. The catalog covers thousands of
+    # models most deployments never touch: its capabilities are still wanted,
+    # both as a base for the models we DO serve and as family evidence, but
+    # writing a fact for every catalog entry would bloat the sidecar with
+    # models that have no route and make "N models known" mean something other
+    # than it reads as.
+    local_keys: set[str] = set()
+
+    def _observe(raw_id: str, caps: set[str]) -> None:
+        key = normalize_model_id(raw_id)
+        if not key:
+            return
+        local_keys.add(key)
+        # A provider's own spelling wins over the catalog's for the same key,
+        # so inference runs on the id this deployment actually calls.
+        raw_for_key[key] = raw_id
+        if caps:
+            observed.setdefault(key, set()).update(caps)
 
     # Base layer: the catalog. Reuses the fetch the flagship refresh already
-    # makes, which until now kept only `tools` and threw the rest away.
+    # makes. Until now this read a `capabilities` key that fetch_openrouter_
+    # profiles never set, so the whole layer was dead and models whose gateway
+    # publishes a bare OpenAI object could never earn a tag.
     try:
         for key, profile in (fetch_openrouter_profiles() or {}).items():
-            caps = sorted(profile.get("capabilities") or ())
+            caps = set(profile.get("capabilities") or ())
+            raw_for_key.setdefault(key, profile.get("model_id") or key)
             if caps:
-                by_model[key] = {"capabilities": caps}
+                observed.setdefault(key, set()).update(caps)
+        # Deliberately no local_keys update: the catalog says what a model can
+        # do, not that this deployment has a route to it.
     except Exception as exc:  # noqa: BLE001 — a dead catalog degrades, never fails
         logger.warning("[routing-metadata] catalog fetch failed: %s", exc)
 
-    # Overlay: each provider's own listing, which wins where it says anything.
-    listings = _get_model_capability_snapshot()
-    for qualified, caps in listings.items():
-        if not caps:
-            continue
+    # Overlay: each provider's own listing. Unioned with the catalog rather than
+    # replacing it, and unioned across providers serving the same weights.
+    for qualified, caps in _get_model_capability_snapshot().items():
         upstream = qualified.split("/", 1)[1] if "/" in qualified else qualified
-        by_model.setdefault(normalize_model_id(upstream), {})["capabilities"] = sorted(caps)
+        _observe(upstream, set(caps or ()))
 
-    if not by_model:
+    # Every distinct route, not just the ones carrying capabilities — a model
+    # with no capability data is exactly the one that needs a tier inferred.
+    routes: list[tuple[str, str]] = []
+    try:
+        for provider_name, upstream_id in _get_distinct_routes():
+            routes.append((provider_name, upstream_id))
+            _observe(upstream_id, set())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[routing-metadata] route enumeration failed: %s", exc)
+
+    learned: dict[str, dict] = {}
+    for key, caps in observed.items():
+        if key in local_keys:
+            learned[key] = {"capabilities": sorted(caps),
+                            "capabilities_source": "observed"}
+
+    # Family layer: lend a family's unanimous capabilities to a member that has
+    # none of its own. Never to one that does — a reading always beats a guess.
+    n_family = 0
+    if infer_family:
+        from .providers import family_key
+
+        # Families are computed over EVERY observation, catalog included, so a
+        # deployment serving three members of a family still benefits from what
+        # the catalog knows about the other twenty.
+        by_gen, by_bare = _family_capability_profiles(observed, raw_for_key, min_members)
+        for key in local_keys:
+            raw_id = raw_for_key.get(key) or key
+            if observed.get(key):
+                continue
+            # Generation first, so llama-4's tools never reach llama-2; the bare
+            # family is the fallback for a generation too sparse to speak.
+            shared = by_gen.get(family_key(raw_id) or "") or by_bare.get(
+                family_key(raw_id, generation=False) or "")
+            if shared:
+                learned.setdefault(key, {}).update(
+                    {"capabilities": sorted(shared), "capabilities_source": "family"})
+                n_family += 1
+
+    # Tier layer: inferred from the raw id. Weakest grade, so a curated or
+    # migrated tier already in the sidecar survives untouched.
+    n_tier = 0
+    if infer_tiers:
+        for key in local_keys:
+            raw_id = raw_for_key.get(key) or key
+            tier = infer_reasoning_level(raw_id)
+            if tier:
+                learned.setdefault(key, {}).update(
+                    {"reasoning": tier, "reasoning_source": "inferred"})
+                n_tier += 1
+
+    if not learned:
         logger.warning(
             "[routing-metadata] learned nothing this pass; keeping the previous state"
         )
         return None
 
-    # Preserve what earlier passes and runtime observation recorded per provider;
-    # this pass only relearns capabilities.
-    previous = load_routing_metadata(config_path)
-    state = {
-        "last_refresh_at": datetime.datetime.now(datetime.UTC).isoformat(),
-        "by_model": by_model,
-        "by_provider": previous.get("by_provider") or {},
-        "models_considered": len(listings),
-    }
-    save_routing_metadata(state, config_path)
-    _reset_routing_sidecar_cache()
+    # Everything above is network work, done before the lock is taken so a slow
+    # catalog fetch cannot hold it against a cost observation.
+    with _routing_sidecar_txn(config_path) as state:
+        merged, counts = _merge_model_facts(state.get("by_model") or {}, learned)
+        state["last_refresh_at"] = datetime.datetime.now(datetime.UTC).isoformat()
+        state["by_model"] = merged
+        state["models_considered"] = len(routes)
+        # by_provider and curated are left exactly as found: this pass relearns
+        # nothing about free status, quota, or anything a person set by hand.
     logger.info(
-        "[routing-metadata] learned capabilities for %d distinct model(s) "
-        "from %d routing target(s)",
-        len(by_model), len(listings),
+        "[routing-metadata] %d model(s) served, %d in the sidecar: %d observed, "
+        "%d by family, %d tiers inferred; %d fact(s) written, %d refused to a "
+        "stronger source, %d carried forward, from %d route(s)",
+        len(local_keys), len(merged), len(set(observed) & local_keys),
+        n_family, n_tier, counts["written"], counts["refused"], counts["kept"],
+        len(routes),
     )
     return state
 
@@ -2721,6 +2941,139 @@ def _maybe_fire_pr_if_due(config: dict, config_path: str | None) -> None:
     _maybe_open_providers_pr(config, providers_text)
 
 
+_config_migration_done: bool = False
+_config_migration_lock = threading.Lock()
+
+
+# One lock for every read-modify-write of routing_metadata.json. Before this
+# the refresh took none at all and _persist_cost_observed took a different one,
+# so the two could interleave and lose an update; and neither took a FILE lock,
+# so under gunicorn nothing serialised the workers against each other.
+_routing_sidecar_write_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def _routing_sidecar_txn(config_path: str | None = None):
+    """Exclusive read-modify-write of the sidecar, yielding the state to mutate.
+
+    Saves and invalidates the read cache on a clean exit; an exception leaves
+    the file untouched. Callers must do their NETWORK work before entering, so a
+    slow catalog fetch cannot hold the lock against a cost observation.
+
+    Mirrors ``admin._locked``: a thread lock for this process and an advisory
+    file lock for the others, degrading to the thread lock alone where fcntl is
+    unavailable rather than blocking every write.
+    """
+    with _routing_sidecar_write_lock:
+        handle = None
+        try:
+            if fcntl is not None:
+                lock_path = str(get_routing_metadata_path(config_path)) + ".lock"
+                try:
+                    os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+                    handle = open(lock_path, "w")
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                except OSError as e:  # noqa: BLE001 — degrade, never block writes
+                    print(f"[server:_routing_sidecar_txn] {e}")
+                    traceback.print_exc()
+                    if handle is not None:
+                        handle.close()
+                        handle = None
+            state = load_routing_metadata(config_path)
+            yield state
+            save_routing_metadata(state, config_path)
+            _reset_routing_sidecar_cache()
+        finally:
+            if handle is not None:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                finally:
+                    handle.close()
+
+
+def _curated_facts(state: dict) -> dict:
+    """The sidecar's hand-set section, created if absent."""
+    curated = state.setdefault("curated", {})
+    if not isinstance(curated, dict):
+        curated = state["curated"] = {}
+    return curated
+
+
+def _migrate_config_routing_keys(config_path: str | None = None) -> dict | None:
+    """Move the five routing keys out of config.json into the sidecar.
+
+    config.json stopped being a routing layer because it could not be a stable
+    record of intent: it is the file a person hand edits, and machine processes
+    were writing it too — the local-model sync tags every model a local provider
+    serves and saves the file back. Anything already there is intent, though, so
+    it is carried over rather than dropped, landing in the sidecar's `curated`
+    section at the same precedence it had.
+
+    The shape is preserved exactly, so the migrated data resolves through the
+    same lookup it always did and moving it cannot change a routing decision.
+
+    Existing curated entries WIN over the incoming config, so running this again
+    after someone has edited a fact in the admin UI cannot resurrect the older
+    config.json value over their correction.
+
+    Backs up config.json first. Returns a report of what moved, or None when
+    there was nothing to move.
+    """
+    config = load_config(config_path, force_reload=True)
+    present = {k: config.get(k) for k in _ROUTING_CONFIG_KEYS if config.get(k)}
+    if not present:
+        return None
+
+    try:
+        cfg_file = get_config_path(config_path)
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = cfg_file.with_name(f"{cfg_file.name}.backup-{stamp}")
+        shutil.copy2(cfg_file, backup)
+    except Exception as e:  # noqa: BLE001 — never migrate without a way back
+        print(f"[server:_migrate_config_routing_keys] {e}")
+        traceback.print_exc()
+        logger.warning("[config-migration] could not back up %s — not migrating", config_path)
+        return None
+
+    report: dict[str, int] = {}
+    with _routing_sidecar_txn(config_path) as state:
+        curated = _curated_facts(state)
+        for key, value in present.items():
+            if key in _ROUTING_LIST_KEYS and isinstance(value, list):
+                existing = curated.get(key)
+                existing = list(existing) if isinstance(existing, list) else []
+                seen = dict.fromkeys(e.lower() for e in existing if isinstance(e, str))
+                added = 0
+                for entry in value:
+                    if isinstance(entry, str) and entry.lower() not in seen:
+                        seen[entry.lower()] = None
+                        added += 1
+                curated[key] = list(seen)
+                report[key] = added
+            elif key in _ROUTING_DICT_KEYS and isinstance(value, dict):
+                existing = curated.get(key)
+                target = dict(existing) if isinstance(existing, dict) else {}
+                added = 0
+                for k, v in value.items():
+                    if isinstance(k, str) and k.lower() not in target:
+                        target[k.lower()] = v      # an existing curated fact wins
+                        added += 1
+                curated[key] = target
+                report[key] = added
+
+    for key in present:
+        config.pop(key, None)
+    save_config(config, config_path)
+
+    logger.info(
+        "[config-migration] moved %s from config.json into the sidecar's curated "
+        "section (backup: %s)",
+        ", ".join(f"{k}={n}" for k, n in sorted(report.items()) if n) or "nothing new",
+        backup.name,
+    )
+    return report
+
+
 def _run_startup_tasks_once(config_path: str | None = None) -> None:
     """Run the one-time per-worker startup tasks in a background daemon thread.
 
@@ -2747,6 +3100,19 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
         if _startup_update_done:
             return
         _startup_update_done = True
+
+    # Synchronous, and before the background work: until this has run, a
+    # config.json written against the old layering is the only record of the
+    # user's hand-set facts, and nothing reads it any more.
+    global _config_migration_done
+    with _config_migration_lock:
+        if not _config_migration_done:
+            _config_migration_done = True
+            try:
+                _migrate_config_routing_keys(config_path)
+            except Exception as e:  # noqa: BLE001 — never fail startup over it
+                print(f"[server:_run_startup_tasks_once] {e}")
+                traceback.print_exc()
 
     def _run() -> None:
         # 1. Warm immediately so virtual models exist before the first request.
@@ -2817,6 +3183,190 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
         _maybe_fire_interval_probes(config_path)
 
     threading.Thread(target=_run, daemon=True, name="startup-tasks").start()
+
+
+def _promote_sidecar_to_providers(
+    providers_text: str, config_path: str | None = None
+) -> tuple[str, dict]:
+    """Fold what this deployment learned into the providers.json about to be PR'd.
+
+    The sidecar is per deployment and never committed; providers.json is the
+    shipped default every deployment inherits. Promotion is how one deployment's
+    observations become everyone's starting point, which is the whole reason the
+    PR flow exists.
+
+    Facts are carried WITH their provenance so a reviewer can tell a reading
+    from a guess. That matters more here than anywhere else: a wrong capability
+    tag in providers.json makes every deployment route a request to a model that
+    cannot serve it, where a wrong one in a local sidecar costs one deployment a
+    retry.
+
+    Only providers already present in providers.json are touched. A provider
+    someone added locally is theirs, not a default for everyone, and inventing a
+    catalog entry for it from one deployment's config would be a bigger claim
+    than the data supports.
+
+    Returns ``(text, report)``; the text is unchanged when nothing was promoted.
+    """
+    from .flagship import normalize_model_id
+    from .providers import DEFAULT_FACT_SOURCE
+
+    report: dict = {"providers": {}, "skipped_providers": [], "total": 0}
+    try:
+        data = json.loads(providers_text)
+    except Exception as e:  # noqa: BLE001 — never break the PR over a parse
+        print(f"[server:_promote_sidecar_to_providers] {e}")
+        traceback.print_exc()
+        return providers_text, report
+    known = data.get("providers")
+    if not isinstance(known, dict):
+        return providers_text, report
+
+    state = _load_routing_sidecar(config_path)
+    by_model = state.get("by_model") or {}
+    curated = state.get("curated") or {}
+    by_provider = state.get("by_provider") or {}
+
+    # Curated facts are keyed however the user keyed them; index them by the
+    # same three forms the router resolves so they can be matched to a route.
+    curated_caps = {k.lower(): v for k, v in (curated.get("model_capabilities") or {}).items()
+                    if isinstance(k, str)}
+    curated_tier = {k.lower(): v for k, v in (curated.get("model_reasoning") or {}).items()
+                    if isinstance(k, str)}
+
+    def _bump(provider: str, grade: str) -> None:
+        report["providers"].setdefault(provider, {})
+        report["providers"][provider][grade] = \
+            report["providers"][provider].get(grade, 0) + 1
+        report["total"] += 1
+
+    changed = False
+    for provider_name, upstream_id in _get_distinct_routes():
+        if provider_name not in known:
+            if provider_name not in report["skipped_providers"]:
+                report["skipped_providers"].append(provider_name)
+            continue
+        entry = known[provider_name]
+        if not isinstance(entry, dict):
+            continue
+        qualified = f"{provider_name}/{upstream_id}".lower()
+        key = normalize_model_id(upstream_id)
+        facts = by_model.get(key) if isinstance(by_model.get(key), dict) else {}
+
+        caps = curated_caps.get(qualified) or curated_caps.get(upstream_id.lower())
+        grade = "curated"
+        if caps is None:
+            caps = facts.get("capabilities")
+            grade = facts.get("capabilities_source") or DEFAULT_FACT_SOURCE
+        if isinstance(caps, list) and caps:
+            target = entry.setdefault("model_capabilities", {})
+            if target.get(qualified) != sorted(caps):
+                target[qualified] = sorted(caps)
+                changed = True
+                _bump(provider_name, grade)
+
+        tier = curated_tier.get(qualified) or curated_tier.get(upstream_id.lower())
+        tgrade = "curated"
+        if tier is None:
+            tier = facts.get("reasoning")
+            tgrade = facts.get("reasoning_source") or DEFAULT_FACT_SOURCE
+        if isinstance(tier, str) and tier:
+            target = entry.setdefault("model_reasoning", {})
+            if target.get(qualified) != tier:
+                target[qualified] = tier
+                changed = True
+                _bump(provider_name, tgrade)
+
+    # Free status and quota belong to the provider, so they promote directly.
+    for provider_name, info in by_provider.items():
+        if provider_name not in known or not isinstance(info, dict):
+            continue
+        entry = known[provider_name]
+        if not isinstance(entry, dict):
+            continue
+        free = [f"{provider_name}/{m}".lower() for m in info.get("believed_free") or []
+                if isinstance(m, str)]
+        if free:
+            existing = entry.setdefault("believed_free", [])
+            added = [m for m in free if m not in existing]
+            if added:
+                entry["believed_free"] = sorted(set(existing) | set(free))
+                changed = True
+                for _ in added:
+                    _bump(provider_name, "observed")
+        for model, limits in (info.get("free_limits") or {}).items():
+            if not isinstance(model, str) or not isinstance(limits, dict):
+                continue
+            target = entry.setdefault("free_limits", {})
+            qualified = f"{provider_name}/{model}".lower()
+            if target.get(qualified) != limits:
+                target[qualified] = limits
+                changed = True
+                _bump(provider_name, "observed")
+
+    if not changed:
+        return providers_text, report
+    try:
+        # dump_sidecar canonicalizes internally; canonicalize_sidecar mutates in
+        # place and returns None, so nesting the two fed it None and silently
+        # fell through to the un-canonicalized fallback below.
+        from scripts.update_free_models import dump_sidecar
+        return dump_sidecar(data), report
+    except Exception as e:  # noqa: BLE001 — fall back to plain json
+        print(f"[server:_promote_sidecar_to_providers] {e}")
+        traceback.print_exc()
+        return json.dumps(data, indent=2) + "\n", report
+
+
+def _promotion_body(report: dict) -> str:
+    """The PR body's provenance summary.
+
+    The body was a fixed two sentences with no diff summary at all. Since
+    inferred facts are promoted alongside observed ones, a reviewer needs to see
+    at a glance which is which — that visibility is what makes promoting a guess
+    reasonable rather than reckless.
+    """
+    if not report.get("total"):
+        return ""
+    order = ("curated", "observed", "family", "inferred")
+    meaning = {
+        "curated": "set by hand in the admin UI",
+        "observed": "published by the provider or the OpenRouter catalog",
+        "family": "unanimous across the model's family, not stated by the provider",
+        "inferred": "derived from the model's name, not stated by the provider",
+    }
+    totals: dict[str, int] = {}
+    for grades in report["providers"].values():
+        for grade, n in grades.items():
+            totals[grade] = totals.get(grade, 0) + n
+
+    lines = ["", "### Where these facts came from", ""]
+    lines.append(f"{report['total']} fact(s) promoted from a running deployment:")
+    lines.append("")
+    for grade in order:
+        if totals.get(grade):
+            lines.append(f"* **{grade}** — {totals[grade]}, {meaning[grade]}.")
+    extra = sorted(set(totals) - set(order))
+    for grade in extra:
+        lines.append(f"* **{grade}** — {totals[grade]}.")
+    lines.append("")
+    lines.append("`family` and `inferred` entries are llmproxy's guesses rather than "
+                 "anything a provider published. They are worth more scrutiny than the "
+                 "rest, because a wrong capability tag here routes every deployment's "
+                 "request to a model that cannot serve it.")
+    lines.append("")
+    lines.append("| provider | " + " | ".join(order) + " |")
+    lines.append("|---|" + "---|" * len(order))
+    for provider in sorted(report["providers"]):
+        grades = report["providers"][provider]
+        lines.append(f"| `{provider}` | "
+                     + " | ".join(str(grades.get(g, 0)) for g in order) + " |")
+    if report.get("skipped_providers"):
+        lines.append("")
+        lines.append("Not promoted, because they are not providers this repo ships: "
+                     + ", ".join(f"`{p}`" for p in sorted(report["skipped_providers"]))
+                     + ".")
+    return "\n".join(lines)
 
 
 def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: str | None = None) -> None:
@@ -2890,6 +3440,17 @@ def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: st
     base = config.get("providers_pr", {}).get("base", "main")
     branch = config.get("providers_pr", {}).get("branch", "llmproxy-auto/providers")
 
+    # Fold in what this deployment learned, so the PR carries observations and
+    # not just whatever the scraper happened to see this run.
+    promotion: dict = {}
+    try:
+        providers_text, promotion = _promote_sidecar_to_providers(providers_text)
+        if promotion.get("total"):
+            logger.info("[providers-pr] promoted %d learned fact(s) from the sidecar",
+                        promotion["total"])
+    except Exception as exc:  # noqa: BLE001 — a PR without promotion beats no PR
+        logger.warning("[providers-pr] could not promote sidecar facts: %s", exc)
+
     files = {"llmproxy/providers.json": providers_text}
     if example_text is not None:
         files["config.example.json"] = example_text
@@ -2902,8 +3463,9 @@ def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: st
             title="chore: automated providers.json refresh (llmproxy)",
             body=(
                 "Automated `providers.json` refresh opened by a running llmproxy "
-                "deployment (`providers_pr.enabled`). Free-tier status is best-effort — "
-                "review the diff before merging."
+                "deployment (`providers_pr.enabled`). Free-tier status is best-effort, "
+                "so review the diff before merging."
+                + _promotion_body(promotion)
             ),
             # config.example.json is derived from providers.json; only a real
             # providers.json change should open/refresh a PR. This stops a
@@ -4009,6 +4571,23 @@ def _model_capabilities(config: dict) -> dict[str, set[str]]:
     return result
 
 
+def _model_fact_keys(provider_name: str, upstream_id: str) -> tuple[str, ...]:
+    """The id forms a per-model fact may be filed under, most specific first.
+
+    Qualified and bare are how an override or a provider listing keys things;
+    normalized is how the LEARNED layer keys what belongs to the weights rather
+    than to one provider, so a single entry answers for every spelling.
+    """
+    forms = [f"{provider_name}/{upstream_id}".lower(), upstream_id.lower()]
+    try:
+        from .flagship import normalize_model_id
+        forms.append(normalize_model_id(upstream_id))
+    except Exception as e:  # noqa: BLE001 — a lookup must never fail a request
+        print(f"[server:_model_fact_keys] {e}")
+        traceback.print_exc()
+    return tuple(dict.fromkeys(f for f in forms if f))
+
+
 def _lookup_model_fact(mapping: dict, provider_name: str, upstream_id: str):
     """Find a per-model fact by qualified id, bare id, then normalized model.
 
@@ -4024,23 +4603,42 @@ def _lookup_model_fact(mapping: dict, provider_name: str, upstream_id: str):
     """
     if not mapping:
         return None
-    hit = mapping.get(f"{provider_name}/{upstream_id}".lower())
-    if hit is not None:
-        return hit
-    hit = mapping.get(upstream_id.lower())
-    if hit is not None:
-        return hit
-    try:
-        from .flagship import normalize_model_id
-        return mapping.get(normalize_model_id(upstream_id))
-    except Exception:  # noqa: BLE001 — a lookup must never fail a request
-        return None
+    for form in _model_fact_keys(provider_name, upstream_id):
+        hit = mapping.get(form)
+        if hit is not None:
+            return hit
+    return None
+
+
+def _lookup_capabilities(
+    cap_map: dict[str, set[str]], provider_name: str, upstream_id: str
+) -> set[str]:
+    """Every capability known for this model, across all three id forms.
+
+    Unlike ``_lookup_model_fact``, which stops at the first hit, this UNIONS the
+    qualified, bare and normalized entries. A capability set is evidence rather
+    than a setting: the per-provider listing says what this gateway documents,
+    the normalized entry says what these weights are known to do anywhere, and
+    neither retracts the other.
+
+    First-match-wins was wrong here in a way that actively hurt. A gateway
+    publishing a partial ``supported_parameters`` shadowed the joined entry, so
+    ``_capability_state`` returned KNOWN_INCAPABLE — ranking the model BELOW an
+    untagged one for a capability it demonstrably has.
+    """
+    if not cap_map:
+        return set()
+    out: set[str] = set()
+    for form in _model_fact_keys(provider_name, upstream_id):
+        hit = cap_map.get(form)
+        if hit:
+            out |= set(hit)
+    return out
 
 
 def _model_has_capability(provider_name: str, upstream_id: str, cap: str, cap_map: dict[str, set[str]]) -> bool:
-    """Three-form lookup (qualified, bare, normalized) for a single capability."""
-    caps = _lookup_model_fact(cap_map, provider_name, upstream_id)
-    return bool(caps and cap in caps)
+    """Whether this model is known to support *cap*, across all three id forms."""
+    return cap in _lookup_capabilities(cap_map, provider_name, upstream_id)
 
 
 def _needed_capabilities(payload: dict) -> set[str]:
@@ -4074,7 +4672,7 @@ def _capability_state(
     *ordering*, where an untagged model deserves to sit between a confirmed
     match and a confirmed mismatch rather than tied with the mismatch.
     """
-    caps = _lookup_model_fact(cap_map, provider_name, upstream_id)
+    caps = _lookup_capabilities(cap_map, provider_name, upstream_id)
     if not caps:
         return _CAP_UNKNOWN
     return _CAP_KNOWN_CAPABLE if cap in caps else _CAP_KNOWN_INCAPABLE
@@ -6462,12 +7060,25 @@ def _flagship_ordered_candidates(
 
 _ROUTING_LIST_KEYS = ("believed_free", "cost_observed_free_tier")
 _ROUTING_DICT_KEYS = ("model_reasoning", "model_capabilities", "free_limits")
+# Of those, the ones whose value is a SET OF FACTS rather than a single value,
+# so layers and lookup forms combine instead of shadowing one another.
+_ROUTING_UNION_KEYS = frozenset({"model_capabilities"})
+
+# Every routing-metadata key that used to live in config.json. Named once so the
+# migration, the admin editors and the layer builders cannot disagree about what
+# "the five keys" means.
+_ROUTING_CONFIG_KEYS = _ROUTING_LIST_KEYS + _ROUTING_DICT_KEYS
 
 # The sidecar is re-read when it changes on disk. providers.py caches its own
 # data for the process lifetime, which is right for a shipped default and wrong
 # here: the refresh rewrites this file while the server runs, and a cache that
 # outlived the write would pin the router to metadata it had already replaced.
-_routing_sidecar_cache: tuple[float, dict] | None = None
+# Keyed by (path, mtime), not mtime alone. One global slot keyed on a float
+# meant two sidecars whose mtimes happened to coincide served each other's
+# state — and under gunicorn, where a worker may resolve a different
+# LLMPROXY_CONFIG, it was the process-wide memo rather than the file that
+# decided what routing saw.
+_routing_sidecar_cache: tuple[str, float, dict] | None = None
 _routing_sidecar_lock = threading.Lock()
 
 
@@ -6479,15 +7090,16 @@ def _load_routing_sidecar(config_path: str | None = None) -> dict:
         mtime = path.stat().st_mtime if path.exists() else 0.0
     except Exception:  # noqa: BLE001 — routing must never fail on a stat
         return {}
+    key = str(path)
     with _routing_sidecar_lock:
         cached = _routing_sidecar_cache
-        if cached is not None and cached[0] == mtime:
-            return cached[1]
+        if cached is not None and cached[0] == key and cached[1] == mtime:
+            return cached[2]
     state = load_routing_metadata(config_path) if mtime else {}
     if not isinstance(state, dict):
         state = {}
     with _routing_sidecar_lock:
-        _routing_sidecar_cache = (mtime, state)
+        _routing_sidecar_cache = (key, mtime, state)
     return state
 
 
@@ -6496,6 +7108,23 @@ def _reset_routing_sidecar_cache() -> None:
     global _routing_sidecar_cache
     with _routing_sidecar_lock:
         _routing_sidecar_cache = None
+
+
+# The two nested sources disagree about qualification, and always have.
+# providers.json stores ids ALREADY qualified ("google/gemini-2.0-flash"), while
+# the sidecar's by_provider stores them bare ("gemini-2.0-flash"). Prepending
+# unconditionally — which is what both layers did — produced
+# "google/google/gemini-2.0-flash" for every one of providers.json's 603
+# entries, so the entire defaults layer matched nothing and the shipped data,
+# the very thing the providers PR exists to maintain, never reached a routing
+# decision.
+#
+# This is deliberately NOT solved by sniffing whether an id already starts with
+# its provider name. Groq's own model ids carry a "groq/" vendor namespace, so
+# providers.json holds "groq/groq/compound" while the sidecar holds
+# "groq/compound" — the same string is qualified in one file and bare in the
+# other, and no heuristic can tell them apart. Each layer states its own
+# convention instead.
 
 
 def _defaults_layer() -> dict:
@@ -6508,13 +7137,17 @@ def _defaults_layer() -> dict:
     out: dict = {k: [] for k in _ROUTING_LIST_KEYS}
     out.update({k: {} for k in _ROUTING_DICT_KEYS})
     try:
-        for provider, info in get_provider_free_info().items():
+        for _provider, info in get_provider_free_info().items():
+            # Already qualified in this file — used verbatim. An entry that is
+            # not still resolves, because _lookup_model_fact tries the bare form
+            # too; over-prefixing is the failure that matches nothing.
             for entry in info.get("believed_free") or []:
                 if isinstance(entry, str):
-                    out["believed_free"].append(f"{provider}/{entry}".lower())
+                    out["believed_free"].append(entry.lower())
             for key in ("model_reasoning", "model_capabilities", "free_limits"):
                 for model, val in (info.get(key) or {}).items():
-                    out[key][f"{provider}/{model}".lower()] = val
+                    if isinstance(model, str):
+                        out[key][model.lower()] = val
     except Exception as e:  # noqa: BLE001 — a bad sidecar must not break routing
         print(f"[server:_defaults_layer] {e}")
         traceback.print_exc()
@@ -6537,6 +7170,9 @@ def _learned_layer(config_path: str | None = None) -> dict:
         for provider, info in (state.get("by_provider") or {}).items():
             if not isinstance(info, dict):
                 continue
+            # Bare in this file — always qualified with the provider that
+            # observed them, which is what makes the same weights free on one
+            # provider and metered on another.
             for key in _ROUTING_LIST_KEYS:
                 for entry in info.get(key) or []:
                     if isinstance(entry, str):
@@ -6558,6 +7194,49 @@ def _learned_layer(config_path: str | None = None) -> dict:
     return out
 
 
+def _curated_layer(config: dict | None = None, config_path: str | None = None) -> dict:
+    """The facts a person set by hand: the sidecar's curated section, over config.
+
+    This is where config.json's five routing keys went. Their ORIGINAL shape is
+    kept — flat lists and flat dicts, keyed however the user keyed them — rather
+    than re-derived into per-provider buckets, so migrated data resolves through
+    exactly the same lookup it always did and moving it cannot change a single
+    routing decision.
+
+    config.json is still READ, because a deployment that has not migrated yet
+    has its intent recorded nowhere else and silently dropping it would be worse
+    than the staleness this change set out to fix. It is an inbox rather than a
+    layer: ``_migrate_config_routing_keys`` drains it into the curated section
+    at startup, after which it holds none of these keys and contributes nothing.
+    Anything added to it by hand afterwards is honoured until the next restart
+    absorbs it. The curated section wins where both speak, so a correction made
+    in the admin UI is never undone by a stale config.json.
+    """
+    layers: list[dict] = []
+    if isinstance(config, dict):
+        layers.append(config)
+    state = _load_routing_sidecar(config_path)
+    curated = state.get("curated")
+    if isinstance(curated, dict):
+        layers.append(curated)
+
+    out: dict = {}
+    for layer in layers:
+        for key in _ROUTING_LIST_KEYS:
+            val = layer.get(key)
+            if isinstance(val, list):
+                merged = dict.fromkeys(out.get(key) or [])
+                merged.update(dict.fromkeys(v.lower() for v in val if isinstance(v, str)))
+                out[key] = list(merged)
+        for key in _ROUTING_DICT_KEYS:
+            val = layer.get(key)
+            if isinstance(val, dict):
+                acc = dict(out.get(key) or {})
+                acc.update({k.lower(): v for k, v in val.items() if isinstance(k, str)})
+                out[key] = acc
+    return out
+
+
 def _listing_layer() -> dict:
     """What each provider currently says its own models can do.
 
@@ -6569,8 +7248,80 @@ def _listing_layer() -> dict:
     return {"model_capabilities": {k: sorted(v) for k, v in caps.items() if v}}
 
 
-def _merged_routing_config(config: dict) -> dict:
+# The layers, weakest first, named for display. The admin UI needs to answer
+# "why is this model tagged that way", which a merged dict cannot: it keeps
+# values and discards where each came from.
+ROUTING_LAYER_NAMES = ("providers.json", "learned", "listing", "curated")
+
+
+def routing_layers(config: dict | None = None,
+                   config_path: str | None = None) -> list[tuple[str, dict]]:
+    """Each routing-metadata layer, weakest first, paired with its name."""
+    return list(zip(ROUTING_LAYER_NAMES, (
+        _defaults_layer(),
+        _learned_layer(config_path),
+        _listing_layer(),
+        _curated_layer(config, config_path),
+    ), strict=True))
+
+
+def routing_fact_sources(
+    model_id: str, provider_name: str = "", config: dict | None = None,
+    config_path: str | None = None,
+    layers: list[tuple[str, dict]] | None = None,
+) -> dict[str, list[str]]:
+    """Which layers have something to say about *model_id*, per fact.
+
+    Returns ``{fact_key: [layer_name, ...]}`` weakest first. For capabilities
+    every contributing layer is listed, because they union; for the
+    single-valued facts the LAST name is the one in effect.
+
+    *layers* lets a caller building many rows assemble them once. Rebuilding
+    four layers per row is most of the cost of listing a few thousand models.
+    """
+    out: dict[str, list[str]] = {}
+    upstream = model_id.split("/", 1)[1] if "/" in model_id and provider_name else model_id
+    forms = set(_model_fact_keys(provider_name or model_id.split("/", 1)[0], upstream))
+    forms.add(model_id.lower())
+    for name, layer in (layers if layers is not None else routing_layers(config, config_path)):
+        for key in _ROUTING_LIST_KEYS:
+            entries = layer.get(key)
+            if isinstance(entries, list) and forms & {e.lower() for e in entries
+                                                      if isinstance(e, str)}:
+                out.setdefault(key, []).append(name)
+        for key in _ROUTING_DICT_KEYS:
+            mapping = layer.get(key)
+            if isinstance(mapping, dict) and forms & set(mapping):
+                out.setdefault(key, []).append(name)
+    return out
+
+
+def learned_fact_grades(model_key: str, config_path: str | None = None) -> dict[str, str]:
+    """The provenance grade recorded beside each learned fact for *model_key*.
+
+    ``{"capabilities": "family", "reasoning": "inferred"}`` and so on. This is
+    what distinguishes a reading from a guess within the learned layer, which
+    the layer name alone cannot express.
+    """
+    state = _load_routing_sidecar(config_path)
+    facts = (state.get("by_model") or {}).get(model_key)
+    if not isinstance(facts, dict):
+        return {}
+    return {
+        fact: facts[f"{fact}_source"]
+        for fact in ("capabilities", "reasoning")
+        if isinstance(facts.get(f"{fact}_source"), str)
+    }
+
+
+def _merged_routing_config(config: dict, *, include_curated: bool = True) -> dict:
     """*config* with the five routing-metadata keys resolved across all layers.
+
+    ``include_curated=False`` returns what every layer BELOW the hand-set one
+    says. The admin editors need that to tell an edit from an unchanged value:
+    a whole-section save would otherwise copy the entire learned layer into the
+    curated one, freezing today's guesses as permanent hand corrections that no
+    later refresh could improve.
 
     Returns a shallow copy carrying merged values for those five keys only, so
     every other consumer of the config dict is untouched. With no sidecar and no
@@ -6578,7 +7329,16 @@ def _merged_routing_config(config: dict) -> dict:
     an un-migrated deployment behave bit-for-bit as it did before.
     """
     try:
-        layers = (_defaults_layer(), _learned_layer(), _listing_layer(), config)
+        # config.json is deliberately NOT a layer. It is the file a person hand
+        # edits, and machine processes were writing it too — the local-model
+        # sync tagged every model a local provider served and saved it back —
+        # so it could never be a stable record of intent. Hand-set facts live in
+        # the sidecar's `curated` section instead, which occupies the same top
+        # position and is what the admin UI writes.
+        layers = [_defaults_layer(), _learned_layer(), _listing_layer()]
+        if include_curated:
+            layers.append(_curated_layer(config))
+        layers = tuple(layers)
         merged = dict(config)
         for key in _ROUTING_LIST_KEYS:
             seen: dict[str, None] = {}
@@ -6589,11 +7349,27 @@ def _merged_routing_config(config: dict) -> dict:
             merged[key] = list(seen)
         for key in _ROUTING_DICT_KEYS:
             acc: dict = {}
+            union = key in _ROUTING_UNION_KEYS
             for layer in layers:
                 raw = layer.get(key)
-                if isinstance(raw, dict):
-                    acc.update({k.lower(): v for k, v in raw.items()
-                                if isinstance(k, str)})
+                if not isinstance(raw, dict):
+                    continue
+                for k, v in raw.items():
+                    if not isinstance(k, str):
+                        continue
+                    k = k.lower()
+                    # Capabilities are a SET belonging to the weights, so layers
+                    # add to each other. Replacing would let a gateway that
+                    # publishes a thin `supported_parameters` retract what the
+                    # catalog or another provider asserted about the same model.
+                    # A reasoning tier and a rate limit are single-valued, so
+                    # for those the higher layer rightly wins outright.
+                    if union and isinstance(v, list) and isinstance(acc.get(k), list):
+                        seen = dict.fromkeys(acc[k])
+                        seen.update(dict.fromkeys(v))
+                        acc[k] = list(seen)
+                    else:
+                        acc[k] = v
             merged[key] = acc
         return merged
     except Exception as e:  # noqa: BLE001 — never fail a request over a merge
@@ -7490,6 +8266,18 @@ def _resolve_provider(model_full: str) -> tuple[str | None, dict | None, str | N
     return provider_name, provider_cfg, upstream_model, None
 
 
+# Where a routing tag actually comes from. The hints used to name
+# config['model_reasoning'] and config['model_capabilities'], which sent anyone
+# hitting an empty pool to a file that is no longer a routing layer — and, once
+# the refresh had wiped a tier, to the one place that could not explain why.
+_WHERE_TAGS_LIVE = (
+    "Tags are learned into routing_metadata.json on the "
+    "routing_metadata.refresh_frequency_days cadence, seeded from "
+    "llmproxy/providers.json, and can be set by hand in the admin UI "
+    "(Models tab) which records them as curated so no refresh undoes them."
+)
+
+
 def _virtual_model_hint(model_full: str) -> str:
     """Return a one-sentence config hint for an unavailable virtual model."""
     split = _split_per_provider_virtual(model_full)
@@ -7500,18 +8288,22 @@ def _virtual_model_hint(model_full: str) -> str:
         if dim == "free":
             return (
                 f"Provider '{provider_name}' has no free-tier model "
-                f"(upstream ID contains 'free', or add it to config['believed_free'])."
+                f"(upstream ID contains 'free', or mark one free in the admin UI). "
+                f"{_WHERE_TAGS_LIVE}"
             )
         if dim in _REASONING_LEVELS:
-            return f"Tag at least one of provider '{provider_name}'s models with '{dim}' in config['model_reasoning']."
-        return f"Tag at least one of provider '{provider_name}'s models with '{dim}' in config['model_capabilities']."
+            return (f"No model of provider '{provider_name}' is tagged '{dim}'. "
+                    f"{_WHERE_TAGS_LIVE}")
+        return (f"No model of provider '{provider_name}' is known to support "
+                f"'{dim}'. {_WHERE_TAGS_LIVE}")
     name = _strip_virtual_prefix(model_full)
     if name == "loadbalanced":
         return "Check that at least one provider exposes any model to virtual routing."
     if name == "free":
         return (
             "Check that at least one provider exposes a free-tier model "
-            "(upstream ID contains 'free', or add it to config['believed_free'])."
+            "(upstream ID contains 'free', or mark one free in the admin UI). "
+            + _WHERE_TAGS_LIVE
         )
     if name == "local":
         return "Check that at least one provider has a localhost base_url."
@@ -7540,7 +8332,7 @@ def _virtual_model_hint(model_full: str) -> str:
                 )
             continue
         if name == level:
-            return f"Tag at least one model with '{level}' in config['model_reasoning']."
+            return (f"No model is tagged '{level}'. {_WHERE_TAGS_LIVE}")
         if name == f"{level}/free":
             return (
                 f"Need a model tagged '{level}' in config['model_reasoning'] "

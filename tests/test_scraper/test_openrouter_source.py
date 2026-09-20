@@ -62,7 +62,10 @@ def test_capabilities_mapping():
         "supported_parameters": ["tools", "reasoning", "structured_outputs"],
         "architecture": {"input_modalities": ["text", "image"]},
     }
-    assert _capabilities(model) == ["tools", "vision", "reasoning", "json"]
+    # Alphabetical since the scraper converged on providers.capabilities_from_listing,
+    # which returns a set. The order is normalized so the same tags cannot produce a
+    # spurious providers.json diff depending on which source emitted them.
+    assert _capabilities(model) == ["json", "reasoning", "tools", "vision"]
     # text-only, no special params
     assert _capabilities({"supported_parameters": [], "architecture": {"input_modalities": ["text"]}}) == []
     # response_format also implies json; defensive against missing/bad fields
@@ -81,3 +84,18 @@ def test_network_failure_raises():
         pass
     else:  # pragma: no cover
         raise AssertionError("expected HTTPError")
+
+
+def test_capabilities_survives_malformed_entries():
+    """A garbled listing must yield no tags rather than raising.
+
+    The scraper's own copy of this logic did `(model.get("architecture") or {}).get(...)`,
+    which raises AttributeError when a gateway returns a non-dict architecture — and
+    one bad entry would take down the whole sweep. The shared helper guards both the
+    model and the architecture, so the entry is simply skipped.
+    """
+    assert _capabilities({"architecture": "nonsense"}) == []
+    assert _capabilities({"supported_parameters": "nonsense"}) == []
+    assert _capabilities({}) == []
+    assert _capabilities("not-a-dict") == []
+    assert _capabilities(None) == []

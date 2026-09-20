@@ -533,9 +533,14 @@ def save_flagship_state(state: dict, config_path: str | None = None) -> bool:
 # in the repo; and it is MACHINE maintained, so it must not live in the file the
 # user hand-edits. It sits here instead, refreshed on its own cadence:
 #
-#   config.json           overrides    (yours, and the admin UI's; always wins)
-#   routing_metadata.json learned      (this file; rewritten by the refresh)
-#   providers.json        defaults     (shipped with the repo, PR-able)
+#   routing_metadata.json  curated section  (yours, and the admin UI's; wins)
+#   live provider listings                   (a gateway knows its own deployment)
+#   routing_metadata.json  by_model/by_provider (learned; rewritten by the refresh)
+#   providers.json         defaults          (shipped with the repo, PR-able)
+#
+# config.json is NOT a layer. It is the file a person hand-edits, and machine
+# processes wrote it too, so it could never be a stable record of intent. Its
+# five routing keys are drained into the curated section at startup.
 #
 # Split by what each fact actually describes. A capability belongs to the
 # weights, so it is keyed by normalized model and one entry covers every
@@ -543,16 +548,34 @@ def save_flagship_state(state: dict, config_path: str | None = None) -> bool:
 # per provider. Keying them the same way would either lose the cross-provider
 # join or invent per-provider capabilities that do not exist.
 #
+# Each learned fact carries a "<fact>_source" grade beside it — inferred <
+# family < observed < curated — so a refresh can tell a guess from a reading and
+# never overwrites something believed more strongly. A fact with no recorded
+# grade reads as "observed", so a sidecar written before the field existed is
+# not overwritten by an inference.
+#
 # Shape: {"last_refresh_at": iso8601,
-#         "by_model":    {model_key: {"capabilities": [...], "reasoning": str}},
+#         "by_model":    {model_key: {"capabilities": [...],
+#                                     "capabilities_source": str,
+#                                     "reasoning": str,
+#                                     "reasoning_source": str}},
 #         "by_provider": {provider: {"believed_free": [...],
 #                                    "cost_observed_free_tier": [...],
 #                                    "free_limits": {model: {...}}}},
+#         "curated":     {the five keys, in the shape config.json used},
 #         "models_considered": int}
 
 ROUTING_METADATA_DEFAULTS: dict = {
     "enabled": True,
     "refresh_frequency_days": 7,
+    # Derive a reasoning tier from the model's name when nothing stronger says
+    # otherwise. Recorded as "inferred", the weakest provenance, so a reading or
+    # a hand correction always wins and a later pass can upgrade it.
+    "infer_reasoning": True,
+    # Lend a family its unanimous capabilities to members that publish none.
+    "infer_family_capabilities": True,
+    # Members carrying observed capabilities needed before a family may do that.
+    "min_family_members": 3,
 }
 
 

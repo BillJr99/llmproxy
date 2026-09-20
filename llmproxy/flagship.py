@@ -306,11 +306,22 @@ def fetch_openrouter_profiles(url: str = OPENROUTER_MODELS_URL) -> dict[str, dic
     loop — where chat-arena style ratings measure conversational preference.
 
     Returns ``{model_key: {"scores": {...}, "context_length": int|None,
-    "supports_tools": bool}}``. Specs come from the same entry so a provider
-    that publishes no capability data of its own can still be gated on the
-    same weights served elsewhere.
+    "supports_tools": bool, "capabilities": set[str], "model_id": str}}``.
+    Specs come from the same entry so a provider that publishes no capability
+    data of its own can still be gated on the same weights served elsewhere.
+
+    ``capabilities`` is the broad base the routing-metadata refresh joins under
+    its normalized key. It is derived with the same
+    ``providers.capabilities_from_listing`` the route-cache rebuild and the
+    scraper use, so the three cannot disagree about what a listing means, and it
+    is UNIONED across every catalog entry sharing a key — one gateway spelling
+    publishing a thinner ``supported_parameters`` must not retract what another
+    asserted. ``model_id`` keeps one raw id per key, because every inference
+    downstream has to run on the raw id rather than the normalized one.
     """
     import requests
+
+    from .providers import capabilities_from_listing
 
     resp = requests.get(url, timeout=_FETCH_TIMEOUT)
     resp.raise_for_status()
@@ -324,7 +335,9 @@ def fetch_openrouter_profiles(url: str = OPENROUTER_MODELS_URL) -> dict[str, dic
         score = bench.get("agentic_index")
         supported = model.get("supported_parameters") or []
         profile = out.setdefault(key, {"scores": {}, "context_length": None,
-                                       "supports_tools": False})
+                                       "supports_tools": False,
+                                       "capabilities": set(), "model_id": mid})
+        profile["capabilities"] |= capabilities_from_listing(model)
         if score is not None:
             prev = profile["scores"].get("openrouter_aa")
             if prev is None or score > prev:
@@ -360,8 +373,12 @@ def fetch_profiles(sources: list[str] | None = None) -> dict[str, dict]:
             continue
         for key, profile in profiles.items():
             slot = merged.setdefault(key, {"scores": {}, "context_length": None,
-                                           "supports_tools": False})
+                                           "supports_tools": False,
+                                           "capabilities": set(), "model_id": None})
             slot["scores"].update(profile.get("scores") or {})
+            slot["capabilities"] |= set(profile.get("capabilities") or ())
+            if not slot["model_id"]:
+                slot["model_id"] = profile.get("model_id")
             ctx = profile.get("context_length")
             if ctx and (slot["context_length"] or 0) < ctx:
                 slot["context_length"] = ctx
