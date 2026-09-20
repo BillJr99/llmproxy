@@ -149,6 +149,42 @@ def _gunicorn_worker_tmp_dir() -> str | None:
     return None
 
 
+
+# Libraries that log at DEBUG per HTTP request, per connection, or per retry.
+# urllib3 alone emits a line for every upstream call llmproxy makes, and the
+# proxy's whole job is making upstream calls.
+_THIRD_PARTY_LOGGERS = (
+    "urllib3",
+    "requests",
+    "werkzeug",
+    "charset_normalizer",
+    "asyncio",
+)
+
+
+def _quiet_third_party_loggers(server_cfg: dict) -> None:
+    """Keep ``server.log_level`` about llmproxy's own output.
+
+    ``logging.basicConfig`` sets the ROOT level, so ``log_level: DEBUG`` — set
+    to see llmproxy's routing decisions — also turns on urllib3, requests and
+    werkzeug debug output for the whole process. On a busy proxy that is the
+    majority of the log by volume, it costs real time formatting lines nobody
+    asked for, and it buries the lines that were the point.
+
+    A setting named ``server.log_level`` should mean llmproxy's level, so the
+    libraries are pinned at WARNING instead. ``server.third_party_log_level``
+    is the escape hatch for anyone genuinely debugging a transport problem:
+    set it to DEBUG to get the old behaviour, or to any level name to choose
+    your own. It cannot make a library more verbose than the root level the
+    handler filters at, so pairing it with a quiet server.log_level is a no-op
+    rather than a surprise.
+    """
+    raw = server_cfg.get("third_party_log_level") or "WARNING"
+    level = getattr(logging, str(raw).upper(), logging.WARNING)
+    for name in _THIRD_PARTY_LOGGERS:
+        logging.getLogger(name).setLevel(level)
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
@@ -208,6 +244,7 @@ def main() -> None:
         format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
+    _quiet_third_party_loggers(server_cfg)
 
     host: str = server_cfg.get("host", "0.0.0.0")
     port: int = int(server_cfg.get("port", 8080))
