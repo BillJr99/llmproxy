@@ -147,3 +147,55 @@ def test_the_hoisted_free_check_matches_the_original(S, provider, model, expecte
     believed = {"p1/listed-model", "p1/charged-model"}
     observed = {"p1/charged-model"}
     assert S._is_model_free_with(provider, model, believed, observed) is expected
+
+
+# ── provenance survives the memo ────────────────────────────────────────────
+#
+# The bare-match rejection is decided on `_ROUTING_PROVIDER_SCOPED`, which is
+# merged and cached alongside the five routing keys. A memo that dropped it, or
+# held it stale, would silently restore the leak it exists to close.
+
+def test_the_provenance_set_rides_along_in_the_merged_config(S):
+    config = S.load_config()
+    merged = S._merged_routing_config(config)
+    assert isinstance(merged.get(S._ROUTING_PROVIDER_SCOPED), set)
+
+
+def test_the_provenance_set_is_stable_within_a_generation(S):
+    config = S.load_config()
+    first = S._provider_scoped_ids(config)
+    assert S._provider_scoped_ids(config) == first
+
+
+def test_the_provenance_set_is_invalidated_with_everything_else(S, monkeypatch):
+    """Same invalidation as the rest of the merge. A set that outlived its
+    generation would keep rejecting a bare id the operator has since removed
+    from the template."""
+    config = S.load_config()
+    assert "vendor/some-model" not in S._provider_scoped_ids(config)
+    monkeypatch.setattr(S, "get_provider_free_info", lambda *a, **k: {
+        "vendor": {"believed_free": ["vendor/some-model"], "model_reasoning": {},
+                   "model_capabilities": {}, "free_limits": {}},
+    })
+    S._bump_routing_generation()
+    assert "vendor/some-model" in S._provider_scoped_ids(config)
+
+
+def test_the_provenance_key_is_not_treated_as_a_routing_key(S):
+    """GUARD: it must stay out of the list/dict merge loops, which would union
+    it as if it were `believed_free` and hand every consumer a stray key."""
+    merged = S._merged_routing_config(S.load_config())
+    for key in S._ROUTING_LIST_KEYS:
+        assert isinstance(merged.get(key, []), list)
+    for key in S._ROUTING_DICT_KEYS:
+        assert isinstance(merged.get(key, {}), dict)
+    assert S._ROUTING_PROVIDER_SCOPED not in S._ROUTING_LIST_KEYS
+    assert S._ROUTING_PROVIDER_SCOPED not in S._ROUTING_DICT_KEYS
+
+
+def test_a_hand_written_entry_never_enters_the_provenance_set(S):
+    """The whole distinction: config.json is a person speaking, so it keeps
+    matching every provider."""
+    config = dict(S.load_config())
+    config["believed_free"] = ["a-bare-model"]
+    assert "a-bare-model" not in S._provider_scoped_ids(config)
