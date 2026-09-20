@@ -970,3 +970,79 @@ def test_the_four_existing_keys_are_unaffected(monkeypatch, tmp_path):
     assert groq["model_capabilities"]["groq/llama-3.3-70b"] == ["json", "tools"]
     assert "groq/llama-3.3-70b" in groq["believed_free"]
     assert groq["free_limits"]["groq/llama-3.3-70b"] == {"requests_per_minute": 30}
+
+
+# ── a hand-typed cost observation promotes too ──────────────────────────────
+#
+# The dict keys (capabilities, reasoning) are matched by LOOKUP, so a curated
+# entry finds its route whichever way it was written. The list keys are the
+# other way round — the entries are the input — and the per-provider loop read
+# only `by_provider`. So a cost observation someone TYPED after being billed sat
+# in `curated` and never crossed, while one the runtime flagger caught did.
+# Typing it in is the common case: you notice the charge, you write it down.
+
+def test_a_hand_typed_cost_observation_is_promoted(monkeypatch, tmp_path):
+    """The regression. No by_provider entry for this provider at all — which is
+    exactly the shape when nothing was observed at runtime."""
+    s = _promotion_server(monkeypatch, tmp_path, {
+        "curated": {"cost_observed_free_tier": ["groq/llama-3.3-70b"]},
+    }, [])
+
+    text, report = s._promote_sidecar_to_providers(_providers_text())
+    groq = json.loads(text)["providers"]["groq"]
+    assert "groq/llama-3.3-70b" in groq["cost_observed_free_tier"]
+    assert report["providers"]["groq"]["curated"] >= 1
+
+
+def test_a_hand_typed_entry_is_graded_curated_not_observed(monkeypatch, tmp_path):
+    """A person typing it and a runtime 402 are different kinds of claim, and
+    the PR body's whole job is letting a reviewer tell them apart."""
+    s = _promotion_server(monkeypatch, tmp_path, {
+        "by_provider": {"groq": {"cost_observed_free_tier": ["compound-mini"]}},
+        "curated": {"cost_observed_free_tier": ["groq/llama-3.3-70b"]},
+    }, [])
+
+    grades = s._promote_sidecar_to_providers(_providers_text())[1]["providers"]["groq"]
+    assert grades.get("curated", 0) >= 1
+    assert grades.get("observed", 0) >= 1
+
+
+def test_a_bare_curated_entry_is_not_filed_under_one_provider(monkeypatch, tmp_path):
+    """GUARD. A bare curated id deliberately means 'this model wherever I have
+    it' — a statement about one deployment, not about one provider. Filing it
+    under a provider block would be a bigger claim than the data supports, and
+    prefixing it would risk the double-qualification bug."""
+    s = _promotion_server(monkeypatch, tmp_path, {
+        "curated": {"cost_observed_free_tier": ["llama-3.3-70b"]},
+    }, [])
+
+    before = _providers_text()
+    text, report = s._promote_sidecar_to_providers(before)
+    assert text == before
+    assert report["total"] == 0
+
+
+def test_a_curated_entry_for_an_unshipped_provider_is_reported(monkeypatch, tmp_path):
+    """GUARD: the only-providers-this-repo-ships bound still holds when the
+    provider is reached through curated rather than by_provider, and it is
+    named rather than dropped silently."""
+    s = _promotion_server(monkeypatch, tmp_path, {
+        "curated": {"cost_observed_free_tier": ["bills-homebrew-provider/thing"]},
+    }, [])
+
+    before = _providers_text()
+    text, report = s._promote_sidecar_to_providers(before)
+    assert text == before
+    assert "bills-homebrew-provider" in report["skipped_providers"]
+
+
+def test_a_curated_entry_is_qualified_exactly_once(monkeypatch, tmp_path):
+    """GUARD: curated entries arrive ALREADY qualified, so they must be used
+    verbatim. Prefixing them is the 603-entry bug."""
+    s = _promotion_server(monkeypatch, tmp_path, {
+        "curated": {"cost_observed_free_tier": ["groq/llama-3.3-70b"]},
+    }, [])
+
+    groq = json.loads(s._promote_sidecar_to_providers(_providers_text())[0])["providers"]["groq"]
+    assert "groq/llama-3.3-70b" in groq["cost_observed_free_tier"]
+    assert "groq/groq/llama-3.3-70b" not in groq["cost_observed_free_tier"]

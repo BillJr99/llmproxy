@@ -4012,6 +4012,26 @@ def _promote_sidecar_to_providers(
     curated_tier = {k.lower(): v for k, v in (curated.get("model_reasoning") or {}).items()
                     if isinstance(k, str)}
 
+    def _curated_for(list_key: str, provider_name: str) -> list[str]:
+        """Curated list entries that name *provider_name* explicitly.
+
+        The dict keys above are matched by LOOKUP, qualified form first, so a
+        curated capability finds its route whichever way it was written. A list
+        has to go the other way -- the entries are the input -- and prefixing a
+        curated entry that is already qualified is exactly the mistake that once
+        produced "google/google/..." for 603 entries.
+
+        So only an entry already qualified with this provider is promoted. A
+        BARE curated entry deliberately means "this model wherever I have it"
+        (see the free-tier provenance rules), which is a statement about one
+        deployment rather than about one provider, and filing it under a single
+        provider block in the shipped catalog would be a larger claim than the
+        data supports. Those stay local.
+        """
+        prefix = f"{provider_name.lower()}/"
+        return [e.lower() for e in (curated.get(list_key) or [])
+                if isinstance(e, str) and e.lower().startswith(prefix)]
+
     def _bump(provider: str, grade: str) -> None:
         report["providers"].setdefault(provider, {})
         report["providers"][provider][grade] = \
@@ -4056,9 +4076,24 @@ def _promote_sidecar_to_providers(
                 _bump(provider_name, tgrade)
 
     # Free status and quota belong to the provider, so they promote directly.
-    for provider_name, info in by_provider.items():
-        if provider_name not in known or not isinstance(info, dict):
+    # Every provider the sidecar has anything to say about. Walking
+    # by_provider alone would miss one whose facts are ALL hand-set -- which is
+    # the common shape for a cost observation someone typed into config.json
+    # after being billed, rather than one the runtime flagger caught.
+    _curated_providers = {
+        e.split("/", 1)[0].lower()
+        for list_key in ("believed_free", "cost_observed_free_tier")
+        for e in (curated.get(list_key) or [])
+        if isinstance(e, str) and "/" in e
+    }
+    for provider_name in sorted(set(by_provider) | _curated_providers):
+        if provider_name not in known:
+            if provider_name not in report["skipped_providers"]:
+                report["skipped_providers"].append(provider_name)
             continue
+        info = by_provider.get(provider_name)
+        if not isinstance(info, dict):
+            info = {}
         entry = known[provider_name]
         if not isinstance(entry, dict):
             continue
@@ -4072,20 +4107,24 @@ def _promote_sidecar_to_providers(
         # "google/google/..." for 603 entries; see the note above
         # _defaults_layer.
         for list_key in ("believed_free", "cost_observed_free_tier"):
-            promoted = [f"{provider_name}/{m}".lower()
-                        for m in info.get(list_key) or [] if isinstance(m, str)]
-            if not promoted:
+            # by_provider is BARE and carries no *_source field: these are
+            # measurements this deployment made, graded "observed". Curated
+            # entries are already qualified and graded "curated".
+            learned = [f"{provider_name}/{m}".lower()
+                       for m in info.get(list_key) or [] if isinstance(m, str)]
+            hand_set = _curated_for(list_key, provider_name)
+            if not learned and not hand_set:
                 continue
             existing = entry.setdefault(list_key, [])
+            promoted = learned + hand_set
             added = [m for m in promoted if m not in existing]
             if added:
                 entry[list_key] = sorted(set(existing) | set(promoted))
                 changed = True
-                for _ in added:
-                    # by_provider carries no *_source field, so there is no
-                    # better grade to read: a cost observation is a measurement
-                    # this deployment made.
-                    _bump(provider_name, "observed")
+                hand_set_ids = set(hand_set)
+                for mid in added:
+                    _bump(provider_name,
+                          "curated" if mid in hand_set_ids else "observed")
         for model, limits in (info.get("free_limits") or {}).items():
             if not isinstance(model, str) or not isinstance(limits, dict):
                 continue
