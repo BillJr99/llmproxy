@@ -105,8 +105,8 @@
       },
       "model_capabilities": {
         "nvidia/meta/llama-3.1-70b-instruct": [
-          "tools",
-          "json"
+          "json",
+          "tools"
         ]
       },
       "free_limits": {
@@ -194,10 +194,10 @@
       },
       "model_capabilities": {
         "google/gemini-2.5-pro": [
-          "tools",
-          "vision",
+          "json",
           "reasoning",
-          "json"
+          "tools",
+          "vision"
         ],
         "google/gemma-3-12b-it": [
           "vision"
@@ -265,18 +265,18 @@
       },
       "model_capabilities": {
         "cerebras/gpt-oss-120b": [
-          "tools",
+          "json",
           "reasoning",
-          "json"
+          "tools"
         ],
         "cerebras/llama3.1-8b": [
-          "tools",
-          "json"
+          "json",
+          "tools"
         ],
         "cerebras/qwen-3-235b-a22b-instruct-2507": [
-          "tools",
+          "json",
           "reasoning",
-          "json"
+          "tools"
         ]
       },
       "free_limits": {
@@ -372,13 +372,13 @@
       },
       "model_capabilities": {
         "groq/llama-4-scout-17b-16e-instruct": [
+          "json",
           "tools",
-          "vision",
-          "json"
+          "vision"
         ],
         "groq/mixtral-8x7b-32768": [
-          "tools",
-          "json"
+          "json",
+          "tools"
         ]
       },
       "free_limits": {
@@ -680,12 +680,12 @@
       },
       "model_capabilities": {
         "cloudflare-workers/@cf/meta/llama-3.1-70b-instruct": [
-          "tools",
-          "json"
+          "json",
+          "tools"
         ],
         "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct": [
-          "tools",
-          "json"
+          "json",
+          "tools"
         ]
       },
       "free_limits": {},
@@ -704,9 +704,9 @@
       },
       "model_capabilities": {
         "zhipu/glm-4.5-flash": [
-          "tools",
+          "json",
           "reasoning",
-          "json"
+          "tools"
         ]
       },
       "free_limits": {
@@ -735,14 +735,14 @@
       },
       "model_capabilities": {
         "z-ai/glm-4.5-air": [
-          "tools",
+          "json",
           "reasoning",
-          "json"
+          "tools"
         ],
         "z-ai/glm-4.5-flash": [
-          "tools",
+          "json",
           "reasoning",
-          "json"
+          "tools"
         ]
       },
       "free_limits": {
@@ -865,121 +865,121 @@
       "fallback_models": [],
       "model_capabilities": {
         "openrouter/cohere/north-mini-code:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "openrouter/deepseek/deepseek-v4-flash-0731:free": [
-          "tools",
+          "json",
           "reasoning",
-          "json"
+          "tools"
         ],
         "openrouter/dots-studio/dots-3-note-preview:free": [
-          "tools",
-          "vision",
+          "json",
           "reasoning",
-          "json"
+          "tools",
+          "vision"
         ],
         "openrouter/google/gemma-4-26b-a4b-it:free": [
-          "tools",
-          "vision",
+          "json",
           "reasoning",
-          "json"
+          "tools",
+          "vision"
         ],
         "openrouter/google/gemma-4-31b-it:free": [
-          "tools",
-          "vision",
+          "json",
           "reasoning",
-          "json"
+          "tools",
+          "vision"
         ],
         "openrouter/google/lyria-3-clip-preview": [
-          "vision",
-          "json"
+          "json",
+          "vision"
         ],
         "openrouter/google/lyria-3-pro-preview": [
-          "vision",
-          "json"
+          "json",
+          "vision"
         ],
         "openrouter/inclusionai/ling-3.0-flash-fin:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "openrouter/inclusionai/ling-3.0-flash-sante:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "openrouter/inclusionai/ling-3.0-flash-vl:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "openrouter/liquid/lfm-2.5-2.6b:free": [
-          "tools",
+          "json",
           "reasoning",
-          "json"
+          "tools"
         ],
         "openrouter/nex-agi/nex-n2.5-mini:free": [
-          "tools",
-          "vision",
+          "json",
           "reasoning",
-          "json"
+          "tools",
+          "vision"
         ],
         "openrouter/nex-agi/nex-n2.5-pro:free": [
-          "tools",
-          "vision",
+          "json",
           "reasoning",
-          "json"
+          "tools",
+          "vision"
         ],
         "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "openrouter/nvidia/nemotron-3-super-120b-a12b:free": [
-          "tools",
+          "json",
           "reasoning",
-          "json"
+          "tools"
         ],
         "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "openrouter/nvidia/nemotron-3.5-content-safety:free": [
-          "vision",
-          "reasoning"
+          "reasoning",
+          "vision"
         ],
         "openrouter/nvidia/nemotron-3.5-lightning:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "openrouter/openrouter/free": [
-          "tools",
-          "vision",
+          "json",
           "reasoning",
-          "json"
+          "tools",
+          "vision"
         ],
         "openrouter/poolside/laguna-s-2.1:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "openrouter/poolside/laguna-xs-2.1:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "openrouter/qwen/qwen3.8-27b:free": [
-          "tools",
-          "vision",
+          "json",
           "reasoning",
-          "json"
+          "tools",
+          "vision"
         ],
         "openrouter/thinkingmachines/inkling-small:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "openrouter/thinkingmachines/inkling:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "openrouter/z-ai/glm-5.2:free": [
           "reasoning"
@@ -1009,9 +1009,9 @@
       },
       "model_capabilities": {
         "moonshot/kimi-latest": [
+          "json",
           "tools",
-          "vision",
-          "json"
+          "vision"
         ]
       },
       "free_limits": {
@@ -1037,9 +1037,9 @@
       },
       "model_capabilities": {
         "minimax/MiniMax-M1": [
-          "tools",
+          "json",
           "reasoning",
-          "json"
+          "tools"
         ]
       },
       "free_limits": {
@@ -1092,8 +1092,8 @@
       },
       "model_capabilities": {
         "huggingface/accounts/fireworks/models/llama-v3p3-70b-instruct": [
-          "tools",
-          "json"
+          "json",
+          "tools"
         ]
       },
       "free_limits": {},
@@ -1142,12 +1142,12 @@
       },
       "model_capabilities": {
         "cloudflare-ai-gateway/@cf/meta/llama-3.1-70b-instruct": [
-          "tools",
-          "json"
+          "json",
+          "tools"
         ],
         "cloudflare-ai-gateway/@cf/meta/llama-3.1-8b-instruct": [
-          "tools",
-          "json"
+          "json",
+          "tools"
         ]
       },
       "free_limits": {},
@@ -1282,37 +1282,37 @@
       "fallback_models": [],
       "model_capabilities": {
         "xkiro/minimax/minimax-m2.1-highspeed:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "xkiro/minimax/minimax-m2.1:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "xkiro/minimax/minimax-m2.5-highspeed:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "xkiro/minimax/minimax-m2.5:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "xkiro/minimax/minimax-m2.7-highspeed:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "xkiro/minimax/minimax-m2.7:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "xkiro/minimax/minimax-m2:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "xkiro/minimax/minimax-m3:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/mistralai/codestral-2508": [
           "tools"
@@ -1337,48 +1337,48 @@
           "vision"
         ],
         "xkiro/mistralai/mistral-medium-3.5": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/mistralai/mistral-small-2603": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/qwen/qwen-plus-2025-07-28:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/qwen/qwen3-coder-plus:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/qwen/qwen3-max:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/qwen/qwen3-omni-flash:free": [
           "tools",
           "vision"
         ],
         "xkiro/qwen/qwen3-vl-plus:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/qwen/qwen3.5-397b-a17b:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/qwen/qwen3.5-flash:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/qwen/qwen3.5-omni-flash:free": [
           "tools",
@@ -1389,62 +1389,62 @@
           "vision"
         ],
         "xkiro/qwen/qwen3.5-plus:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/qwen/qwen3.6-27b:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/qwen/qwen3.6-35b-a3b:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/qwen/qwen3.6-max-preview:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "xkiro/qwen/qwen3.6-plus:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/qwen/qwen3.7-flash:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/qwen/qwen3.7-max:free": [
-          "tools",
-          "reasoning"
+          "reasoning",
+          "tools"
         ],
         "xkiro/qwen/qwen3.7-plus:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/qwen/qwen3.8-max:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/qwen/qwen3.8-omni-flash:free": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/sensenova/sensenova-6.7-flash-lite": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ],
         "xkiro/sensenova/sensenova-6.8-flash-lite": [
+          "reasoning",
           "tools",
-          "vision",
-          "reasoning"
+          "vision"
         ]
       }
     },

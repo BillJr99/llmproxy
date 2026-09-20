@@ -253,7 +253,11 @@ def aggregate(
             # an opinion (capabilities is not None).
             for e in sorted(evs, key=lambda x: 0 if x.confidence == "high" else 1):
                 if e.capabilities is not None:
-                    capabilities[model_id] = list(e.capabilities)
+                    # Sorted so the stored list does not depend on the order a
+                    # particular source happens to emit its tags in; capability
+                    # tags are a set, and a stable order keeps re-scrapes from
+                    # reporting a change when nothing actually changed.
+                    capabilities[model_id] = sorted(e.capabilities)
                     break
             # Merge pricing — prefer the highest-confidence record with a pricing
             # opinion. These per-source paid prices override the broad litellm
@@ -440,13 +444,20 @@ def apply_updates(sidecar: dict, updates: dict) -> bool:
 # own merge path.
 _SORTED_LIST_KEYS = ("believed_free",)
 _SORTED_DICT_KEYS = ("free_limits", "model_reasoning", "model_capabilities")
+# Blocks mapping model id -> list of tags, where the list is logically a SET and
+# so carries no meaning in its order. Sorting the values too means the on-disk
+# form does not depend on which source (or which vintage of the scraper) last
+# wrote the entry.
+_SORTED_DICT_VALUE_KEYS = ("model_capabilities",)
 
 
 def canonicalize_sidecar(sidecar: dict) -> None:
     """Sort the order-unstable per-provider blocks in place (model id, lowercased).
 
-    Reorders keys only — never adds, drops, or changes a value — so the logical
-    content is identical; only the serialization becomes deterministic.
+    Reorders only — never adds or drops anything — so the logical content is
+    identical; only the serialization becomes deterministic. That covers key
+    order everywhere, plus the tag order inside the set-valued lists named in
+    `_SORTED_DICT_VALUE_KEYS`.
     """
     for prov in sidecar.get("providers", {}).values():
         if not isinstance(prov, dict):
@@ -459,6 +470,14 @@ def canonicalize_sidecar(sidecar: dict) -> None:
             val = prov.get(key)
             if isinstance(val, dict):
                 prov[key] = {k: val[k] for k in sorted(val, key=str.lower)}
+        for key in _SORTED_DICT_VALUE_KEYS:
+            val = prov.get(key)
+            if isinstance(val, dict):
+                for mid, tags in val.items():
+                    if isinstance(tags, list):
+                        # str() guard: a hand-edited sidecar can hold a non-string
+                        # tag, and canonicalization must not be what explodes.
+                        val[mid] = sorted(tags, key=lambda t: str(t).lower())
 
 
 def dump_sidecar(sidecar: dict) -> str:

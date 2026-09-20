@@ -66,6 +66,22 @@ def _read_config(path: Path) -> dict:
     return json.loads(path.read_text())
 
 
+def _read_curated(path: Path) -> dict:
+    """What the admin editors persist now: the sidecar's hand-set section.
+
+    They used to write config.json. Once the five routing keys migrated out of
+    it, reading config alone showed every model as un-free and untagged, and
+    saving that form wrote the blanks back as real overrides that outranked
+    everything learned. The editors target the curated layer instead, and only
+    record what actually differs from the layers below.
+    """
+    side = path.parent / "routing_metadata.json"
+    if not side.exists():
+        return {}
+    curated = json.loads(side.read_text()).get("curated")
+    return curated if isinstance(curated, dict) else {}
+
+
 # --------------------------------------------------------------------------- #
 # Read
 
@@ -80,7 +96,13 @@ def test_get_config(client):
     assert resp.status_code == 200
     body = resp.get_json()
     assert "openai" in body["providers"]
-    assert body["believed_free"] == ["openai/free-thing"]
+    # The EFFECTIVE view, not config.json's slice of it. The page showed every
+    # model as un-free and untagged once the five keys migrated out of config,
+    # and saving that form wrote the blanks back as overrides that outranked
+    # everything learned.
+    assert "openai/free-thing" in body["believed_free"]
+    assert len(body["believed_free"]) > 1, \
+        "providers.json defaults should reach the admin view"
     assert body["server"]["port"] == 8080
     assert "exploratory" in body["valid_reasoning_levels"]
 
@@ -201,7 +223,23 @@ def test_from_template_unknown(client):
 def test_put_believed_free(client, cfg_path):
     resp = client.put("/admin/api/believed-free", json=["a/b", "c/d"])
     assert resp.status_code == 200
-    assert _read_config(cfg_path)["believed_free"] == ["a/b", "c/d"]
+    assert _read_curated(cfg_path)["believed_free"] == ["a/b", "c/d"]
+
+
+def test_editors_never_write_config_json(client, cfg_path):
+    """Saving a categorization must leave config.json byte-identical.
+
+    config.json is drained into the sidecar at startup and is not a routing
+    layer any more. An editor that wrote back to it would re-seed exactly the
+    keys the migration strips, which is how the old local-sync kept undoing it.
+    """
+    before = cfg_path.read_text()
+    assert client.put("/admin/api/believed-free", json=["a/b"]).status_code == 200
+    assert client.put("/admin/api/model-reasoning", json={"m": "deep"}).status_code == 200
+    assert client.put("/admin/api/model-capabilities", json={"m": ["tools"]}).status_code == 200
+    assert client.put("/admin/api/free-limits",
+                      json={"m": {"requests_per_minute": 5}}).status_code == 200
+    assert cfg_path.read_text() == before
 
 
 def test_put_believed_free_rejects_non_list(client):
@@ -258,7 +296,7 @@ def test_put_model_reasoning_validates_level(client):
 def test_put_model_reasoning_ok(client, cfg_path):
     resp = client.put("/admin/api/model-reasoning", json={"m": "deep"})
     assert resp.status_code == 200
-    assert _read_config(cfg_path)["model_reasoning"]["m"] == "deep"
+    assert _read_curated(cfg_path)["model_reasoning"]["m"] == "deep"
 
 
 def test_put_capabilities_validates(client):
@@ -269,7 +307,7 @@ def test_put_capabilities_validates(client):
 def test_put_capabilities_ok(client, cfg_path):
     resp = client.put("/admin/api/model-capabilities", json={"m": ["tools", "vision"]})
     assert resp.status_code == 200
-    assert _read_config(cfg_path)["model_capabilities"]["m"] == ["tools", "vision"]
+    assert _read_curated(cfg_path)["model_capabilities"]["m"] == ["tools", "vision"]
 
 
 def test_put_free_limits_validates_key(client):
@@ -280,7 +318,7 @@ def test_put_free_limits_validates_key(client):
 def test_put_free_limits_ok(client, cfg_path):
     resp = client.put("/admin/api/free-limits", json={"m": {"requests_per_minute": 15}})
     assert resp.status_code == 200
-    assert _read_config(cfg_path)["free_limits"]["m"]["requests_per_minute"] == 15
+    assert _read_curated(cfg_path)["free_limits"]["m"]["requests_per_minute"] == 15
 
 
 # --------------------------------------------------------------------------- #

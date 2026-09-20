@@ -2582,7 +2582,11 @@ def _merge_model_facts(
             entry[fact] = facts[fact]
             entry[f"{fact}_source"] = facts.get(f"{fact}_source", "observed")
             counts["written"] += 1
-    counts["kept"] = len(merged) - len(learned) if len(merged) > len(learned) else 0
+    # Models this pass never mentioned, which is what "carried forward" means.
+    # Subtracting the two sizes counted nothing of the sort once they overlapped,
+    # and read 0 on a pass that carried hundreds — misleading exactly the person
+    # reading this log after the next data-loss report.
+    counts["kept"] = len(set(merged) - set(learned))
     return merged, counts
 
 
@@ -2621,11 +2625,22 @@ def _recompute_routing_metadata(config: dict, config_path: str | None) -> dict |
     observed: dict[str, set[str]] = {}
     raw_for_key: dict[str, str] = {}
 
+    # Keys this deployment actually serves. The catalog covers thousands of
+    # models most deployments never touch: its capabilities are still wanted,
+    # both as a base for the models we DO serve and as family evidence, but
+    # writing a fact for every catalog entry would bloat the sidecar with
+    # models that have no route and make "N models known" mean something other
+    # than it reads as.
+    local_keys: set[str] = set()
+
     def _observe(raw_id: str, caps: set[str]) -> None:
         key = normalize_model_id(raw_id)
         if not key:
             return
-        raw_for_key.setdefault(key, raw_id)
+        local_keys.add(key)
+        # A provider's own spelling wins over the catalog's for the same key,
+        # so inference runs on the id this deployment actually calls.
+        raw_for_key[key] = raw_id
         if caps:
             observed.setdefault(key, set()).update(caps)
 
@@ -2639,6 +2654,8 @@ def _recompute_routing_metadata(config: dict, config_path: str | None) -> dict |
             raw_for_key.setdefault(key, profile.get("model_id") or key)
             if caps:
                 observed.setdefault(key, set()).update(caps)
+        # Deliberately no local_keys update: the catalog says what a model can
+        # do, not that this deployment has a route to it.
     except Exception as exc:  # noqa: BLE001 — a dead catalog degrades, never fails
         logger.warning("[routing-metadata] catalog fetch failed: %s", exc)
 
@@ -2660,7 +2677,9 @@ def _recompute_routing_metadata(config: dict, config_path: str | None) -> dict |
 
     learned: dict[str, dict] = {}
     for key, caps in observed.items():
-        learned[key] = {"capabilities": sorted(caps), "capabilities_source": "observed"}
+        if key in local_keys:
+            learned[key] = {"capabilities": sorted(caps),
+                            "capabilities_source": "observed"}
 
     # Family layer: lend a family's unanimous capabilities to a member that has
     # none of its own. Never to one that does — a reading always beats a guess.
@@ -2668,8 +2687,12 @@ def _recompute_routing_metadata(config: dict, config_path: str | None) -> dict |
     if infer_family:
         from .providers import family_key
 
+        # Families are computed over EVERY observation, catalog included, so a
+        # deployment serving three members of a family still benefits from what
+        # the catalog knows about the other twenty.
         by_gen, by_bare = _family_capability_profiles(observed, raw_for_key, min_members)
-        for key, raw_id in raw_for_key.items():
+        for key in local_keys:
+            raw_id = raw_for_key.get(key) or key
             if observed.get(key):
                 continue
             # Generation first, so llama-4's tools never reach llama-2; the bare
@@ -2685,7 +2708,8 @@ def _recompute_routing_metadata(config: dict, config_path: str | None) -> dict |
     # migrated tier already in the sidecar survives untouched.
     n_tier = 0
     if infer_tiers:
-        for key, raw_id in raw_for_key.items():
+        for key in local_keys:
+            raw_id = raw_for_key.get(key) or key
             tier = infer_reasoning_level(raw_id)
             if tier:
                 learned.setdefault(key, {}).update(
@@ -2708,10 +2732,12 @@ def _recompute_routing_metadata(config: dict, config_path: str | None) -> dict |
         # by_provider and curated are left exactly as found: this pass relearns
         # nothing about free status, quota, or anything a person set by hand.
     logger.info(
-        "[routing-metadata] %d model(s) known: %d observed, %d by family, %d tiers "
-        "inferred; %d fact(s) written, %d refused to a stronger source, from %d route(s)",
-        len(merged), len(observed), n_family, n_tier,
-        counts["written"], counts["refused"], len(routes),
+        "[routing-metadata] %d model(s) served, %d in the sidecar: %d observed, "
+        "%d by family, %d tiers inferred; %d fact(s) written, %d refused to a "
+        "stronger source, %d carried forward, from %d route(s)",
+        len(local_keys), len(merged), len(set(observed) & local_keys),
+        n_family, n_tier, counts["written"], counts["refused"], counts["kept"],
+        len(routes),
     )
     return state
 
@@ -6834,7 +6860,12 @@ _ROUTING_CONFIG_KEYS = _ROUTING_LIST_KEYS + _ROUTING_DICT_KEYS
 # data for the process lifetime, which is right for a shipped default and wrong
 # here: the refresh rewrites this file while the server runs, and a cache that
 # outlived the write would pin the router to metadata it had already replaced.
-_routing_sidecar_cache: tuple[float, dict] | None = None
+# Keyed by (path, mtime), not mtime alone. One global slot keyed on a float
+# meant two sidecars whose mtimes happened to coincide served each other's
+# state — and under gunicorn, where a worker may resolve a different
+# LLMPROXY_CONFIG, it was the process-wide memo rather than the file that
+# decided what routing saw.
+_routing_sidecar_cache: tuple[str, float, dict] | None = None
 _routing_sidecar_lock = threading.Lock()
 
 
@@ -6846,15 +6877,16 @@ def _load_routing_sidecar(config_path: str | None = None) -> dict:
         mtime = path.stat().st_mtime if path.exists() else 0.0
     except Exception:  # noqa: BLE001 — routing must never fail on a stat
         return {}
+    key = str(path)
     with _routing_sidecar_lock:
         cached = _routing_sidecar_cache
-        if cached is not None and cached[0] == mtime:
-            return cached[1]
+        if cached is not None and cached[0] == key and cached[1] == mtime:
+            return cached[2]
     state = load_routing_metadata(config_path) if mtime else {}
     if not isinstance(state, dict):
         state = {}
     with _routing_sidecar_lock:
-        _routing_sidecar_cache = (mtime, state)
+        _routing_sidecar_cache = (key, mtime, state)
     return state
 
 
@@ -6863,6 +6895,23 @@ def _reset_routing_sidecar_cache() -> None:
     global _routing_sidecar_cache
     with _routing_sidecar_lock:
         _routing_sidecar_cache = None
+
+
+# The two nested sources disagree about qualification, and always have.
+# providers.json stores ids ALREADY qualified ("google/gemini-2.0-flash"), while
+# the sidecar's by_provider stores them bare ("gemini-2.0-flash"). Prepending
+# unconditionally — which is what both layers did — produced
+# "google/google/gemini-2.0-flash" for every one of providers.json's 603
+# entries, so the entire defaults layer matched nothing and the shipped data,
+# the very thing the providers PR exists to maintain, never reached a routing
+# decision.
+#
+# This is deliberately NOT solved by sniffing whether an id already starts with
+# its provider name. Groq's own model ids carry a "groq/" vendor namespace, so
+# providers.json holds "groq/groq/compound" while the sidecar holds
+# "groq/compound" — the same string is qualified in one file and bare in the
+# other, and no heuristic can tell them apart. Each layer states its own
+# convention instead.
 
 
 def _defaults_layer() -> dict:
@@ -6875,13 +6924,17 @@ def _defaults_layer() -> dict:
     out: dict = {k: [] for k in _ROUTING_LIST_KEYS}
     out.update({k: {} for k in _ROUTING_DICT_KEYS})
     try:
-        for provider, info in get_provider_free_info().items():
+        for _provider, info in get_provider_free_info().items():
+            # Already qualified in this file — used verbatim. An entry that is
+            # not still resolves, because _lookup_model_fact tries the bare form
+            # too; over-prefixing is the failure that matches nothing.
             for entry in info.get("believed_free") or []:
                 if isinstance(entry, str):
-                    out["believed_free"].append(f"{provider}/{entry}".lower())
+                    out["believed_free"].append(entry.lower())
             for key in ("model_reasoning", "model_capabilities", "free_limits"):
                 for model, val in (info.get(key) or {}).items():
-                    out[key][f"{provider}/{model}".lower()] = val
+                    if isinstance(model, str):
+                        out[key][model.lower()] = val
     except Exception as e:  # noqa: BLE001 — a bad sidecar must not break routing
         print(f"[server:_defaults_layer] {e}")
         traceback.print_exc()
@@ -6904,6 +6957,9 @@ def _learned_layer(config_path: str | None = None) -> dict:
         for provider, info in (state.get("by_provider") or {}).items():
             if not isinstance(info, dict):
                 continue
+            # Bare in this file — always qualified with the provider that
+            # observed them, which is what makes the same weights free on one
+            # provider and metered on another.
             for key in _ROUTING_LIST_KEYS:
                 for entry in info.get(key) or []:
                     if isinstance(entry, str):
@@ -6979,8 +7035,76 @@ def _listing_layer() -> dict:
     return {"model_capabilities": {k: sorted(v) for k, v in caps.items() if v}}
 
 
-def _merged_routing_config(config: dict) -> dict:
+# The layers, weakest first, named for display. The admin UI needs to answer
+# "why is this model tagged that way", which a merged dict cannot: it keeps
+# values and discards where each came from.
+ROUTING_LAYER_NAMES = ("providers.json", "learned", "listing", "curated")
+
+
+def routing_layers(config: dict | None = None,
+                   config_path: str | None = None) -> list[tuple[str, dict]]:
+    """Each routing-metadata layer, weakest first, paired with its name."""
+    return list(zip(ROUTING_LAYER_NAMES, (
+        _defaults_layer(),
+        _learned_layer(config_path),
+        _listing_layer(),
+        _curated_layer(config, config_path),
+    ), strict=True))
+
+
+def routing_fact_sources(
+    model_id: str, provider_name: str = "", config: dict | None = None,
+    config_path: str | None = None,
+) -> dict[str, list[str]]:
+    """Which layers have something to say about *model_id*, per fact.
+
+    Returns ``{fact_key: [layer_name, ...]}`` weakest first. For capabilities
+    every contributing layer is listed, because they union; for the
+    single-valued facts the LAST name is the one in effect.
+    """
+    out: dict[str, list[str]] = {}
+    upstream = model_id.split("/", 1)[1] if "/" in model_id and provider_name else model_id
+    forms = set(_model_fact_keys(provider_name or model_id.split("/", 1)[0], upstream))
+    forms.add(model_id.lower())
+    for name, layer in routing_layers(config, config_path):
+        for key in _ROUTING_LIST_KEYS:
+            entries = layer.get(key)
+            if isinstance(entries, list) and forms & {e.lower() for e in entries
+                                                      if isinstance(e, str)}:
+                out.setdefault(key, []).append(name)
+        for key in _ROUTING_DICT_KEYS:
+            mapping = layer.get(key)
+            if isinstance(mapping, dict) and forms & set(mapping):
+                out.setdefault(key, []).append(name)
+    return out
+
+
+def learned_fact_grades(model_key: str, config_path: str | None = None) -> dict[str, str]:
+    """The provenance grade recorded beside each learned fact for *model_key*.
+
+    ``{"capabilities": "family", "reasoning": "inferred"}`` and so on. This is
+    what distinguishes a reading from a guess within the learned layer, which
+    the layer name alone cannot express.
+    """
+    state = _load_routing_sidecar(config_path)
+    facts = (state.get("by_model") or {}).get(model_key)
+    if not isinstance(facts, dict):
+        return {}
+    return {
+        fact: facts[f"{fact}_source"]
+        for fact in ("capabilities", "reasoning")
+        if isinstance(facts.get(f"{fact}_source"), str)
+    }
+
+
+def _merged_routing_config(config: dict, *, include_curated: bool = True) -> dict:
     """*config* with the five routing-metadata keys resolved across all layers.
+
+    ``include_curated=False`` returns what every layer BELOW the hand-set one
+    says. The admin editors need that to tell an edit from an unchanged value:
+    a whole-section save would otherwise copy the entire learned layer into the
+    curated one, freezing today's guesses as permanent hand corrections that no
+    later refresh could improve.
 
     Returns a shallow copy carrying merged values for those five keys only, so
     every other consumer of the config dict is untouched. With no sidecar and no
@@ -6994,8 +7118,10 @@ def _merged_routing_config(config: dict) -> dict:
         # so it could never be a stable record of intent. Hand-set facts live in
         # the sidecar's `curated` section instead, which occupies the same top
         # position and is what the admin UI writes.
-        layers = (_defaults_layer(), _learned_layer(), _listing_layer(),
-                  _curated_layer(config))
+        layers = [_defaults_layer(), _learned_layer(), _listing_layer()]
+        if include_curated:
+            layers.append(_curated_layer(config))
+        layers = tuple(layers)
         merged = dict(config)
         for key in _ROUTING_LIST_KEYS:
             seen: dict[str, None] = {}

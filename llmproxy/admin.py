@@ -35,6 +35,7 @@ import hmac
 import ipaddress
 import os
 import threading
+import traceback
 
 from flask import Blueprint, jsonify, request, send_from_directory
 
@@ -492,13 +493,27 @@ _MAINTENANCE_BOOL_FLAGS = (
     "pr_providers_list",
 )
 # Maintenance booleans that default to True when absent (vs False above).
-_MAINTENANCE_BOOL_FLAGS_DEFAULT_TRUE = ("sync_believed_free_on_startup",)
+_MAINTENANCE_BOOL_FLAGS_DEFAULT_TRUE = (
+    "sync_believed_free_on_startup",
+    # The two learning cadences and the inference switches. None of these had an
+    # admin surface, so a deployment could only change them by hand-editing the
+    # config the UI is meant to replace.
+    "routing_metadata_enabled",
+    "flagship_enabled",
+    "infer_reasoning",
+    "infer_family_capabilities",
+)
 _MAINTENANCE_STR_FIELDS = ("pr_providers_repo", "pr_providers_base", "pr_providers_branch")
 # Integer fields, with the default applied when the key is absent from config.
 _MAINTENANCE_INT_FIELDS: dict[str, int] = {
     "probe_frequency_days": 0,
     "update_frequency_days": 7,
     "probe_timeout_sec": 10,
+    "routing_metadata_frequency_days": 7,
+    "flagship_frequency_days": 7,
+    "min_family_members": 3,
+    # Enforced by _maybe_fire_pr_if_due all along, with no way to set it.
+    "pr_providers_frequency_days": 7,
 }
 
 # The admin API and frontend keep the historical flat field names; storage maps
@@ -521,6 +536,14 @@ _MAINTENANCE_PATHS: dict[str, tuple[str, ...]] = {
     "pr_providers_base": ("providers_pr", "base"),
     "pr_providers_branch": ("providers_pr", "branch"),
     "pr_providers_token": ("providers_pr", "token"),
+    "pr_providers_frequency_days": ("providers_pr", "frequency_days"),
+    "routing_metadata_enabled": ("routing_metadata", "enabled"),
+    "routing_metadata_frequency_days": ("routing_metadata", "refresh_frequency_days"),
+    "infer_reasoning": ("routing_metadata", "infer_reasoning"),
+    "infer_family_capabilities": ("routing_metadata", "infer_family_capabilities"),
+    "min_family_members": ("routing_metadata", "min_family_members"),
+    "flagship_enabled": ("flagship_tier", "enabled"),
+    "flagship_frequency_days": ("flagship_tier", "refresh_frequency_days"),
 }
 
 
@@ -582,13 +605,17 @@ def api_get_config():
         if isinstance(cfg, dict)
     }
     admin = _admin_block(config)
+    # The EFFECTIVE values, not config.json's. Reading config alone showed every
+    # model as un-free, untagged and incapable once the five keys migrated out,
+    # and saving that form wrote the blanks back as real overrides.
+    eff = _effective_routing(config)
     return jsonify({
         "providers": providers,
-        "believed_free": config.get("believed_free", []),
+        "believed_free": eff.get("believed_free") or [],
         "favorite_free_models": config.get("favorite_free_models", []),
-        "model_reasoning": config.get("model_reasoning", {}),
-        "model_capabilities": config.get("model_capabilities", {}),
-        "free_limits": config.get("free_limits", {}),
+        "model_reasoning": eff.get("model_reasoning") or {},
+        "model_capabilities": eff.get("model_capabilities") or {},
+        "free_limits": eff.get("free_limits") or {},
         "server": config.get("server", {}),
         "admin": {
             "enabled": admin.get("enabled", True) is not False,
@@ -923,12 +950,60 @@ def _put_section(key: str, validate):
     error = validate(payload)
     if error:
         return _err(error)
+    if key in _ROUTING_SECTIONS:
+        return _put_routing_section(key, payload)
     with _locked():
         config = _load()
         config[key] = payload
         if not _save(config):
             return _err("Failed to persist configuration.", 500)
     return jsonify({key: payload})
+
+
+# The sections that live in the sidecar's curated layer rather than config.json.
+_ROUTING_SECTIONS = frozenset({
+    "believed_free", "cost_observed_free_tier",
+    "model_reasoning", "model_capabilities", "free_limits",
+})
+
+
+def _put_routing_section(key: str, payload):
+    """Save a whole section, recording only what actually differs as curated.
+
+    The UI loads every model, lets you toggle a few, and saves the lot. If that
+    wrote the whole payload into the curated layer it would freeze every
+    inferred and observed fact as a permanent hand correction, and no later
+    refresh could ever improve them — the opposite of what the layering is for.
+
+    So this diffs against what the layers BELOW curated say and stores only the
+    entries that disagree. Saving a form you did not touch is a no-op, and
+    clearing an override restores whatever the machine had learned.
+    """
+    from . import server
+
+    baseline = server._merged_routing_config(_load(), include_curated=False)
+    below = baseline.get(key)
+
+    def _mutate(curated: dict) -> None:
+        if key in server._ROUTING_LIST_KEYS:
+            inherited = {e.lower() for e in (below or []) if isinstance(e, str)}
+            wanted = {e.lower() for e in (payload or []) if isinstance(e, str)}
+            # Only additions are recordable: the curated layer is additive for
+            # lists, so an entry inherited from below cannot be removed here.
+            curated[key] = sorted(wanted - inherited)
+        else:
+            inherited = below if isinstance(below, dict) else {}
+            kept = {}
+            for k, v in (payload or {}).items():
+                if not isinstance(k, str):
+                    continue
+                if inherited.get(k.lower()) != v:
+                    kept[k.lower()] = v
+            curated[key] = kept
+
+    if not _curated_write(_mutate):
+        return _err("Failed to persist routing metadata.", 500)
+    return jsonify({key: _effective_routing().get(key)})
 
 
 @bp.route("/admin/api/favorite-free-models", methods=["GET", "PUT"])
@@ -946,7 +1021,7 @@ def api_favorite_free_models():
 @bp.route("/admin/api/believed-free", methods=["GET", "PUT"])
 def api_believed_free():
     if request.method == "GET":
-        return jsonify({"believed_free": _load().get("believed_free", [])})
+        return jsonify({"believed_free": _effective_routing().get("believed_free") or []})
 
     def validate(p):
         if not (isinstance(p, list) and all(isinstance(x, str) for x in p)):
@@ -958,7 +1033,7 @@ def api_believed_free():
 @bp.route("/admin/api/model-reasoning", methods=["GET", "PUT"])
 def api_model_reasoning():
     if request.method == "GET":
-        return jsonify({"model_reasoning": _load().get("model_reasoning", {})})
+        return jsonify({"model_reasoning": _effective_routing().get("model_reasoning") or {}})
 
     def validate(p):
         if not isinstance(p, dict):
@@ -976,7 +1051,7 @@ def api_model_reasoning():
 @bp.route("/admin/api/model-capabilities", methods=["GET", "PUT"])
 def api_model_capabilities():
     if request.method == "GET":
-        return jsonify({"model_capabilities": _load().get("model_capabilities", {})})
+        return jsonify({"model_capabilities": _effective_routing().get("model_capabilities") or {}})
 
     def validate(p):
         if not isinstance(p, dict):
@@ -997,7 +1072,7 @@ def api_model_capabilities():
 @bp.route("/admin/api/free-limits", methods=["GET", "PUT"])
 def api_free_limits():
     if request.method == "GET":
-        return jsonify({"free_limits": _load().get("free_limits", {})})
+        return jsonify({"free_limits": _effective_routing().get("free_limits") or {}})
 
     def validate(p):
         if not isinstance(p, dict):
@@ -1022,6 +1097,238 @@ def api_free_limits():
 # ---------------------------------------------------------------------------
 # Virtual-endpoint preview (derived from categorizations)
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Routing metadata — the effective view, and the hand-set layer
+# ---------------------------------------------------------------------------
+
+def _curated_write(mutate) -> bool:
+    """Apply *mutate* to the sidecar's curated section under the sidecar lock.
+
+    The admin UI writes here rather than to config.json. config.json is drained
+    into this section at startup and is no longer where hand-set routing facts
+    live, so an editor pointed at it would be saving into a file the router
+    stops reading the moment the next restart migrates it.
+    """
+    from . import server
+    try:
+        with server._routing_sidecar_txn() as state:
+            mutate(server._curated_facts(state))
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[admin:_curated_write] {e}")
+        traceback.print_exc()
+        return False
+
+
+def _effective_routing(config: dict | None = None) -> dict:
+    """The merged routing metadata the ROUTER actually uses.
+
+    The editors used to read config.json alone. Once its five keys were
+    migrated out that showed every model as un-free, untagged and incapable —
+    and saving the form wrote those blanks back as real overrides. Reading the
+    merged view is what makes the page show the truth instead.
+    """
+    from . import server
+    merged = server._merged_routing_config(config if config is not None else _load())
+    return {k: merged.get(k) for k in server._ROUTING_CONFIG_KEYS}
+
+
+def _routing_rows(config: dict, q: str = "") -> list[dict]:
+    """One row per known model: what is in effect, and which layers said so."""
+    from . import server
+
+    eff = _effective_routing(config)
+    believed = {m.lower() for m in eff.get("believed_free") or []}
+    observed_cost = {m.lower() for m in eff.get("cost_observed_free_tier") or []}
+    reasoning = eff.get("model_reasoning") or {}
+    caps = eff.get("model_capabilities") or {}
+    limits = eff.get("free_limits") or {}
+
+    ids: set[str] = set()
+    for source in (believed, observed_cost, set(reasoning), set(caps), set(limits)):
+        ids |= {m for m in source if isinstance(m, str) and m != "_note"}
+    try:
+        for provider_name, upstream in server._get_distinct_routes():
+            ids.add(f"{provider_name}/{upstream}".lower())
+    except Exception as e:  # noqa: BLE001 — a cold route cache is not an error
+        print(f"[admin:_routing_rows] {e}")
+        traceback.print_exc()
+
+    needle = q.strip().lower()
+    rows: list[dict] = []
+    for model_id in sorted(ids):
+        if needle and needle not in model_id:
+            continue
+        provider = model_id.split("/", 1)[0] if "/" in model_id else ""
+        upstream = model_id.split("/", 1)[1] if "/" in model_id else model_id
+        try:
+            from .flagship import normalize_model_id
+            key = normalize_model_id(upstream)
+        except Exception as e:  # noqa: BLE001
+            print(f"[admin:_routing_rows] {e}")
+            traceback.print_exc()
+            key = upstream
+        rows.append({
+            "id": model_id,
+            "free": model_id in believed,
+            "cost_observed": model_id in observed_cost,
+            "reasoning": server._lookup_model_fact(reasoning, provider, upstream),
+            "capabilities": sorted(
+                server._lookup_capabilities(
+                    {k: set(v or ()) for k, v in caps.items()}, provider, upstream)),
+            "free_limits": server._lookup_model_fact(limits, provider, upstream) or {},
+            "layers": server.routing_fact_sources(model_id, provider, config),
+            "grades": server.learned_fact_grades(key),
+        })
+    return rows
+
+
+@bp.route("/admin/api/routing-metadata", methods=["GET"])
+def api_routing_metadata():
+    """Paged, filtered view of the effective routing metadata.
+
+    Paged server-side because a deployment with a couple of dozen providers
+    sees thousands of models, and the grid used to render every one of them —
+    rebuilding the whole table, with six listeners per row, on every keystroke.
+    """
+    from . import server
+
+    config = _load()
+    q = request.args.get("q", "")
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+        limit = min(500, max(1, int(request.args.get("limit", 100))))
+    except (TypeError, ValueError):
+        return _err("offset and limit must be integers.")
+    rows = _routing_rows(config, q)
+    return jsonify({
+        "models": rows[offset:offset + limit],
+        "total": len(rows),
+        "offset": offset,
+        "limit": limit,
+        "layers": list(server.ROUTING_LAYER_NAMES),
+    })
+
+
+@bp.route("/admin/api/routing-metadata", methods=["PUT"])
+def api_put_routing_metadata():
+    """Set one model's facts by hand, recorded as curated.
+
+    Per model rather than whole-section, so editing one row cannot blank the
+    rest — which is exactly how the old whole-section PUT could wipe the
+    learned layer in a single click.
+    """
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _err("Body must be an object.")
+    model = payload.get("model")
+    if not isinstance(model, str) or not model.strip():
+        return _err("'model' is required.")
+    model = model.strip().lower()
+
+    caps = payload.get("capabilities")
+    if caps is not None:
+        if not (isinstance(caps, list) and all(isinstance(c, str) for c in caps)):
+            return _err("'capabilities' must be a list of strings.")
+        bad = {c.lower() for c in caps} - _VALID_CAPABILITIES
+        if bad:
+            return _err(f"Invalid capabilities {sorted(bad)}. "
+                        f"Valid: {sorted(_VALID_CAPABILITIES)}.")
+    level = payload.get("reasoning")
+    if level not in (None, "") and level not in _providers.VALID_REASONING_LEVELS:
+        return _err(f"Invalid reasoning level '{level}'. "
+                    f"Valid: {sorted(_providers.VALID_REASONING_LEVELS)}.")
+    limits = payload.get("free_limits")
+    if limits is not None:
+        if not isinstance(limits, dict):
+            return _err("'free_limits' must be an object.")
+        for k, v in limits.items():
+            if k not in _providers.FREE_LIMIT_KEYS:
+                return _err(f"Invalid limit key '{k}'. "
+                            f"Valid: {list(_providers.FREE_LIMIT_KEYS)}.")
+            if v is not None and not isinstance(v, int):
+                return _err(f"Limit '{k}' must be an integer or null.")
+    free = payload.get("free")
+    if free is not None and not isinstance(free, bool):
+        return _err("'free' must be a boolean.")
+
+    def _mutate(curated: dict) -> None:
+        if caps is not None:
+            target = curated.setdefault("model_capabilities", {})
+            if caps:
+                target[model] = sorted({c.lower() for c in caps})
+            else:
+                target.pop(model, None)
+        if level is not None:
+            target = curated.setdefault("model_reasoning", {})
+            if level:
+                target[model] = level
+            else:
+                target.pop(model, None)
+        if limits is not None:
+            target = curated.setdefault("free_limits", {})
+            if limits:
+                target[model] = limits
+            else:
+                target.pop(model, None)
+        if free is not None:
+            entries = curated.setdefault("believed_free", [])
+            present = model in {e.lower() for e in entries if isinstance(e, str)}
+            if free and not present:
+                entries.append(model)
+            elif not free and present:
+                curated["believed_free"] = [
+                    e for e in entries
+                    if not (isinstance(e, str) and e.lower() == model)
+                ]
+
+    if not _curated_write(_mutate):
+        return _err("Failed to persist routing metadata.", 500)
+    rows = _routing_rows(_load(), model)
+    return jsonify({"model": next((r for r in rows if r["id"] == model), {"id": model})})
+
+
+@bp.route("/admin/api/refresh", methods=["POST"])
+def api_refresh():
+    """Run a maintenance pass now instead of waiting for its cadence.
+
+    Every refresh was cadence-driven with no way to ask for one, so a user who
+    corrected a provider or added a key had to wait out the interval to see the
+    routing change.
+    """
+    payload = request.get_json(silent=True) or {}
+    which = payload.get("what", "routing_metadata")
+    from . import server
+    try:
+        if which == "routing_metadata":
+            state = server._recompute_routing_metadata(_load(), None)
+            if state is None:
+                return _err("Refresh learned nothing; previous state kept.", 409)
+            return jsonify({
+                "refreshed": which,
+                "models": len(state.get("by_model") or {}),
+                "last_refresh_at": state.get("last_refresh_at"),
+            })
+        if which == "flagship":
+            server._maybe_fire_flagship_refresh(
+                _load(), _flagship_cfg_forced(), None)
+            return jsonify({"refreshed": which, "started": True})
+    except Exception as e:  # noqa: BLE001
+        print(f"[admin:api_refresh] {e}")
+        traceback.print_exc()
+        return _err(f"Refresh failed: {e}", 500)
+    return _err(f"Unknown refresh target '{which}'. "
+                "Valid: routing_metadata, flagship.")
+
+
+def _flagship_cfg_forced() -> dict:
+    """Flagship config with the cadence gate removed, for an on-demand refresh."""
+    from .config import flagship_tier_cfg
+    cfg = dict(flagship_tier_cfg(_load()))
+    cfg["refresh_frequency_days"] = 0
+    return cfg
+
 
 @bp.route("/admin/api/virtual-models", methods=["GET"])
 def api_virtual_models():

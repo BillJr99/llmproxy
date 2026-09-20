@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import requests
 
+from llmproxy.providers import capabilities_from_listing  # type: ignore
+
 from .base import Evidence, Source
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/models"
@@ -56,25 +58,16 @@ class OpenRouterSource(Source):
 def _capabilities(model: dict) -> list[str]:
     """Map an OpenRouter model entry to llmproxy capability tags.
 
-    Derives from `supported_parameters` (tools / reasoning / structured-output)
-    and `architecture.input_modalities` (image -> vision).
+    Thin adapter over `llmproxy.providers.capabilities_from_listing`, the one
+    implementation shared with the route-cache rebuild and the routing-metadata
+    refresh — deriving the tags here as well is how the copies drifted before.
+
+    The shared helper returns a set; `Evidence.capabilities` is documented as a
+    `list[str]`, so the tags are sorted on the way out. Alphabetical order is
+    arbitrary but deterministic, which is what keeps the serialized sidecar
+    byte-stable across re-scrapes.
     """
-    supported = model.get("supported_parameters") or []
-    if not isinstance(supported, list):
-        supported = []
-    modalities = (model.get("architecture") or {}).get("input_modalities") or []
-    if not isinstance(modalities, list):
-        modalities = []
-    caps: list[str] = []
-    if "tools" in supported:
-        caps.append("tools")
-    if "image" in modalities:
-        caps.append("vision")
-    if "reasoning" in supported:
-        caps.append("reasoning")
-    if "structured_outputs" in supported or "response_format" in supported:
-        caps.append("json")
-    return caps
+    return sorted(capabilities_from_listing(model))
 
 
 def _pricing(prompt_price: float, completion_price: float) -> dict | None:
