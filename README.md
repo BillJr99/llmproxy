@@ -3063,6 +3063,61 @@ list is the intended answer:
 }
 ```
 
+**A pin may be written either way.** A qualified id pins that one routing
+target; a bare upstream id pins the model on *every* provider serving it, which
+is usually what "pin this model wherever I have it" means:
+
+```json
+"flagship_tier": {
+  "pin": [
+    "atria-asi/Atria-Dawn-Preview",   // this provider's copy only
+    "gemini-3.7-flash"                // every provider serving it
+  ]
+}
+```
+
+A `/` cannot tell the forms apart, because upstream ids routinely contain one
+(`gmi` serves `google/gemini-3.8-flash`, `openrouter` serves
+`qwen/qwen3.8-27b:free`). Resolution is therefore by precedence: an **exact
+qualified match first, the bare upstream id second**, so the more specific
+reading always wins. This mirrors [`believed_free`](#believed_free), the key a
+pin is usually paired with, which has always accepted either form.
+
+The *normalized* key is deliberately **not** a third option. That join is
+heuristic — it is what lets one benchmark score cover several spellings of the
+same weights — and honouring it here would let a pin reach models you never
+named. A pin is an explicit instruction, so it stays literal.
+
+Because `exclude` is applied last, it still beats a pin, including beating one
+arm of an expanded bare pin — which is how you pin a model everywhere except on
+the one provider whose copy of it is broken:
+
+```json
+"flagship_tier": {
+  "pin": ["gemini-3.7-flash"],
+  "exclude": ["someprovider/gemini-3.7-flash"]
+}
+```
+
+<a name="flagship-trial-credits"></a>
+#### Getting a pinned model into `flagship__free`
+
+A pin alone reaches `llmproxy/flagship`, **not** `flagship__free`. The free pool
+is the intersection of flagship membership and *free* models, and "free" is
+decided by [`believed_free`](#believed_free) rather than by membership — so
+trial credits, a promotional window or a personal allowance do not make a model
+free as far as llmproxy is concerned. Say so explicitly, with both keys:
+
+```json
+"flagship_tier": { "pin": ["gmi/google/gemini-3.7-flash"] },
+"believed_free": ["gmi/google/gemini-3.7-flash"]
+```
+
+There is a safety valve worth knowing about. If that model ever answers a
+request reporting a real cost, it lands in `cost_observed_free_tier` and is
+treated as paid from then on, whatever `believed_free` says — which is exactly
+what should happen when a trial runs out.
+
 A pin bypasses the spec veto too, since an unscraped provider has no
 capability data to check. The refresh logs a warning naming any pinned id it
 could not verify, so an unnoticed typo does not silently do nothing.

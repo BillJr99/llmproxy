@@ -303,3 +303,102 @@ def test_an_excluded_member_carries_no_score():
                           _cfg(start_percentile=0.0, exclude=["p/top"]))
     assert "p/top" not in sel.scores
     assert "p/next" in sel.scores
+
+
+# ── pins may be written qualified or bare ───────────────────────────────────
+#
+# `believed_free` — the key a pin is normally paired with, since a pin alone
+# reaches llmproxy/flagship but not flagship__free — has always matched either
+# form. `pin` matched only the qualified one, so an unqualified pin was added
+# to `members` verbatim, where no router could resolve it: it sat in the
+# membership file doing nothing behind a warning that never said why.
+
+def test_a_bare_upstream_id_pins_every_provider_serving_it(_=None):
+    """"Pin this model wherever I have it" is the common intent."""
+    pool = [
+        _c("cheapo", "glm-5.3", score=10.0, free=True),
+        _c("pricey", "glm-5.3", score=10.0),
+        _c("other", "something-else", score=99.0),
+    ]
+    sel = select_flagship(pool, _cfg(start_percentile=0.99, pin=["glm-5.3"]))
+    assert "cheapo/glm-5.3" in sel.members
+    assert "pricey/glm-5.3" in sel.members
+    assert sel.unverified_pins == []
+
+
+def test_a_qualified_id_pins_exactly_one_target(_=None):
+    """Naming a provider must stay precise, not expand to its siblings."""
+    pool = [
+        _c("cheapo", "glm-5.3", score=None),
+        _c("pricey", "glm-5.3", score=None),
+        _c("other", "strong-model", score=99.0),
+    ]
+    sel = select_flagship(pool, _cfg(start_percentile=0.99, pin=["cheapo/glm-5.3"]))
+    assert "cheapo/glm-5.3" in sel.members
+    assert "pricey/glm-5.3" not in sel.members
+
+
+def test_a_qualified_reading_wins_over_a_bare_one(_=None):
+    """'/' cannot tell the forms apart, so precedence has to.
+
+    Upstream ids routinely contain a slash — gmi serves 'google/gemini-3.8',
+    openrouter serves 'qwen/qwen3.8-27b:free' — so one string can be a valid
+    qualified id AND a real bare upstream id. The more specific reading wins.
+    """
+    pool = [
+        # A provider literally named 'google' serving 'gemini-3.8'...
+        _c("google", "gemini-3.8", score=None),
+        # ...and a gateway whose upstream id is the string 'google/gemini-3.8'.
+        _c("gmi", "google/gemini-3.8", score=None),
+        _c("other", "strong-model", score=99.0),
+    ]
+    sel = select_flagship(pool, _cfg(start_percentile=0.99, pin=["google/gemini-3.8"]))
+    assert "google/gemini-3.8" in sel.members
+    assert "gmi/google/gemini-3.8" not in sel.members
+
+
+def test_a_bare_pin_still_bypasses_the_bar_and_the_spec_gate(_=None):
+    """A pin's whole purpose is admitting what the rules would reject."""
+    pool = [
+        _c("cheapo", "unscored-model", score=None, tools=False, ctx=1024),
+        _c("other", "strong-model", score=99.0),
+    ]
+    sel = select_flagship(pool, _cfg(start_percentile=0.99, require_tools=True,
+                                     min_context=200000, pin=["unscored-model"]))
+    assert "cheapo/unscored-model" in sel.members
+
+
+def test_a_pin_matching_nothing_is_still_honoured_and_reported(_=None):
+    """GUARD: the existing escape hatch for a model nothing scraped describes."""
+    pool = [_c("other", "strong-model", score=99.0)]
+    sel = select_flagship(pool, _cfg(start_percentile=0.99, pin=["ghost-model"]))
+    assert "ghost-model" in sel.members
+    assert sel.unverified_pins == ["ghost-model"]
+
+
+def test_exclude_beats_one_arm_of_an_expanded_pin(_=None):
+    """Pin a model everywhere except the provider whose copy is broken."""
+    pool = [
+        _c("good", "glm-5.3", score=10.0),
+        _c("broken", "glm-5.3", score=10.0),
+    ]
+    sel = select_flagship(pool, _cfg(start_percentile=0.99, pin=["glm-5.3"],
+                                     exclude=["broken/glm-5.3"]))
+    assert "good/glm-5.3" in sel.members
+    assert "broken/glm-5.3" not in sel.members
+
+
+def test_the_normalized_key_is_not_a_third_way_to_pin(_=None):
+    """GUARD: the heuristic join stays out of the pin path.
+
+    normalize_model_id('glm-5.3') is 'glm53'. Expanding that would let a pin
+    reach models the user never named, which is the failure the spec gate was
+    fixed to stop making. An explicit instruction stays literal.
+    """
+    pool = [
+        _c("cheapo", "glm-5.3", score=None),
+        _c("other", "strong-model", score=99.0),
+    ]
+    sel = select_flagship(pool, _cfg(start_percentile=0.99, pin=["glm53"]))
+    assert "cheapo/glm-5.3" not in sel.members
+    assert sel.unverified_pins == ["glm53"]
