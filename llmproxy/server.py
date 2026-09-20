@@ -10641,6 +10641,165 @@ def failure_report() -> Response:
     })
 
 
+# ---------------------------------------------------------------------------
+# Read-only introspection: /v1/providers and /v1/config
+# ---------------------------------------------------------------------------
+#
+# Both existed only as 404-shaped 400s before: no route matched, so they fell
+# into the OpenAI passthrough below, which demands "?provider=<name>" to know
+# which upstream to forward to. A client asking llmproxy about ITSELF got
+# "Supply '?provider=<name>'", which reads like a malformed request rather than
+# like a missing endpoint.
+#
+# They are deliberately in the same family as /v1/usage and /v1/failures:
+# unauthenticated, read-only, and carrying NO secrets. That last one is a hard
+# constraint rather than an aspiration, which is why neither endpoint emits a
+# key even in masked form. A mask still leaks its last characters, and these
+# endpoints answer to anyone who can reach the port. Whether a credential is
+# configured is the only fact about it worth publishing, and it is a bool.
+#
+# The token-gated /admin/api/config remains the place to read or edit the
+# actual configuration, masks included.
+
+# Key names whose VALUES never appear in these responses, matched case-
+# insensitively as substrings. Belt-and-braces: everything below is assembled
+# field by field rather than copied wholesale, so nothing secret should reach
+# the filter in the first place. It exists because "should" is doing load-
+# bearing work in that sentence, and a future key added to the server block is
+# exactly how that assumption breaks.
+_SECRET_KEY_HINTS = ("key", "token", "secret", "password", "passwd", "credential")
+
+
+def _looks_secret(name: str) -> bool:
+    """True when a config field name suggests it holds a credential.
+
+    ``api_key_set`` and friends are deliberately NOT caught: the suffix marks a
+    boolean derived from a secret, which is the safe form and the whole point of
+    publishing it.
+    """
+    lowered = name.lower()
+    if lowered.endswith(("_set", "_is_env", "_count")):
+        return False
+    return any(hint in lowered for hint in _SECRET_KEY_HINTS)
+
+
+def _public_config_block(block: dict) -> dict:
+    """A copy of *block* with credential-shaped fields dropped entirely.
+
+    Dropped rather than masked, for the reason in the note above. Named apart
+    from ``_scrub_secrets``, which redacts secrets out of free TEXT for the
+    failure log: same intent, different input, and one shadowing the other is a
+    bug that only shows up when a request actually fails.
+    """
+    return {k: v for k, v in block.items()
+            if isinstance(k, str) and not _looks_secret(k)}
+
+
+def _provider_summary(name: str, cfg: dict, route_counts: dict[str, int]) -> dict:
+    """One provider's public shape: what it is, not how to authenticate to it."""
+    base_url = provider_base_url(cfg)
+    try:
+        accounts = provider_accounts(cfg)
+    except Exception:  # noqa: BLE001 — introspection must not fail on bad config
+        accounts = []
+    return {
+        "name": name,
+        "base_url": base_url,
+        "api_key_set": bool(provider_api_key(cfg)),
+        "accounts": len(accounts),
+        "account_strategy": cfg.get("account_strategy"),
+        "models": route_counts.get(name, 0),
+        # Both are per-provider switches an operator is likely to be checking
+        # when they call this at all: "why is this provider not in my free pool"
+        # is usually one of the two.
+        "expose_to_virtual_models": _provider_exposes_to_virtual_models(cfg),
+        "local": _is_local_url(base_url),
+        "model_filter": cfg.get("model_filter"),
+    }
+
+
+@app.route("/v1/providers", methods=["GET"])
+@app.route("/providers", methods=["GET"])
+def list_providers() -> Response:
+    """The configured providers, with no credentials.
+
+    ``?provider=<name>`` is still honoured as a passthrough to that upstream's
+    own ``/v1/providers``, so adding this route cannot break anyone who was
+    relying on the previous behaviour. Without it, the question is about
+    llmproxy and is answered here.
+    """
+    if request.args.get("provider"):
+        return passthrough("providers")
+
+    config = load_config()
+    route_counts: dict[str, int] = {}
+    for provider_name, _upstream in _get_distinct_routes():
+        route_counts[provider_name] = route_counts.get(provider_name, 0) + 1
+
+    providers = [
+        _provider_summary(name, cfg, route_counts)
+        for name, cfg in sorted((config.get("providers") or {}).items())
+        if isinstance(cfg, dict)
+    ]
+    return jsonify({
+        "object": "llmproxy.providers",
+        "total": len(providers),
+        # A provider configured but serving nothing is the single most common
+        # "why is my model missing" cause, and counting it here saves diffing
+        # this response against /v1/models by hand.
+        "serving_models": sum(1 for p in providers if p["models"]),
+        "providers": providers,
+    })
+
+
+@app.route("/v1/config", methods=["GET"])
+@app.route("/config", methods=["GET"])
+def effective_config() -> Response:
+    """The EFFECTIVE configuration llmproxy is running on, with no credentials.
+
+    Effective, not config.json's contents: the routing keys are merged from four
+    layers (provider defaults, learned, listing, curated) before the router sees
+    them, so reading config.json alone shows a deployment as having no free
+    models and no capability data at all. What is reported here is what actually
+    decides routing.
+
+    The routing keys are summarised by SIZE rather than listed. They run to
+    thousands of entries on an ordinary deployment, which is a different request
+    from "show me my settings" — ``/admin/api/config`` and
+    ``/admin/api/routing-metadata`` serve that one, with editing.
+    """
+    if request.args.get("provider"):
+        return passthrough("config")
+
+    config = load_config()
+    merged = _merged_routing_config(config)
+
+    def _size(key: str) -> int:
+        value = merged.get(key)
+        return len(value) if isinstance(value, (list, dict)) else 0
+
+    admin_cfg = config.get("admin") or {}
+    return jsonify({
+        "object": "llmproxy.config",
+        "version": __version__,
+        "config_path": str(get_config_path()),
+        "server": _public_config_block(config.get("server") or {}),
+        "flagship_tier": flagship_tier_cfg(config),
+        "providers": sorted((config.get("providers") or {}).keys()),
+        # Sizes, not contents. See the docstring.
+        "routing_metadata": {key: _size(key) for key in _ROUTING_CONFIG_KEYS},
+        "request_log": _request_log_mode(config),
+        "free_tier_cache_affinity": _free_tier_cache_affinity_enabled(config),
+        "allow_implicit_paid": _allow_implicit_paid(config),
+        "admin": {
+            "enabled": bool(admin_cfg.get("enabled", True) is not False),
+            # Whether a token is configured, never the token.
+            "token_set": bool(admin_cfg.get("token")
+                              or os.environ.get("LLMPROXY_ADMIN_TOKEN")),
+        },
+    })
+
+
 @app.route("/v1/failures/reset", methods=["POST"])
 def failure_reset() -> Response:
     """Clear this worker's failure ring. Gated by the admin auth guard."""

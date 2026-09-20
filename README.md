@@ -1342,7 +1342,7 @@ and on a pool whose last candidate is the only one left, dead-end the rotation.
 A forced-capability miss is likewise not ill health: the model answered, it just
 lacks the capability, which is what capability ordering is for.
 
-Per-model health is reported in [`GET /v1/usage`](#token--cost-accounting--getv1usage)
+Per-model health is reported in [`GET /v1/usage`](#usage-endpoint)
 as `success_rate`, `avg_latency_ms`, `health_samples` and `health_score`. Read
 `health_samples` alongside the rate — a `success_rate` of 1.0 over 0 samples
 means untried, not proven good. Like all other counters this is in-memory and
@@ -2620,6 +2620,7 @@ reorder them with up/down buttons, and remove entries — changes are saved
 immediately.
 
 <a name="usage-accounting"></a>
+<a name="usage-endpoint"></a>
 ### Token + cost accounting — `GET /v1/usage`
 
 The proxy tracks tokens and dollar cost for every request it serves and exposes
@@ -3184,7 +3185,7 @@ A `/` cannot tell the forms apart, because upstream ids routinely contain one
 (`gmi` serves `google/gemini-3.8-flash`, `openrouter` serves
 `qwen/qwen3.8-27b:free`). Resolution is therefore by precedence: an **exact
 qualified match first, the bare upstream id second**, so the more specific
-reading always wins. This mirrors [`believed_free`](#believed_free), the key a
+reading always wins. This mirrors [`believed_free`](#free-tier-provenance), the key a
 pin is usually paired with, which has always accepted either form.
 
 The *normalized* key is deliberately **not** a third option. That join is
@@ -3208,7 +3209,7 @@ the one provider whose copy of it is broken:
 
 A pin alone reaches `llmproxy/flagship`, **not** `flagship__free`. The free pool
 is the intersection of flagship membership and *free* models, and "free" is
-decided by [`believed_free`](#believed_free) rather than by membership — so
+decided by [`believed_free`](#free-tier-provenance) rather than by membership — so
 trial credits, a promotional window or a personal allowance do not make a model
 free as far as llmproxy is concerned. Say so explicitly, with both keys:
 
@@ -4203,6 +4204,10 @@ All endpoints mirror the OpenAI API.
 | GET    | `/version`              | Returns the running llmproxy version      |
 | GET    | `/v1/models`            | Aggregate model list from all providers   |
 | GET    | `/v1/models/<model_id>` | Single model lookup                       |
+| GET    | [`/v1/providers`](#v1-providers-and-v1-config) | Configured providers, no credentials |
+| GET    | [`/v1/config`](#v1-providers-and-v1-config)    | Effective settings, no credentials   |
+| GET    | [`/v1/usage`](#usage-endpoint) | Token, cost and health accounting |
+| GET    | [`/v1/failures`](#v1-failures) | Which models have been failing, and why |
 | POST   | `/v1/chat/completions`  | Chat completions (streaming supported)    |
 | POST   | `/v1/completions`       | Legacy text completions (chat fallback)   |
 | POST   | `/v1/responses`         | Responses API (streaming supported)       |
@@ -4214,6 +4219,46 @@ All endpoints mirror the OpenAI API.
 For pass-through endpoints not listed above (e.g., `/v1/audio/transcriptions`),
 the proxy routes based on the `model` field in the request body.  For
 GET/DELETE requests without a model field, append `?provider=<name>` to the URL.
+
+<a name="v1-providers-and-v1-config"></a>
+### `GET /v1/providers` and `GET /v1/config` — ask llmproxy about itself
+
+Both are read-only, need no auth, and carry **no credentials**.
+
+```bash
+curl -s localhost:8080/v1/providers | jq
+curl -s localhost:8080/v1/config    | jq
+```
+
+`/v1/providers` lists every configured provider with the facts that explain its
+behaviour rather than the ones that would let you impersonate it: base URL,
+how many models it is currently serving, how many accounts it has, its
+`model_filter`, and the two switches that account for nearly every "why is this
+provider missing from my pool" question,
+`expose_to_virtual_models` and whether its base URL
+is local (local providers route via `llmproxy/local`, never `/free`).
+
+`/v1/config` reports the **effective** configuration, which is not the same as
+the contents of `config.json`. The five routing keys are merged from four layers
+before the router sees them, so reading `config.json` alone shows a deployment
+as having no free models and no capability data at all. Those keys are reported
+by **size**, not listed: they run to thousands of entries, and dumping them is a
+different request that [`/admin/api/routing-metadata`](#web-admin-ui) already
+serves, with editing.
+
+> **Neither endpoint emits an API key, not even masked.** A mask still leaks its
+> last characters, and these endpoints answer to anyone who can reach the port.
+> Whether a credential is configured is the only fact about it worth publishing,
+> and it is reported as a bool (`api_key_set`, `admin.token_set`). A field whose
+> *name* looks credential-shaped is dropped from the `server` block outright, so
+> a setting added there later cannot leak by default. To read or edit the real
+> configuration, masks included, use the token-gated
+> [web admin API](#web-admin-ui).
+
+Both routes still honour `?provider=<name>` as a pass-through to that upstream's
+own `/v1/providers` or `/v1/config`, so adding them cannot break a client that
+was relying on the previous behaviour. Without the parameter, the question is
+about llmproxy and is answered locally.
 
 ---
 
