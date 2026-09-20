@@ -3143,11 +3143,7 @@
           "tokens_per_minute": null,
           "tokens_per_day": null
         }
-      },
-      "cost_observed_free_tier": [
-        "groq/llama-3.3-70b-versatile",
-        "groq/openai/gpt-oss-120b"
-      ]
+      }
     },
     "cloudflare-workers": {
       "display": "Cloudflare Workers AI",
@@ -17006,10 +17002,13 @@
           "tools"
         ],
         "xkiro/qwen/qwen3-omni-flash:free": [
-          "tools"
+          "tools",
+          "vision"
         ],
         "xkiro/qwen/qwen3-vl-plus:free": [
-          "tools"
+          "reasoning",
+          "tools",
+          "vision"
         ],
         "xkiro/qwen/qwen3.5-397b-a17b:free": [
           "json",
