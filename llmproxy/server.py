@@ -2210,6 +2210,17 @@ def _rebuild_route_cache(providers_cfg: dict, timeout: int,
         return []
 
     all_models: list[dict] = []
+    # Announce the sweep BEFORE it runs, not only when it finishes. A rebuild
+    # fans out to every provider's /models and can take seconds; logged only on
+    # completion, a slow one is indistinguishable from a hang, and the request
+    # waiting on it shows nothing between its arrival line and its first
+    # candidate. One line here is the difference between "it is working" and an
+    # hour of guessing.
+    _rebuild_started = time.monotonic()
+    logger.info(
+        "[server:_rebuild_route_cache] fetching listings from %d provider(s)…",
+        len(providers_cfg),
+    )
 
     with ThreadPoolExecutor(max_workers=min(len(providers_cfg), 10)) as executor:
         futures = {}
@@ -2273,14 +2284,19 @@ def _rebuild_route_cache(providers_cfg: dict, timeout: int,
         _model_context_cache.update(new_context)
         _model_capability_cache.clear()
         _model_capability_cache.update(new_caps)
+    # The listing layer is built from the capability snapshot just swapped, so
+    # every memoized merge is now stale. Outside the lock: the bump takes a
+    # different one and nothing here needs them held together.
+    _bump_routing_generation()
 
     logger.info(
         # Report MODELS, not cache entries. The cache is dual-keyed, so
         # len(new_cache) is twice the model count while len(new_context) is not
         # — printed side by side they read as though at most half the models
         # have a known context window.
-        "[server:_rebuild_route_cache] %d model(s) (%d with a known context window)",
+        "[server:_rebuild_route_cache] %d model(s) (%d with a known context window) in %.1fs",
         len(set(new_cache.values())), len(new_context),
+        time.monotonic() - _rebuild_started,
     )
     return all_models
 
@@ -7939,6 +7955,62 @@ _ROUTING_CONFIG_KEYS = _ROUTING_LIST_KEYS + _ROUTING_DICT_KEYS
 _routing_sidecar_cache: tuple[str, float, dict] | None = None
 _routing_sidecar_lock = threading.Lock()
 
+# Memoized output of _merged_routing_config.
+#
+# The merge rebuilds four layers and copies the whole per-provider capability
+# snapshot, so it costs milliseconds — and the per-route helpers call it once
+# each, twice per model. On a deployment serving a few thousand models that is
+# several thousand merges to assemble ONE candidate list, tens of seconds of
+# pure CPU, holding the GIL against every other worker thread. It is also
+# entirely redundant: every input is identical across those calls.
+#
+# Invalidation is by generation counter rather than by timestamp, so a change
+# is never merely *probably* picked up. The counter is bumped wherever an input
+# changes: the capability/context snapshot (a route-cache rebuild) and the
+# sidecar (a refresh or an admin write). The sidecar's own path+mtime is folded
+# into the key as well, which catches an edit made outside this process.
+_routing_merge_cache: dict[tuple, dict] = {}
+_routing_merge_lock = threading.Lock()
+_routing_layer_generation: int = 0
+
+
+def _bump_routing_generation() -> None:
+    """Invalidate every memoized routing merge. Cheap; call it liberally."""
+    global _routing_layer_generation
+    with _routing_merge_lock:
+        _routing_layer_generation += 1
+        _routing_merge_cache.clear()
+
+
+def _routing_sidecar_key(config_path: str | None = None) -> tuple:
+    """(path, mtime) for the sidecar, so an out-of-process edit invalidates."""
+    try:
+        path = get_routing_metadata_path(config_path)
+        return (str(path), path.stat().st_mtime if path.exists() else 0.0)
+    except Exception:  # noqa: BLE001 — routing must never fail on a stat
+        return ("", 0.0)
+
+
+def _config_routing_fingerprint(config: dict) -> tuple:
+    """A stable key for the routing keys carried by *config* itself.
+
+    config.json is an inbox that ``_migrate_config_routing_keys`` drains at
+    startup, so after the first boot these keys are normally absent and this
+    returns a constant — which is what keeps the common path free. Only a
+    deployment that has not migrated, or one that had keys hand-added since,
+    pays for serialising them.
+    """
+    parts = []
+    for key in (*_ROUTING_LIST_KEYS, *_ROUTING_DICT_KEYS):
+        val = config.get(key)
+        if not val:
+            continue
+        try:
+            parts.append((key, json.dumps(val, sort_keys=True, default=str)))
+        except Exception:  # noqa: BLE001 — an unserialisable shape must not fail routing
+            parts.append((key, repr(val)))
+    return tuple(parts)
+
 
 def _load_routing_sidecar(config_path: str | None = None) -> dict:
     """The learned layer, re-read whenever the file's mtime changes."""
@@ -7962,10 +8034,15 @@ def _load_routing_sidecar(config_path: str | None = None) -> dict:
 
 
 def _reset_routing_sidecar_cache() -> None:
-    """Drop the memoized sidecar. For tests and for post-refresh invalidation."""
+    """Drop the memoized sidecar. For tests and for post-refresh invalidation.
+
+    Also invalidates the merged-config memo, which is derived from it: dropping
+    one without the other would leave the merge serving the old sidecar's facts.
+    """
     global _routing_sidecar_cache
     with _routing_sidecar_lock:
         _routing_sidecar_cache = None
+    _bump_routing_generation()
 
 
 # The two nested sources disagree about qualification, and always have.
@@ -8186,6 +8263,17 @@ def _merged_routing_config(config: dict, *, include_curated: bool = True) -> dic
     defaults this is exactly the config that was passed in, which is what makes
     an un-migrated deployment behave bit-for-bit as it did before.
     """
+    cache_key = (
+        include_curated,
+        _routing_sidecar_key(),
+        _routing_layer_generation,
+        _config_routing_fingerprint(config),
+    )
+    with _routing_merge_lock:
+        hit = _routing_merge_cache.get(cache_key)
+    if hit is not None:
+        return hit
+
     try:
         # config.json is deliberately NOT a layer. It is the file a person hand
         # edits, and machine processes were writing it too — the local-model
@@ -8229,6 +8317,11 @@ def _merged_routing_config(config: dict, *, include_curated: bool = True) -> dic
                     else:
                         acc[k] = v
             merged[key] = acc
+        with _routing_merge_lock:
+            # Bounded purely by how many distinct inputs exist at once, which is
+            # one per generation in practice; a stale generation's entries are
+            # dropped wholesale by _bump_routing_generation.
+            _routing_merge_cache[cache_key] = merged
         return merged
     except Exception as e:  # noqa: BLE001 — never fail a request over a merge
         print(f"[server:_merged_routing_config] {e}")
@@ -8289,6 +8382,28 @@ def _is_cost_observed(provider_name: str, upstream_id: str, config: dict) -> boo
     return f"{provider_name}/{upstream_id}".lower() in _normalized_cost_observed(config)
 
 
+def _is_model_free_with(
+    provider_name: str,
+    upstream_id: str,
+    believed_free: set[str],
+    cost_observed: set[str],
+) -> bool:
+    """``_is_model_free`` against sets the caller already has.
+
+    The loops that walk every route need this. Deriving the two sets costs a
+    full routing-config merge, and doing it per route turned assembling one
+    candidate list into thousands of merges. The merge is memoized now, so this
+    is no longer the difference between seconds and minutes — but a hot loop
+    should not depend on a cache being warm to avoid being quadratic, and
+    hoisting the invariant out is simply the right shape.
+    """
+    qualified = f"{provider_name}/{upstream_id}".lower()
+    if qualified in cost_observed:
+        return False
+    uid = upstream_id.lower()
+    return "free" in uid or uid in believed_free or qualified in believed_free
+
+
 def _is_model_free(provider_name: str, upstream_id: str, config: dict) -> bool:
     """True when a model is treated as free-tier: its upstream id contains 'free'
     or it appears (bare or provider-qualified) in config['believed_free'].
@@ -8298,16 +8413,12 @@ def _is_model_free(provider_name: str, upstream_id: str, config: dict) -> bool:
     or it lingers in believed_free. This makes /free avoid it immediately.
 
     Shared by the /free candidate selector and the runtime cost flagger so both
-    agree on what "free" means.
+    agree on what "free" means. A caller in a loop should hoist the two sets out
+    and use ``_is_model_free_with`` instead.
     """
-    if _is_cost_observed(provider_name, upstream_id, config):
-        return False
-    believed_free = _normalized_believed_free(config)
-    uid = upstream_id.lower()
-    return (
-        "free" in uid
-        or uid in believed_free
-        or f"{provider_name}/{upstream_id}".lower() in believed_free
+    return _is_model_free_with(
+        provider_name, upstream_id,
+        _normalized_believed_free(config), _normalized_cost_observed(config),
     )
 
 
@@ -8321,6 +8432,10 @@ def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
     runtime filter ensures /free never leaks a local model even before sync runs.
     """
     config = load_config()
+    # Hoisted: both sets are invariant across the walk, and deriving either one
+    # costs a full routing-config merge.
+    believed_free = _normalized_believed_free(config)
+    cost_observed = _normalized_cost_observed(config)
     candidates = []
     for provider_name, upstream_id in _get_distinct_routes():
         provider_cfg = get_provider(config, provider_name)
@@ -8331,7 +8446,7 @@ def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
         # Skip local providers — they belong to the /local family, not /free.
         if _is_local_url(provider_base_url(provider_cfg)):
             continue
-        if _is_model_free(provider_name, upstream_id, config):
+        if _is_model_free_with(provider_name, upstream_id, believed_free, cost_observed):
             candidates.append((provider_name, provider_cfg, upstream_id))
     return candidates
 

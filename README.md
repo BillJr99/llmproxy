@@ -1022,6 +1022,14 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
 > `free_tier.probe.enabled`, `free_tier.probe.autoremove`,
 > `free_tier.probe.frequency_days`, and `providers_pr.{enabled,repo,base,branch,token}`.
 
+> **`model_filter` doubles as the fallback for a provider with no catalog.**
+> When the `/models` fetch fails outright, llmproxy synthesizes the model list
+> from `model_filter` rather than leaving the provider with nothing, so a
+> provider that publishes no catalog is still fully usable — you just name its
+> models yourself. This applies only to a *failed* fetch: a provider whose
+> catalog loads and then filters down to zero models is a filter result, not a
+> discovery failure, and is left alone.
+
 `model_filter` is an optional list of upstream model IDs to allow (without the
 provider prefix).  It is not set by default in `config.example.json`.  Set it to
 `null` or omit it to permit all models from that provider.  It can be used as a
@@ -3304,6 +3312,7 @@ own copy of the newest templates), it offers to add it there and to
 > | **Cloudflare Workers AI** | HTTP 405 — no `GET /v1/models` | `models_url` → `…/ai/models/search`, `models_id_field: "name"`, `models_keep_task: "Text Generation"` |
 > | **Cloudflare AI Gateway** | HTTP 401 — gateway proxies inference only, no catalog | `model_filter` (synthesized); a 401 also means the API token is missing/under-scoped for Workers AI |
 > | **Hugging Face Inference** | Returns HTML rather than JSON for `/v1/models` | `model_filter` (synthesized) |
+> | **Unbiased AI** | HTTP 404 `unknown_url` — no catalog endpoint. An *unauthenticated* probe returns 401 on every path, because the gateway checks the key before routing, so a 401 there means a missing key rather than a missing endpoint | `model_filter: ["pareto"]` (synthesized) |
 > | **Open WebUI** (self-hosted, e.g. behind a custom domain) | HTTP 200 but HTML — the OpenAI API lives under `/api` | set `base_url` to `https://<host>/api` |
 
 ---
