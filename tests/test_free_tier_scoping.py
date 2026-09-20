@@ -201,3 +201,71 @@ def test_the_free_candidate_pool_excludes_the_leaked_target(S, monkeypatch):
     picked = {(pn, um) for pn, _cfg, um in S._get_free_model_candidates()}
     assert ("gmi", GMI_UPSTREAM) not in picked
     assert ("google", GOOGLE_UPSTREAM) in picked
+
+
+# ── marking a whole provider paid ───────────────────────────────────────────
+#
+# An aggregator re-serves other vendors' upstream ids, so a provider with no
+# free tier of its own still collects free-tier beliefs written about those ids
+# elsewhere. Listing its catalog model by model in cost_observed_free_tier is
+# tedious and permanently out of date, so `<provider>/*` covers the provider.
+
+def test_a_wildcard_entry_marks_every_model_on_that_provider_paid(tmp_path, monkeypatch):
+    S = _server(tmp_path, monkeypatch, cost_observed_free_tier=["gmi/*"])
+    cfg = S.load_config()
+    assert S._is_model_free("gmi", GMI_UPSTREAM, cfg) is False
+    assert S._is_model_free("gmi", "anything-at-all", cfg) is False
+
+
+def test_a_wildcard_beats_an_id_that_spells_free(tmp_path, monkeypatch):
+    """The suffix says what the ORIGINAL vendor charges. A reseller billing for
+    everything routinely re-serves ':free' ids, so the provider-wide mark has
+    to outrank the spelling."""
+    S = _server(tmp_path, monkeypatch, cost_observed_free_tier=["gmi/*"])
+    assert S._is_model_free("gmi", "qwen/qwen3.8-27b:free", S.load_config()) is False
+
+
+def test_a_wildcard_beats_an_explicit_believed_free_entry(tmp_path, monkeypatch):
+    """Cost observed has always outranked belief; that does not change when it
+    is expressed per provider."""
+    S = _server(tmp_path, monkeypatch,
+                believed_free=[f"gmi/{GMI_UPSTREAM}"],
+                cost_observed_free_tier=["gmi/*"])
+    assert S._is_model_free("gmi", GMI_UPSTREAM, S.load_config()) is False
+
+
+def test_a_wildcard_says_nothing_about_other_providers(tmp_path, monkeypatch):
+    """GUARD: it is scoped to the provider named, like every other entry in
+    this key."""
+    S = _server(tmp_path, monkeypatch, cost_observed_free_tier=["gmi/*"])
+    assert S._is_model_free("google", GOOGLE_UPSTREAM, S.load_config()) is True
+
+
+def test_a_bare_provider_name_is_not_a_wildcard(tmp_path, monkeypatch):
+    """GUARD: a bare name is indistinguishable from an unqualified model id,
+    which is a meaningful entry in these lists. Only the explicit `/*` spelling
+    marks a provider."""
+    S = _server(tmp_path, monkeypatch, cost_observed_free_tier=["gmi"])
+    assert S._is_model_free("gmi", "qwen/qwen3.8-27b:free", S.load_config()) is True
+
+
+def test_the_wildcard_is_visible_to_the_cost_observed_predicate(tmp_path, monkeypatch):
+    """`_is_cost_observed` is a separate entry point used by the runtime cost
+    flagger; it must not disagree with the free check."""
+    S = _server(tmp_path, monkeypatch, cost_observed_free_tier=["gmi/*"])
+    cfg = S.load_config()
+    assert S._is_cost_observed("gmi", "anything", cfg) is True
+    assert S._is_cost_observed("google", GOOGLE_UPSTREAM, cfg) is False
+
+
+def test_the_wildcard_survives_the_hoisted_hot_loop_path(tmp_path, monkeypatch):
+    """GUARD: the candidate walks pass the set explicitly, so forgetting to
+    hoist it would leave the wildcard working everywhere except where it
+    matters."""
+    S = _server(tmp_path, monkeypatch, cost_observed_free_tier=["gmi/*"])
+    monkeypatch.setattr(S, "_get_distinct_routes", lambda *a, **k: [
+        ("gmi", "some-model:free"),
+        ("google", GOOGLE_UPSTREAM),
+    ])
+    picked = {pn for pn, _cfg, _um in S._get_free_model_candidates()}
+    assert picked == {"google"}

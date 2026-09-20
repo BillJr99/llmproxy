@@ -966,6 +966,7 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "host": "0.0.0.0",
     "port": 8080,
     "log_level": "INFO",
+    "third_party_log_level": "WARNING",
     "request_timeout": 120,
     "stream_timeout": 300,
     "response_cache_ttl": 120,
@@ -992,6 +993,19 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
   }
 }
 ```
+
+<a name="third_party_log_level"></a>
+> **`log_level` means llmproxy's own level.** `logging.basicConfig` sets the
+> *root* logger, so `log_level: DEBUG` — the setting you reach for to watch
+> routing decisions — used to switch on urllib3, requests and werkzeug debug
+> output for the whole process as well. urllib3 alone emits a line per upstream
+> call, and making upstream calls is this proxy's entire job, so on a busy
+> deployment those libraries were most of the log by volume and buried the lines
+> that were the point. Those loggers are now pinned at `WARNING`.
+> `server.third_party_log_level` is the escape hatch when you are genuinely
+> debugging a transport problem: set it to `DEBUG` for the old behaviour, or to
+> any level name. It cannot make a library more verbose than `log_level` itself,
+> since the root handler filters first.
 
 > **Three timeouts, not one.** `request_timeout` and `stream_timeout` bound a
 > single socket read; [`virtual_timeout_seconds`](#virtual_timeout_seconds)
@@ -1346,11 +1360,24 @@ applied to free-tier capacity ordering, where spreading is the entire point.
 
 The key is a client-supplied `prompt_cache_key` (top-level or under `metadata`)
 when present, since only the client knows what it considers one conversation.
-Otherwise it is derived: a continuation keys on the transcript *before* the
-trailing user turn — exactly the prefix the upstream will have cached — and a
-first turn carrying a system prompt of 200+ characters keys on that, since agents
-resend it verbatim every request. A bare first user turn gets **no** key: there
-is no reusable prefix there, so pinning would cost load spreading and buy nothing.
+Otherwise it is derived from the conversation's **root**: every system turn,
+plus the first non-system turn. Those are the only messages an agentic client
+does not rewrite, so the key is identical on turn 1 and on turn 40. A bare first
+user turn with no substantial system prompt (200+ characters) gets **no** key:
+there is nothing durable to identify it by yet, so pinning would cost load
+spreading and buy nothing. A later turn of that same conversation does get one,
+because by then the first user turn is a settled part of the transcript.
+
+> **This used to key on the whole cacheable prefix** — everything before the
+> trailing user turn. That is a correct description of what the upstream has
+> cached and completely wrong as an *identity*: an agent loop appends an
+> assistant turn and a tool result on every iteration, so the key was different
+> on every single request. Anything remembering a choice under it, such as
+> [`free_tier_cache_affinity`](#free_tier_cache_affinity), wrote a pin each turn
+> and read one back never — so a conversation restarted from the top of the
+> ranking every turn, paying a `429` on each model above its own before reaching
+> the one that had just worked. If your client rewrites its system prompt every
+> turn (injecting a timestamp, say), send `prompt_cache_key` instead.
 
 Selection uses rendezvous (highest-random-weight) hashing rather than a modulo
 ring, so adding or losing an account reshuffles only that account's share instead
@@ -2097,6 +2124,9 @@ Three properties make it safe to combine with every other pass:
 - **The first turn is unpinned**, so it takes whatever the ordering chose. On
   [`flagship__free`](#flagship-ordering) that is the top-ranked member, which is
   why this can now apply to a ranked pool at all.
+- **The key identifies the conversation, not the turn.** See
+  [the note above](#prompt-cache-affinity--keeping-a-conversation-on-one-upstream)
+  on why a key derived from the growing transcript made this flag inert.
 - **A cooling pin is not promoted.** A candidate demoted for saturation stays
   demoted, rather than being hoisted back and wasting the turn on the one model
   already known to be rate limited.
@@ -2200,6 +2230,64 @@ So the learned layer splits them:
 Lookups try the qualified id, then the bare id, then the normalized model. The
 normalized form is tried last, so an entry for this exact model on this exact
 provider always beats a fact inherited from the same weights elsewhere.
+
+<a name="free-tier-provenance"></a>
+#### A free-tier claim is scoped to whoever made it
+
+The bare-id arm above is the useful one and the dangerous one. Writing
+`glm-5.3-flash-free` in your own `believed_free` is documented to mean "this
+model, on every provider I have it", and that still works. But a **provider
+template** in `providers.json` is not speaking about every provider. It is
+vouching for its own, and its entries are qualified ids in that provider's own
+key space.
+
+Those two key spaces collide. The `google` template declares
+`google/gemini-3.8-flash`, meaning the `gemini-3.8-flash` that Google's own API
+serves free. A gateway that namespaces its catalog by vendor serves the very
+same weights under the **upstream id** `google/gemini-3.8-flash` — an identical
+sequence of characters in a different key space — and bills for it. Matched
+bare, Google's free tier leaked onto a paid gateway and llmproxy routed billable
+traffic through `llmproxy/free` and `flagship__free`.
+
+So the distinction is **provenance**, not spelling:
+
+| Where the entry came from | Bare match | Qualified match |
+| --- | --- | --- |
+| A provider template in `providers.json` | **rejected** — scoped to the declaring provider | honoured |
+| The learned layer (`routing_metadata.json`) | n/a, always written qualified | honoured |
+| Your `config.json`, or the curated layer | honoured on every provider | honoured |
+
+If a gateway genuinely does serve something free, say so by **qualifying** it:
+`"believed_free": ["gmi/google/gemini-3.8-flash"]`. A qualified match is
+unambiguous and is always honoured, whatever declared it.
+
+Going the other way, `cost_observed_free_tier` is the override when a provider
+turns out to bill for something believed free. It is matched qualified-only by
+design, so flagging one provider's copy as paid says nothing about anyone
+else's, and it beats every belief including the declaring provider's own. The
+runtime cost flagger writes it for you the first time a supposedly-free model
+reports a real cost.
+
+**Marking a whole provider paid.** An entry of the form `<provider>/*` covers
+every model that provider serves, now and in future:
+
+```jsonc
+"cost_observed_free_tier": ["somereseller/*"]
+```
+
+This is for aggregators and resellers. They re-serve other vendors' upstream
+ids, so a provider with no free tier of its own still collects free-tier beliefs
+written about those ids elsewhere, and listing its catalog model by model is
+both tedious and permanently out of date. The provider-wide mark outranks
+everything, including an id that literally spells `:free` — that suffix
+describes what the *original* vendor charges, not what this one does. Only the
+explicit `/*` spelling is recognised; a bare provider name is not, because it
+cannot be told apart from an unqualified model id.
+
+It keeps the provider reachable by its direct `provider/model` name and in the
+paid tiers, which is what distinguishes it from the provider-level
+`expose_to_virtual_models: false`, which removes the provider from *every*
+virtual model.
 
 #### What combines, and what is simply overridden
 
@@ -2881,6 +2969,22 @@ Four rules, in this order:
    until at least `min_flagship_free_models` **distinct** free models qualify.
    There is no lower bound, so a thin free tier produces a smaller tier rather
    than an error.
+
+   The floor is a statement about **what ends up in the tier**, not about how
+   far the bar walked. Excluded targets are filtered out before the walk
+   begins, so an exclude can never be counted toward the floor and then removed
+   afterwards, leaving the pool one short. The same applies to free-ness: a
+   model whose only free routing target is excluded does not count as free.
+
+   It is also re-checked against the **live** tier. Membership is cached at
+   refresh time but free status is re-evaluated on every read, so a member that
+   becomes [cost-observed](#free-tier-provenance) leaves `flagship/free`
+   immediately while the cache still lists it. When the live count drops below
+   the floor, the next interval check recomputes regardless of
+   `refresh_frequency_days` — otherwise the pool would sit short for up to a
+   week. If the *previous* run also came up short, nothing is recomputed: the
+   deployment simply does not have that many free models, and one warning says
+   so rather than re-fetching every catalog on every tick.
 4. **Pins and excludes win.** A pin bypasses both the bar and the spec veto.
    An exclude is applied last and beats everything, including a pin.
 
@@ -3004,7 +3108,7 @@ values, so upgrading needs no edit.
 | Key | Default | What it does |
 |-----|---------|--------------|
 | `enabled` | `true` | Master switch. When false, no recompute runs and no network calls are made for the tier. |
-| `min_flagship_free_models` | `5` | Lower the bar until at least this many **distinct** free models qualify. Cross-provider duplicates count once. Best-effort: if the free pool is smaller, you get what there is. |
+| `min_flagship_free_models` | `5` | Lower the bar until at least this many **distinct** free models are *in the tier*. Cross-provider duplicates count once, and excluded ids never count. Re-checked against the live tier, so a member that stops being free triggers a recompute instead of silently shrinking the pool. Best-effort: if the free pool is smaller, you get what there is, with one warning. |
 | `start_percentile` | `0.9` | Where the bar starts before floating downward. Raise it for a stricter tier; the free floor may still pull it below this. |
 | `min_context` | `200000` | Spec veto: minimum context window. `0` disables the check. |
 | `require_tools` | `false` | **Opt-in** spec veto restricting *membership* to tool-callers. Off by default: a request that needs tools already cannot select a model that lacks them (see [capability enforcement](#capability-enforcement)), so vetoing here as well only made the floating bar hunt further down the ranking for free models carrying the tag — admitting weaker models on the strength of a capability rather than a score. Turn it on when you want the tier itself restricted. |

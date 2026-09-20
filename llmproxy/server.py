@@ -2824,13 +2824,15 @@ def _live_flagship_free_count(config: dict, config_path: str | None) -> int:
     believed = _normalized_believed_free(config)
     observed = _normalized_cost_observed(config)
     scoped = _provider_scoped_ids(config)
+    paid_providers = _cost_observed_providers(config)
 
     keys: set[str] = set()
     for qualified in members:
         provider, _, upstream = qualified.partition("/")
         if not upstream:
             continue
-        if _is_model_free_with(provider, upstream, believed, observed, scoped):
+        if _is_model_free_with(provider, upstream, believed, observed, scoped,
+                               paid_providers):
             keys.add(normalize_model_id(upstream))
     return len(keys)
 
@@ -8534,8 +8536,38 @@ def _normalized_cost_observed(config: dict) -> set[str]:
     return {e.lower() for e in raw if isinstance(e, str)}
 
 
+# An entry of this shape in `cost_observed_free_tier` marks the whole provider
+# as paid rather than one model on it.
+_COST_OBSERVED_WILDCARD = "/*"
+
+
+def _cost_observed_providers(config: dict) -> set[str]:
+    """Providers marked entirely paid, via a ``<provider>/*`` entry.
+
+    Aggregators and resellers are the case this exists for. They re-serve other
+    vendors' upstream ids, so a provider with no free tier of its own still
+    collects free-tier beliefs written about those ids elsewhere, and listing
+    its catalog model by model in ``cost_observed_free_tier`` is both tedious
+    and permanently out of date. One entry covers the provider, including
+    models it has not shipped yet.
+
+    Only the explicit ``provider/*`` spelling is recognised. A bare provider
+    name is not, because it is indistinguishable from an unqualified model id,
+    which is a meaningful entry in these lists.
+    """
+    out: set[str] = set()
+    for entry in _normalized_cost_observed(config):
+        if entry.endswith(_COST_OBSERVED_WILDCARD):
+            name = entry[: -len(_COST_OBSERVED_WILDCARD)]
+            if name:
+                out.add(name)
+    return out
+
+
 def _is_cost_observed(provider_name: str, upstream_id: str, config: dict) -> bool:
     """True when this model has been observed reporting a cost at runtime."""
+    if provider_name.lower() in _cost_observed_providers(config):
+        return True
     return f"{provider_name}/{upstream_id}".lower() in _normalized_cost_observed(config)
 
 
@@ -8545,6 +8577,7 @@ def _is_model_free_with(
     believed_free: set[str],
     cost_observed: set[str],
     provider_scoped: frozenset[str] | set[str] = frozenset(),
+    cost_observed_providers: frozenset[str] | set[str] = frozenset(),
 ) -> bool:
     """``_is_model_free`` against sets the caller already has.
 
@@ -8556,6 +8589,13 @@ def _is_model_free_with(
     hoisting the invariant out is simply the right shape.
     """
     qualified = f"{provider_name}/{upstream_id}".lower()
+    # A whole provider marked paid outranks every belief about its models,
+    # including an id that literally spells "free". An aggregator that bills
+    # for everything routinely re-serves ":free"-suffixed ids from upstreams
+    # that really are free, and the suffix says nothing about what THIS
+    # provider charges.
+    if provider_name.lower() in cost_observed_providers:
+        return False
     if qualified in cost_observed:
         return False
     uid = upstream_id.lower()
@@ -8585,7 +8625,7 @@ def _is_model_free(provider_name: str, upstream_id: str, config: dict) -> bool:
     return _is_model_free_with(
         provider_name, upstream_id,
         _normalized_believed_free(config), _normalized_cost_observed(config),
-        _provider_scoped_ids(config),
+        _provider_scoped_ids(config), _cost_observed_providers(config),
     )
 
 
@@ -8604,6 +8644,7 @@ def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
     believed_free = _normalized_believed_free(config)
     cost_observed = _normalized_cost_observed(config)
     provider_scoped = _provider_scoped_ids(config)
+    paid_providers = _cost_observed_providers(config)
     candidates = []
     for provider_name, upstream_id in _get_distinct_routes():
         provider_cfg = get_provider(config, provider_name)
@@ -8615,7 +8656,7 @@ def _get_free_model_candidates() -> list[tuple[str, dict, str]]:
         if _is_local_url(provider_base_url(provider_cfg)):
             continue
         if _is_model_free_with(provider_name, upstream_id, believed_free,
-                               cost_observed, provider_scoped):
+                               cost_observed, provider_scoped, paid_providers):
             candidates.append((provider_name, provider_cfg, upstream_id))
     return candidates
 
