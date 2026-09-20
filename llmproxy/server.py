@@ -249,7 +249,7 @@ _VIRTUAL_RETRY_BACKOFF: float = 0.5
 # empty completion into a hard failure. Raising it would need per-model output
 # caps first.
 _BUDGET_BUMP_FACTOR: int = 16
-_BUDGET_BUMP_CEILING: int = 4096
+_BUDGET_BUMP_CEILING: int = 65535
 _BUDGET_BUMP_MAX_RETRIES: int = 4
 # Stable per-process timestamp used as the OpenAI-standard ``created`` fallback
 # for models whose upstream listing omits it (and for synthetic virtual models).
@@ -6274,20 +6274,88 @@ def _is_budget_truncated_empty(body_bytes: bytes) -> bool:
     return saw_length
 
 
-def _bumped_budget(payload: dict) -> dict | None:
+def _budget_escalation_enabled(config: dict | None = None) -> bool:
+    """Whether a budget-starved 200 is retried with more room. Default on."""
+    return _config_bool("budget_escalation", True, config)
+
+
+def _budget_bump_factor(config: dict | None = None) -> int:
+    """Multiplier applied to the token budget on each retry."""
+    return _config_int("budget_escalation_factor", _BUDGET_BUMP_FACTOR, config)
+
+
+def _budget_bump_ceiling(config: dict | None = None) -> int:
+    """Hard upper bound on an escalated budget, before the per-model clamp."""
+    return _config_int("budget_escalation_ceiling", _BUDGET_BUMP_CEILING, config)
+
+
+def _budget_bump_max_retries(config: dict | None = None) -> int:
+    """How many times one candidate may be retried with a larger budget."""
+    return _config_int("budget_escalation_max_retries",
+                       _BUDGET_BUMP_MAX_RETRIES, config)
+
+
+def _budget_ceiling_for(provider_name: str | None, upstream_id: str | None,
+                        config: dict | None = None) -> int:
+    """The escalation ceiling for one model: configured, clamped to its window.
+
+    The configured ceiling alone was safe while it was 4096, which is below
+    almost every model's output cap. It is 65535 now, which is above what most
+    models will accept, and asking for more than a model can give comes back as
+    a 400 — degrading safely, since 4xx walks to the next candidate, but
+    spending a round trip and losing the very answer the escalation exists to
+    recover.
+
+    So a KNOWN context window caps the bump. An unknown one is neutral and the
+    configured ceiling stands, matching how ``_order_by_context_fit`` treats a
+    missing ``context_length``: absent metadata must never make things worse.
+
+    The window is the whole context, prompt included, so capping the OUTPUT
+    budget at it is deliberately loose — it is a backstop against asking for
+    obvious nonsense, not a context-fit calculation. ``_order_by_context_fit``
+    is what actually reasons about fit.
+    """
+    ceiling = _budget_bump_ceiling(config)
+    if not provider_name or not upstream_id:
+        return ceiling
+    try:
+        cfg = config if config is not None else load_config()
+        window = _model_context_window(
+            provider_name, upstream_id,
+            _get_model_context(cfg), _get_model_context_snapshot(),
+        )
+    except Exception as e:  # noqa: BLE001 — a clamp must never fail a retry
+        print(f"[server:_budget_ceiling_for] {e}")
+        traceback.print_exc()
+        return ceiling
+    if window and window > 0:
+        return min(ceiling, window)
+    return ceiling
+
+
+def _bumped_budget(payload: dict, provider_name: str | None = None,
+                   config: dict | None = None) -> dict | None:
     """Return a copy of *payload* with its token budget multiplied, or ``None``.
 
     Recognizes the OpenAI ``max_completion_tokens`` and legacy ``max_tokens``
     fields. Returns ``None`` when neither is set to a positive int (nothing to
     bump — an uncapped request would never truncate) or the budget is already at
-    the ``_BUDGET_BUMP_CEILING`` (further bumps refused so cost stays bounded).
+    the ceiling (further bumps refused so cost stays bounded).
+
+    The ceiling comes from ``server.budget_escalation_ceiling``, clamped to the
+    model's known context window — see ``_budget_ceiling_for``. ``provider_name``
+    is optional so existing callers and tests keep working unclamped.
     """
+    ceiling = _budget_ceiling_for(provider_name, payload.get("model"), config)
+    factor = _budget_bump_factor(config)
     for field in ("max_completion_tokens", "max_tokens"):
         current = payload.get(field)
         if isinstance(current, int) and not isinstance(current, bool) and current > 0:
-            if current >= _BUDGET_BUMP_CEILING:
+            if current >= ceiling:
                 return None
-            bumped = min(current * _BUDGET_BUMP_FACTOR, _BUDGET_BUMP_CEILING)
+            bumped = min(current * factor, ceiling)
+            # Covers a factor of 1 or less, which would otherwise spin through
+            # every retry making no progress.
             if bumped <= current:
                 return None
             return {**payload, field: bumped}
@@ -6645,9 +6713,15 @@ def _escalate_budget_if_starved(
     ``_is_budget_truncated_empty``), the model spent its whole budget thinking and
     had nothing left to say. Rather than failing over — the strongest model is
     usually the one that reasons this hard — give it more room: multiply the
-    budget and retry, up to ``_BUDGET_BUMP_MAX_RETRIES`` times or until the budget
-    hits ``_BUDGET_BUMP_CEILING``. Returns the first usable response, or the last
-    attempt (which the caller's normal failover path then handles).
+    budget and retry, up to ``server.budget_escalation_max_retries`` times or
+    until the budget hits the ceiling (see ``_budget_ceiling_for``). Returns the
+    first usable response, or the last attempt (which the caller's normal
+    failover path then handles — a still-empty body is caught by
+    ``_response_unusable`` and walks to the next candidate, so this escalates and
+    then fails rather than handing back an empty 200).
+
+    ``server.budget_escalation: false`` skips the whole thing, returning the
+    empty body immediately for ordinary failover to handle.
 
     ``deadline`` is the caller's wall-clock budget. This is the one place that
     spends *several* full timeouts on a single candidate, so without the check a
@@ -6655,11 +6729,13 @@ def _escalate_budget_if_starved(
     Keyword-only with a None default, so callers that do not set a deadline (and
     every existing test) behave exactly as before.
     """
+    if not _budget_escalation_enabled():
+        return resp
     payload = upstream_payload
-    for _ in range(_BUDGET_BUMP_MAX_RETRIES):
+    for _ in range(max(0, _budget_bump_max_retries())):
         if resp.status_code >= 400 or not _is_budget_truncated_empty(resp.get_data()):
             return resp
-        bumped = _bumped_budget(payload)
+        bumped = _bumped_budget(payload, provider_name)
         if bumped is None:
             return resp
         attempt_timeout = _timeout_for_candidate(deadline, timeout)
