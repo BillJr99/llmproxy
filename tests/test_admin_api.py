@@ -341,6 +341,37 @@ def test_routing_metadata_reports_effective_values_and_their_layers(client):
                             "free_limits", "layers", "grades"}
 
 
+def test_routing_metadata_never_lists_a_normalized_join_key(client, cfg_path):
+    """Rows must be routing targets, not the learned layer's join keys.
+
+    The learned layer is keyed by normalize_model_id on purpose, so one entry
+    covers every provider spelling of the same weights. Those keys are not
+    callable model ids — "aionlabsaion30mini" is a join key, not something a
+    request can address — and listing them filled the grid with thousands of
+    phantom models and made every diagnostic built on the listing wrong.
+    """
+    import json as _json
+    side = cfg_path.parent / "routing_metadata.json"
+    side.write_text(_json.dumps({
+        "by_model": {
+            "aionlabsaion30mini": {"capabilities": ["tools"],
+                                   "capabilities_source": "observed"},
+            "llama3370b": {"reasoning": "standard", "reasoning_source": "inferred"},
+        },
+        "curated": {"model_reasoning": {"groq/hand-typed-model": "deep"}},
+    }), encoding="utf-8")
+    from llmproxy import server
+    server._reset_routing_sidecar_cache()
+
+    ids = [r["id"] for r in
+           client.get("/admin/api/routing-metadata?limit=500").get_json()["models"]]
+    assert "aionlabsaion30mini" not in ids
+    assert "llama3370b" not in ids
+    # An id a person typed by hand is still listed, even with no route yet.
+    assert "groq/hand-typed-model" in ids
+    server._reset_routing_sidecar_cache()
+
+
 def test_routing_metadata_pages_and_filters_server_side(client):
     """Paging is server-side because a grid of thousands re-rendered per
     keystroke, with six listeners per row, is what the old page did."""
