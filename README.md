@@ -1307,6 +1307,13 @@ process — so it is "as far as we can tell in the moment". Any field set to `nu
 is ignored; a provider with no `free_allowance` simply never gains free-in-the-
 moment status.
 
+A bundled template may declare a `free_allowance` of its own, in which case the
+setup wizard, the admin "add from template" action and `scripts/add_provider.sh`
+all copy it onto the new `config.json` entry, since that block is where the
+virtual reads it. **ModelScope** ships this way, carrying its account-wide
+allowance of 2,000 requests/day. Edit or delete the copied value freely; nothing
+writes it back over yours.
+
 <a name="accounts"></a>
 ### Multiple accounts per provider — credential rotation
 
@@ -3587,6 +3594,10 @@ The wizard currently offers ready-made templates for these providers:
 | MiniMax                                    | `minimax`               | `https://api.minimax.io/v1`                                                    |
 | Atria ASI                                  | `atria-asi`             | `https://api.atria-asi.ai/v1`                                                  |
 | Unbiased AI                                | `unbiased-ai`           | `https://api.unbiased.ai/v1`                                                   |
+| Kilo AI (multi-vendor gateway)             | `kilo`                   | `https://api.kilo.ai/api/gateway`                                             |
+| ModelScope (Alibaba API-Inference)         | `modelscope`            | `https://api-inference.modelscope.cn/v1`                                       |
+| Aion Labs                                  | `aion-labs`             | `https://api.aionlabs.ai/v1`                                                   |
+| Agnes AI (multimodal gateway)              | `agnes-ai`              | `https://apihub.agnes-ai.com/v1`                                               |
 | Hugging Face Inference                     | `huggingface`           | `https://router.huggingface.co/v1`                                             |
 | xAI (Grok)                                 | `xai`                   | `https://api.x.ai/v1`                                                          |
 | Cloudflare AI Gateway                      | `cloudflare-ai-gateway` | `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai/v1` |

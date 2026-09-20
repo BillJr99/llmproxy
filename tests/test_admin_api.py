@@ -212,6 +212,26 @@ def test_from_template_creates_provider(client, cfg_path):
     assert saved["api_key"] == "${SOME_KEY}"
 
 
+def test_from_template_carries_a_free_allowance(client, cfg_path):
+    """GUARD: a template free_allowance is inert unless it reaches the config.
+
+    `_provider_free_allowance` reads the quota off the provider block, not off
+    providers.json, so a template that declares one has to copy it forward or
+    the loadbalanced virtual never sees it. ModelScope is the case that
+    prompted this: an account-wide 2,000 requests/day.
+    """
+    templates = client.get("/admin/api/provider-templates").get_json()["templates"]
+    ms = next(t for t in templates if t["key"] == "modelscope")
+    assert ms["free_allowance"]["requests_per_day"] == 2000
+
+    resp = client.post("/admin/api/providers/from-template", json={
+        "template_key": "modelscope", "name": "ms", "api_key": "ms-x",
+    })
+    assert resp.status_code == 201
+    saved = _read_config(cfg_path)["providers"]["ms"]
+    assert saved["free_allowance"] == ms["free_allowance"]
+
+
 def test_from_template_unknown(client):
     resp = client.post("/admin/api/providers/from-template", json={"template_key": "nope"})
     assert resp.status_code == 404

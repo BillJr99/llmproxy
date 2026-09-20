@@ -133,3 +133,31 @@ def test_the_real_discovery_overrides_are_still_template_fields(field):
     from llmproxy.providers import _TEMPLATE_FIELDS
 
     assert field in _TEMPLATE_FIELDS
+
+
+def test_a_models_keyed_catalog_is_normalized(monkeypatch):
+    """Aion Labs publishes its catalog under a top-level "models" key.
+
+    Its /v1/models answers 200 with {"models": [...]} rather than the OpenAI
+    {"data": [...]}. Before this shape was recognized the dict branch fell
+    through to `raw_models = []`, so the provider loaded "successfully" and
+    contributed nothing — a silent empty rotation rather than a fetch error,
+    which `model_filter` synthesis does not rescue because nothing raised.
+    """
+    monkeypatch.setattr(S.requests, "get", lambda *a, **k: _Resp(
+        {"models": [{"id": "aion-2.0"}, {"id": "aion-3.0-mini"}]}))
+    cfg = {"base_url": "https://api.aionlabs.ai/v1", "api_key": "k"}
+    models = S._fetch_provider_models("aion-labs", cfg, 5)
+    assert [m["_route"][1] for m in models] == ["aion-2.0", "aion-3.0-mini"]
+
+
+def test_an_empty_data_still_wins_over_models(monkeypatch):
+    """GUARD: "data" is checked first by presence, not truthiness.
+
+    An upstream that legitimately returns {"data": []} must stay empty rather
+    than falling through to a "models" key that happens to sit beside it.
+    """
+    monkeypatch.setattr(S.requests, "get", lambda *a, **k: _Resp(
+        {"data": [], "models": [{"id": "ghost"}]}))
+    cfg = {"base_url": "https://api.example/v1", "api_key": "k"}
+    assert S._fetch_provider_models("example", cfg, 5) == []

@@ -422,6 +422,10 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
     # carry a protocol so the proxy translates requests/responses for them.
     if tmpl.get("protocol") and tmpl["protocol"] != "openai":
         cfg["protocol"] = tmpl["protocol"]
+    # A provider-wide free quota only counts once it is on the config entry,
+    # which is where the loadbalanced virtual looks for it.
+    if tmpl.get("free_allowance"):
+        cfg["free_allowance"] = dict(tmpl["free_allowance"])
     return provider_key, cfg
 
 
