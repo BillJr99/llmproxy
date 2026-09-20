@@ -2564,6 +2564,55 @@ def _family_capability_profiles(
     return _unanimous(gen_members), _unanimous(bare_members)
 
 
+def _family_capabilities_for(
+    model_key: str, raw_id: str,
+    by_gen: dict[str, set[str]], by_bare: dict[str, set[str]],
+) -> tuple[set[str] | None, str | None]:
+    """The capability set a family will lend this model, and which family lent it.
+
+    Three attempts, most specific first:
+
+    1. the model's own GENERATION family, so llama-4's tools never reach llama-2;
+    2. its BARE family, for a generation too sparse to speak;
+    3. any known family that appears as a SUBSTRING of its normalized key, with
+       the LONGEST match winning.
+
+    The third exists because deriving a family from the id only works when the
+    vendor sits behind a path separator. A provider that folds it into the name
+    — ``zai-glm-5-turbo``, ``claude-haiku-4.5-us-east-1`` — derives ``zaiglm5``
+    or ``claudehaiku45useast1``, families of one with nothing to lend, while
+    ``glm`` and ``claudehaiku`` sit right there with observed data. Matching on
+    the normalized key, which has already had its separators stripped, finds
+    them.
+
+    Longest wins because a more specific family must be able to supersede a more
+    general one: ``llama32`` has to beat ``llama3``, since llama-3.2's vision
+    variants do not share llama-3's capability set. Shortest-wins would actively
+    mislead there.
+
+    Families shorter than ``FAMILY_MIN_SUBSTRING_LENGTH`` are excluded from the
+    substring pass only. An exact match is trusted at any length.
+    """
+    from .providers import FAMILY_MIN_SUBSTRING_LENGTH, family_key
+
+    gen = family_key(raw_id)
+    if gen and gen in by_gen:
+        return by_gen[gen], gen
+    bare = family_key(raw_id, generation=False)
+    if bare and bare in by_bare:
+        return by_bare[bare], bare
+
+    best_fam: str | None = None
+    best_caps: set[str] | None = None
+    for table in (by_gen, by_bare):
+        for fam, caps in table.items():
+            if len(fam) < FAMILY_MIN_SUBSTRING_LENGTH or fam not in model_key:
+                continue
+            if best_fam is None or len(fam) > len(best_fam):
+                best_fam, best_caps = fam, caps
+    return best_caps, best_fam
+
+
 def _merge_model_facts(
     previous: dict, learned: dict[str, dict], fact_keys: tuple[str, ...] = ("capabilities", "reasoning"),
 ) -> tuple[dict[str, dict], dict[str, int]]:
@@ -2702,8 +2751,6 @@ def _recompute_routing_metadata(config: dict, config_path: str | None) -> dict |
     # none of its own. Never to one that does — a reading always beats a guess.
     n_family = 0
     if infer_family:
-        from .providers import family_key
-
         # Families are computed over EVERY observation, catalog included, so a
         # deployment serving three members of a family still benefits from what
         # the catalog knows about the other twenty.
@@ -2712,10 +2759,7 @@ def _recompute_routing_metadata(config: dict, config_path: str | None) -> dict |
             raw_id = raw_for_key.get(key) or key
             if observed.get(key):
                 continue
-            # Generation first, so llama-4's tools never reach llama-2; the bare
-            # family is the fallback for a generation too sparse to speak.
-            shared = by_gen.get(family_key(raw_id) or "") or by_bare.get(
-                family_key(raw_id, generation=False) or "")
+            shared, _fam = _family_capabilities_for(key, raw_id, by_gen, by_bare)
             if shared:
                 learned.setdefault(key, {}).update(
                     {"capabilities": sorted(shared), "capabilities_source": "family"})
