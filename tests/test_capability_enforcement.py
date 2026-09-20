@@ -165,3 +165,77 @@ def test_a_learned_gap_removes_the_target_from_selection():
     kept, dropped = S._drop_known_incapable(pool, {"tools"}, caps)
     assert dropped == 1
     assert [um for _pn, _c, um in kept] == ["other-model"]
+
+
+# ── every virtual pool is gated, not just flagship ──────────────────────────
+#
+# The gate is applied where the candidate list is finalised, so it covers every
+# virtual model uniformly: `_proxy_endpoint` runs it on `ordered` after all four
+# branches (loadbalanced, flagship, free, generic cycling) have converged, and
+# the cost waterfall runs it per bucket. A request that needs tools must never
+# be handed a model known to lack them, whether that model is free or paid.
+
+WATERFALL_CAPS = {
+    "freeprov/free-capable": {"tools"},
+    "freeprov/free-incapable": {"vision"},
+    "paidprov/paid-capable": {"tools"},
+    "paidprov/paid-incapable": {"vision"},
+}
+
+
+@pytest.fixture
+def waterfall_config():
+    return {
+        "providers": {
+            "freeprov": {"base_url": "http://freeprov.example/v1", "api_key": "k"},
+            "paidprov": {"base_url": "http://paidprov.example/v1", "api_key": "k"},
+        },
+        "believed_free": ["freeprov/free-capable", "freeprov/free-incapable"],
+        "model_capabilities": {k: sorted(v) for k, v in WATERFALL_CAPS.items()},
+        "server": {"allow_implicit_paid": True},
+    }
+
+
+def _waterfall(config, needed_payload):
+    candidates = [
+        ("freeprov", config["providers"]["freeprov"], "free-capable"),
+        ("freeprov", config["providers"]["freeprov"], "free-incapable"),
+        ("paidprov", config["providers"]["paidprov"], "paid-capable"),
+        ("paidprov", config["providers"]["paidprov"], "paid-incapable"),
+    ]
+    ordered = S._loadbalanced_ordered_candidates(candidates, needed_payload, config)
+    return [um for _pn, _cfg, um in ordered]
+
+
+def test_the_paid_tier_is_gated_on_capabilities_too(waterfall_config):
+    """Cost tier does not buy an exemption: a paid model that cannot, is not picked."""
+    served = _waterfall(waterfall_config, {"tools": [{"type": "function"}]})
+    assert "paid-incapable" not in served
+    assert "paid-capable" in served
+
+
+def test_the_free_tier_is_gated_on_capabilities(waterfall_config):
+    served = _waterfall(waterfall_config, {"tools": [{"type": "function"}]})
+    assert "free-incapable" not in served
+    assert "free-capable" in served
+
+
+def test_the_cost_waterfall_is_preserved_among_the_survivors(waterfall_config):
+    """Gating must not disturb the free-before-paid ordering it runs inside."""
+    served = _waterfall(waterfall_config, {"tools": [{"type": "function"}]})
+    assert served == ["free-capable", "paid-capable"]
+
+
+def test_a_request_needing_nothing_keeps_every_candidate(waterfall_config):
+    """The gate is a no-op without a capability requirement, in every tier."""
+    served = _waterfall(waterfall_config, {})
+    assert set(served) == {"free-capable", "free-incapable",
+                           "paid-capable", "paid-incapable"}
+
+
+def test_a_vision_request_gates_on_vision_not_tools(waterfall_config):
+    """The gate follows what the request actually needs."""
+    payload = {"messages": [{"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,aaaa"}}]}]}
+    served = _waterfall(waterfall_config, payload)
+    assert set(served) == {"free-incapable", "paid-incapable"}  # the vision-tagged pair

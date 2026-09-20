@@ -1534,7 +1534,31 @@ is one more reason [`server.workers`](#workers) defaults to `1`.
 
 When a request needs a capability (`tools`, `vision`, `json`, `reasoning`), any
 candidate **known** to lack it is removed from the pool rather than merely
-sorted to the back. Ordering alone cannot express a hard requirement: a later
+sorted to the back.
+
+**This applies to every virtual model, not just the flagship tier, and to paid
+candidates exactly as to free ones.** The gate runs where each pool's candidate
+list is finalised: once for `llmproxy/free`, `llmproxy/flagship`, the reasoning
+tiers, the `llmproxy/<provider>__*` slices and every other virtual, and once per
+bucket of the `llmproxy/loadbalanced` cost waterfall, so a paid model that
+cannot call tools is no more eligible for a tool-calling request than a free one
+is. Cost tier buys no exemption.
+
+The one deliberate exception is a **direct** `provider/model` request. There you
+named the model, so llmproxy routes to it and lets the upstream answer for
+itself rather than second-guessing you.
+
+**This applies to every virtual model, not just the flagship tier, and to paid
+candidates exactly as to free ones.** The gate runs where each pool's candidate
+list is finalised: once for `llmproxy/free`, `llmproxy/flagship`, the reasoning
+tiers, the `llmproxy/<provider>__*` slices and every other virtual, and once per
+bucket of the `llmproxy/loadbalanced` cost waterfall, so a paid model that
+cannot call tools is no more eligible for a tool-calling request than a free one
+is. Cost tier buys no exemption.
+
+The one deliberate exception is a **direct** `provider/model` request. There you
+named the model, so llmproxy routes to it and lets the upstream answer for
+itself rather than second-guessing you. Ordering alone cannot express a hard requirement: a later
 pass that re-sorts, such as affinity, could put the model back in front, and a
 model that cannot call tools is not a usable fallback for a request that needs
 them — it is a guaranteed failure wearing the costume of a retry.
