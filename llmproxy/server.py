@@ -84,7 +84,7 @@ from flask import (
     stream_with_context,
 )
 
-from . import __version__
+from . import USER_AGENT, __version__
 from . import fusion as _fusion
 from . import route_report as _route_report
 from .config import (
@@ -1788,6 +1788,77 @@ def _upstream_headers(provider_cfg: dict) -> dict:
     return headers
 
 
+# Bare library and runtime defaults. These identify an HTTP STACK rather than a
+# client, and they are exactly what CDN bot filters match on: a relayed
+# "Python-urllib/3.11" is refused by Cloudflare's Browser Integrity Check with a
+# 403 and an HTML block page, measured against a real provider.
+#
+# curl and wget are deliberately absent. Both pass that check, and rewriting
+# them would mislead anyone reproducing a problem by hand -- which is most
+# people, most of the time.
+#
+# Anything naming a product ("OpenAI/Python 2.24.0") passes through untouched:
+# it is a real client identity, upstreams use it for attribution, and replacing
+# it would throw away information the operator may be relying on.
+_GENERIC_CLIENT_UA_RE = re.compile(
+    r"^(?:python-urllib|urllib|python-requests|requests|python-httpx|httpx"
+    r"|aiohttp|go-http-client|java|okhttp|libwww-perl|ruby|php|node-fetch"
+    r"|axios|apache-httpclient|guzzlehttp)[/ ]",
+    re.IGNORECASE,
+)
+
+
+def _configured_user_agent(config: dict | None = None) -> str:
+    """The string llmproxy calls itself, honouring ``server.user_agent``."""
+    try:
+        cfg = config if config is not None else load_config()
+        raw = cfg.get("server", {}).get("user_agent")
+    except Exception:  # noqa: BLE001 -- identifying ourselves must never raise
+        raw = None
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return USER_AGENT
+
+
+def _outbound_user_agent(client_ua: str | None, config: dict | None = None) -> str | None:
+    """The ``User-Agent`` to send upstream for a request from *client_ua*.
+
+    ``server.forward_user_agent`` picks the policy:
+
+    * ``"auto"`` (default) -- replace a MISSING or generic-library UA with our
+      own, pass anything else through. This keeps attribution for clients that
+      identify themselves properly while making sure a caller's choice of HTTP
+      library cannot decide whether an upstream answers.
+    * ``true`` -- relay whatever arrived and nothing else, which is exactly the
+      behaviour that shipped before this setting existed. Returns None when the
+      client sent none, leaving the HTTP library's default in place.
+    * ``false`` -- always send our own, never relay.
+
+    Returns None only in the ``true`` case with no inbound UA; every other path
+    returns a string, so llmproxy is identifiable by default.
+    """
+    try:
+        cfg = config if config is not None else load_config()
+        mode = cfg.get("server", {}).get("forward_user_agent", "auto")
+    except Exception:  # noqa: BLE001
+        cfg, mode = None, "auto"
+
+    ours = _configured_user_agent(cfg)
+    # `true`/`false` are the natural things to write for a setting spelled
+    # "forward_user_agent", so both the booleans and the string modes are
+    # accepted. An unrecognised value reads as "auto" rather than as an error:
+    # a typo should not silently restore the behaviour this exists to fix.
+    if mode is True or str(mode).strip().lower() == "true":
+        return client_ua or None
+    if mode is False or str(mode).strip().lower() == "false":
+        return ours
+    if not client_ua or not client_ua.strip():
+        return ours
+    if _GENERIC_CLIENT_UA_RE.match(client_ua.strip()):
+        return ours
+    return client_ua
+
+
 def _forwarded_client_headers() -> dict:
     """Selected client headers we relay upstream (OpenRouter attribution etc.).
 
@@ -1795,19 +1866,29 @@ def _forwarded_client_headers() -> dict:
     dialect adapters decide whether to merge these (the OpenAI adapter does;
     native Anthropic/Gemini ignore them).
 
-    Returns ``{}`` when there is no active request context (e.g. a background
-    worker thread), so callers off the request thread degrade gracefully rather
-    than raising. Such callers should instead capture these on the request thread
+    The ``User-Agent`` is resolved through ``_outbound_user_agent`` rather than
+    relayed blindly: see the note on ``_GENERIC_CLIENT_UA_RE``. Doing it here,
+    in the single producer of this dict, is what gets every outbound request
+    path -- buffered, streaming, cycling and fusion -- without four separate
+    edits that could drift apart.
+
+    Off the request thread (a background or fusion worker) there is no client to
+    relay, so the result carries our own identity alone rather than being empty.
+    That is the case that previously sent ``python-requests/x``. Such callers
+    should still capture the full set on the request thread
     and pass them down (see _proxy_fusion's panel fan-out, which forwards them via
     ``_proxy_request(..., forwarded_headers=...)``).
     """
     if not has_request_context():
-        return {}
+        return {"User-Agent": _configured_user_agent()}
     out: dict = {}
-    for header in _FORWARDED_REQUEST_HEADERS - {"Content-Type"}:
+    for header in _FORWARDED_REQUEST_HEADERS - {"Content-Type", "User-Agent"}:
         value = request.headers.get(header)
         if value:
             out[header] = value
+    resolved = _outbound_user_agent(request.headers.get("User-Agent"))
+    if resolved:
+        out["User-Agent"] = resolved
     return out
 
 
