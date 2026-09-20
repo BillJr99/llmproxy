@@ -991,6 +991,10 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "stream_precommit_max_seconds": 2.0,
     "stream_buffer_full": false,
     "stream_buffer_max_bytes": 8388608,
+    "budget_escalation": true,
+    "budget_escalation_factor": 16,
+    "budget_escalation_ceiling": 65535,
+    "budget_escalation_max_retries": 4,
     "free_tier_cache_affinity": false
   }
 }
@@ -1739,8 +1743,69 @@ additionally excludes models that are merely *unproven*, not just ones
 disproven. It now shares the same non-empty floor, so a forced-tools request
 can no longer produce an empty panel.
 
+<a name="budget-escalation"></a>
+### `server.budget_escalation` — when a reasoning model thinks itself mute
+
+Send `max_tokens: 5` to a reasoning model and it spends all five tokens
+thinking, then returns a `200` with an empty completion and
+`finish_reason: "length"`. That is a real reply, technically, and useless.
+
+llmproxy recognises exactly that signature — **every** choice empty **and** at
+least one cut off on length — and retries the *same* candidate with a larger
+budget rather than failing over, because the model that reasons hardest is
+usually the one you most want an answer from. At the defaults:
+
+```
+max_tokens: 5   ->   80   ->   1280   ->   20480
+```
+
+which is why a five-token ping can take thirty seconds and make three upstream
+calls. Nothing is wrong; it is this, working.
+
+**It never fires when the model produced output.** Any content, or any tool
+call, and the response is returned untouched. It only ever replaces an answer
+you could not have used anyway.
+
+**When it gives up, it fails over.** Once the retries are spent, a still-empty
+body is caught by the ordinary unusable-response check and the walk moves to the
+next candidate. You are never handed an empty `200`.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `budget_escalation` | `true` | Master switch. `false` returns the empty body immediately and lets ordinary failover handle it. |
+| `budget_escalation_factor` | `16` | Multiplier per retry. A value of `1` or less makes no progress and is treated as "do not bump". |
+| `budget_escalation_ceiling` | `65535` | Never ask for more than this, before the per-model clamp below. |
+| `budget_escalation_max_retries` | `4` | At most this many retries. `0` is the same as switching it off. |
+
+The factor is deliberately steep rather than a gentle ramp: a reasoning model
+starved at 8 tokens is starved at 32 and at 128 too, so small increments just
+buy more empty replies at full latency.
+
+> **The ceiling is clamped to the model's context window** when one is known.
+> 65535 is higher than most models will accept, and asking for more comes back
+> as a `400` — which walks to the next candidate safely enough, but spends a
+> round trip and loses the answer the retry existed to recover. A model whose
+> window is known to be 8192 is never asked for more, whatever the ceiling says.
+> An unknown window is neutral and the configured ceiling applies, matching how
+> [context-fit ordering](#context_aware_routing) treats missing metadata. Set
+> `model_context` to correct a gateway that misreports its window.
+
+Two other bounds apply and neither is affected by these keys:
+[`cycle_deadline_seconds`](#cycle_deadline_seconds) skips a retry once there is
+no wall-clock room for it, and the per-candidate timeout still applies to each
+attempt.
+
 <a name="context_aware_routing"></a>
 ### Context-window-aware routing
+
+> **Your `max_tokens` is relayed verbatim.** llmproxy never clamps, lowers or
+> rewrites a budget you set — the upstream decides whether it is acceptable, and
+> a value above a model's output cap comes back as its `400`. But the budget is
+> **added** to the estimated prompt size when judging whether a model's window
+> fits, since the reply has to live in that window too. A deliberately large
+> `max_tokens` therefore demotes every model that cannot hold prompt plus
+> budget, which is correct and worth knowing before you set one by hand.
+
 
 Per-model context limits used to be parsed only to populate `GET /v1/models` and
 were then discarded, so nothing in routing knew how large a candidate's window
