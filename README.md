@@ -967,6 +967,8 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
     "port": 8080,
     "log_level": "INFO",
     "third_party_log_level": "WARNING",
+    "forward_user_agent": "auto",
+    "user_agent": null,
     "request_timeout": 120,
     "stream_timeout": 300,
     "response_cache_ttl": 120,
@@ -993,6 +995,45 @@ Config is stored at `~/.config/llmproxy/config.json` (or the path in
   }
 }
 ```
+
+<a name="user-agent"></a>
+> **llmproxy identifies itself upstream.** It used not to. Where a client sent
+> no `User-Agent`, whatever HTTP library was in use filled one in, so upstreams
+> saw `python-requests/2.33.1` — a library default leaking out rather than a
+> decision. Where a client *did* send one it was relayed verbatim, so a caller
+> using urllib got a CDN block page instead of an answer. Measured through the
+> proxy against a real provider: `Python-urllib/3.11` returns `403` and four
+> kilobytes of Cloudflare HTML, while `curl/8.19.0` and `OpenAI/Python 2.24.0`
+> return `200`. A caller's choice of HTTP library should not decide whether an
+> upstream responds.
+>
+> `server.forward_user_agent` picks the policy:
+>
+> | Value | Behaviour |
+> | --- | --- |
+> | `"auto"` (default) | Replace a **missing** or **bare library-default** `User-Agent` with `llmproxy/<version>`; pass anything naming a product through unchanged. |
+> | `true` | Relay whatever arrived and nothing else — exactly what shipped before this setting existed. |
+> | `false` | Always send our own, never relay. |
+>
+> Under `auto`, strings like `python-requests/…`, `python-httpx/…`,
+> `Go-http-client/…`, `Java/…`, `okhttp/…`, `libwww-perl/…`, `axios/…` and
+> `aiohttp/…` are replaced, because they identify an HTTP *stack* rather than a
+> client and are exactly what CDN bot filters match on. Anything that names a
+> product, such as `OpenAI/Python 2.24.0`, is kept, since upstreams use it for
+> attribution. Matching is on a **prefix**, so `JavaScriptRuntime/2.0` survives.
+>
+> **`curl` and `wget` are deliberately not rewritten.** Both pass Cloudflare's
+> Browser Integrity Check, and rewriting them would mislead anyone reproducing a
+> problem by hand.
+>
+> `server.user_agent` overrides the string llmproxy calls itself; leave it
+> `null` for `llmproxy/<version>`.
+>
+> This covers more than proxied requests. Model-listing fetches, the flagship
+> catalog fetch, local sync, the setup wizard and every scraper and probe now
+> identify themselves too. The listing fetch matters most: it builds the route
+> cache, so a CDN refusing it makes a provider disappear from every pool at
+> once, which reads as "that provider has no models" rather than as a block.
 
 <a name="third_party_log_level"></a>
 > **`log_level` means llmproxy's own level.** `logging.basicConfig` sets the
@@ -1575,10 +1616,27 @@ first, so a repeatedly failing model reads as one row with a count rather than
 forty lines; `recent` is the flat newest-first list, each entry carrying the
 virtual model that was requested. Each failure is classified as `timeout` (went quiet),
 `connection` (was never there), `stream` (opened and then died, produced no
-output, or failed mid-generation), `quota`, `capability`, `oversize`, `server`
-or `upstream`. That is what separates "this model is rate limited" from "this
+output, or failed mid-generation), `quota`, `capability`, `oversize`, `server`,
+`cdn_block` or `upstream`. That is what separates "this model is rate limited" from "this
 model cannot do what you asked" from "this model is simply not answering" at a
 glance.
+
+`cdn_block` is the newest of those and the least obvious. An upstream behind a
+CDN answers a refused request with an HTML interstitial rather than an API
+error, so the record used to read `Backend request failed with status 403`
+followed by four kilobytes of markup — and the one fact that explains it, that
+the **CDN and not the API** said no, was the fact that got lost. The detail now
+names it:
+
+```
+CDN blocked the request before it reached the API: Cloudflare error 1010
+(browser signature). The upstream never saw it.
+```
+
+Detection requires two independent markers, so an upstream serving a model
+called `cloudflare/llama-3` does not get every ordinary JSON error relabelled.
+A `cdn_block` almost always means the outbound
+[`User-Agent`](#user-agent) — see below.
 
 Every failover path records, not merely the ones that returned an HTTP status.
 A connect timeout is the most common way a free-tier pool fails and was, for one

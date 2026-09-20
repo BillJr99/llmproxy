@@ -1259,6 +1259,52 @@ def _scrub_secrets(text: str) -> str:
     return text
 
 
+# Cloudflare's own error codes, as they appear in its interstitial HTML. Only
+# the ones an API caller can actually hit and act on are named; anything else
+# falls back to the bare code.
+_CDN_BLOCK_CODES = {
+    "1010": "browser signature",
+    "1015": "rate limited",
+    "1020": "firewall rule",
+    "1006": "IP banned",
+    "1009": "country blocked",
+}
+# Two independent markers must BOTH appear. A single one is not enough: an
+# upstream that serves a model called "cloudflare/llama-3" would otherwise have
+# every one of its ordinary JSON errors relabelled as a CDN block, which is
+# worse than the bare status this replaces.
+_CDN_MARKERS = re.compile(
+    r"cloudflare|cf-error-details|__cf_|attention required|cf-ray",
+    re.IGNORECASE,
+)
+_CDN_ERROR_CODE_RE = re.compile(r"error\s+code[:\s]+(\d{4})", re.IGNORECASE)
+
+
+def _cdn_block_detail(text: str) -> str | None:
+    """A one-line explanation when *text* is a CDN block page, else None.
+
+    An upstream behind a CDN answers a refused request with an HTML
+    interstitial, not with an API error. Recorded raw, that lands in the failure
+    ring as "Backend request failed with status 403" plus four kilobytes of
+    markup, and the one fact that would explain it — that the CDN, not the API,
+    said no — is the fact that gets lost. Naming it turns an afternoon of
+    bisecting headers into a glance at /v1/failures.
+    """
+    if "<html" not in text.lower() and "<!doctype" not in text.lower():
+        return None
+    if not _CDN_MARKERS.search(text):
+        return None
+    match = _CDN_ERROR_CODE_RE.search(text)
+    if match:
+        code = match.group(1)
+        meaning = _CDN_BLOCK_CODES.get(code)
+        named = f"error {code} ({meaning})" if meaning else f"error {code}"
+    else:
+        named = "no error code in the page"
+    return (f"CDN blocked the request before it reached the API: Cloudflare "
+            f"{named}. The upstream never saw it.")
+
+
 def _failure_detail(body: bytes | str | None) -> str:
     """A short, scrubbed, human-readable excerpt of an upstream error body.
 
@@ -1271,6 +1317,11 @@ def _failure_detail(body: bytes | str | None) -> str:
     if isinstance(body, bytes):
         body = body.decode("utf-8", "replace")
     text = body.strip()
+    # Checked BEFORE the JSON parse: a block page is not JSON, so the parse
+    # would fall through and hand back a slice of raw markup.
+    cdn = _cdn_block_detail(text)
+    if cdn:
+        return cdn
     try:
         parsed = json.loads(text)
         if isinstance(parsed, dict):
@@ -1309,6 +1360,13 @@ def _record_failure(
     operational problems with the same status code.
     """
     try:
+        detail_text = _failure_detail(detail)
+        # A CDN refusal and an API error are different problems wearing the same
+        # status code, so they get different kinds. Only an otherwise-unclassified
+        # "upstream" failure is upgraded: a caller that already named the kind
+        # (a timeout, a capability rejection) knows more than this does.
+        if kind == "upstream" and detail_text.startswith("CDN blocked"):
+            kind = "cdn_block"
         record = {
             "at": datetime.datetime.now(datetime.UTC).isoformat(),
             "ts": time.time(),
@@ -1318,7 +1376,7 @@ def _record_failure(
             "virtual_model": virtual_model,
             "status": status,
             "kind": kind,
-            "detail": _failure_detail(detail),
+            "detail": detail_text,
             "duration_ms": round(duration_ms, 1) if duration_ms is not None else None,
         }
         with _failure_log_lock:

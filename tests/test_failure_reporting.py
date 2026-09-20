@@ -264,3 +264,98 @@ def test_reset_is_gated_by_admin_auth(S, monkeypatch):
     with S.app.test_client() as c:
         assert c.post("/v1/failures/reset").status_code == 200
     assert S._failure_records() == []
+
+
+# ── a CDN block is not an API error ─────────────────────────────────────────
+#
+# An upstream behind a CDN answers a refused request with an HTML interstitial,
+# not with an API error. Recorded raw, that lands in the ring as "Backend
+# request failed with status 403" plus four kilobytes of markup, and the one
+# fact that would explain it — that the CDN, not the API, said no — is the fact
+# that gets lost. This session spent an afternoon rediscovering it by hand.
+
+CLOUDFLARE_1010 = (
+    '<!doctype html><html class="no-js" lang="en-US"><head>'
+    '<title>Attention Required! | Cloudflare</title></head><body>'
+    '<h1>Access denied</h1><p>Error code: 1010</p>'
+    '<p>The owner of this website has banned your access based on your '
+    "browser's signature.</p><p>Cloudflare Ray ID: 8f2b1c</p></body></html>"
+)
+
+
+def test_a_cloudflare_block_page_is_named_rather_than_quoted(S):
+    """The regression: the detail said 'status 403' and then raw markup."""
+    detail = S._failure_detail(CLOUDFLARE_1010)
+    assert detail.startswith("CDN blocked the request")
+    assert "1010" in detail and "browser signature" in detail
+    assert "<html" not in detail and "doctype" not in detail.lower()
+
+
+def test_an_unnamed_cdn_code_still_reports_the_block(S):
+    """A code we have no gloss for is still a CDN block, and saying so beats
+    handing back HTML."""
+    page = CLOUDFLARE_1010.replace("Error code: 1010", "Error code: 1104")
+    detail = S._failure_detail(page)
+    assert detail.startswith("CDN blocked the request")
+    assert "1104" in detail
+
+
+def test_a_block_page_with_no_code_is_still_recognised(S):
+    page = ('<!doctype html><html><head><title>Attention Required! | Cloudflare'
+            '</title></head><body>Sorry, you have been blocked</body></html>')
+    assert S._failure_detail(page).startswith("CDN blocked the request")
+
+
+def test_an_ordinary_api_error_is_untouched(S):
+    """GUARD: the existing behaviour is the common case and must not change."""
+    body = json.dumps({"error": {"message": "model not found"}})
+    assert S._failure_detail(body) == "model not found"
+
+
+def test_a_model_named_after_a_cdn_is_not_mistaken_for_one(S):
+    """GUARD, and the reason two independent markers are required. An upstream
+    serving 'cloudflare/llama-3' would otherwise have every one of its ordinary
+    JSON errors relabelled — worse than the bare status this replaces."""
+    body = json.dumps({"error": {"message": "cloudflare/llama-3 is unavailable"}})
+    assert S._failure_detail(body) == "cloudflare/llama-3 is unavailable"
+
+
+def test_an_html_page_that_is_not_a_cdn_block_is_not_relabelled(S):
+    """GUARD: an upstream's own HTML error page is not a CDN refusal."""
+    page = "<!doctype html><html><body><h1>502 Bad Gateway</h1>nginx</body></html>"
+    assert not S._failure_detail(page).startswith("CDN blocked")
+
+
+def test_a_cdn_block_gets_its_own_failure_kind(S):
+    """So /v1/failures separates it in `kinds` and a CDN refusal stops being
+    indistinguishable from an API error at the same status code."""
+    S._reset_failures()
+    S._record_failure("p1", "m1", status=403, detail=CLOUDFLARE_1010)
+    rows = S._failure_records()
+    assert rows[0]["kind"] == "cdn_block"
+    assert rows[0]["detail"].startswith("CDN blocked the request")
+
+
+def test_an_ordinary_upstream_failure_keeps_its_kind(S):
+    """GUARD on the other branch of the same condition."""
+    S._reset_failures()
+    S._record_failure("p1", "m1", status=400,
+                      detail=json.dumps({"error": {"message": "bad request"}}))
+    assert S._failure_records()[0]["kind"] == "upstream"
+
+
+def test_a_caller_supplied_kind_is_not_overwritten(S):
+    """GUARD: a caller that already named the kind knows more than the body
+    sniffer does, so only an unclassified 'upstream' failure is upgraded."""
+    S._reset_failures()
+    S._record_failure("p1", "m1", status=403, kind="timeout",
+                      detail=CLOUDFLARE_1010)
+    assert S._failure_records()[0]["kind"] == "timeout"
+
+
+def test_secrets_in_a_cdn_body_are_still_scrubbed(S):
+    """GUARD: the new early return must not skip the redaction the old path
+    applied. A block page can echo the request, key and all."""
+    page = CLOUDFLARE_1010.replace(
+        "Access denied", "Access denied for Bearer sk-live-abcdef1234567890")
+    assert "sk-live-abcdef1234567890" not in S._failure_detail(page)
