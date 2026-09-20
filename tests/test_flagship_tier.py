@@ -656,6 +656,159 @@ def test_a_disabled_tier_is_never_due_whatever_the_cache_holds(server, tmp_path)
     assert server._flagship_refresh_due({"enabled": False}, str(cfg)) is False
 
 
+# ── the floor is re-checked against the LIVE tier ───────────────────────────
+#
+# Membership is cached at refresh time; free-ness is re-evaluated on every
+# read. A member that becomes cost-observed after the refresh therefore leaves
+# flagship__free immediately while `members` still lists it, and the pool sat
+# below its floor until the next cadence tick — up to a week. Same precedent as
+# the schema check above: an inadequate cache is a correctness question, so the
+# cadence must not gate it.
+
+FLOOR_TIER = {"enabled": True, "refresh_frequency_days": 7,
+              "min_flagship_free_models": 2}
+
+
+def _floor_cfg(tmp_path: Path, config: dict, **state) -> str:
+    (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    (tmp_path / "flagship_models.json").write_text(json.dumps(state), encoding="utf-8")
+    return str(tmp_path / "config.json")
+
+
+FLOOR_PROVIDERS = {
+    "cheapo": {"base_url": "http://cheapo.example/v1", "api_key": "k"},
+}
+
+
+def test_a_member_that_stopped_being_free_makes_the_tier_due(server, tmp_path):
+    """The regression: two free members at refresh time, one flagged
+    cost-observed since, so the live tier holds one and the floor asks two."""
+    cfg = _floor_cfg(
+        tmp_path,
+        {"providers": FLOOR_PROVIDERS,
+         "believed_free": ["cheapo/a-free", "cheapo/b-free"],
+         "cost_observed_free_tier": ["cheapo/b-free"],
+         "sync_believed_free_on_startup": False},
+        last_refresh_at=_now(), model_scores={"afree": 0.9},
+        members=["cheapo/a-free", "cheapo/b-free"],
+        free_models=["afree", "bfree"],
+    )
+    assert server._flagship_refresh_due(FLOOR_TIER, cfg) is True
+
+
+def test_an_excluded_member_makes_the_tier_due(server, tmp_path):
+    """Excludes are applied at read time too, so the same shortfall arrives by
+    a second route."""
+    cfg = _floor_cfg(
+        tmp_path,
+        {"providers": FLOOR_PROVIDERS,
+         "believed_free": ["cheapo/a-free", "cheapo/b-free"],
+         "flagship_tier": {"exclude": ["cheapo/b-free"]},
+         "sync_believed_free_on_startup": False},
+        last_refresh_at=_now(), model_scores={"afree": 0.9},
+        members=["cheapo/a-free", "cheapo/b-free"],
+        free_models=["afree", "bfree"],
+    )
+    assert server._flagship_refresh_due(FLOOR_TIER, cfg) is True
+
+
+def test_a_full_tier_within_its_cadence_is_still_not_due(server, tmp_path):
+    """GUARD: the check must not make every healthy deployment recompute."""
+    cfg = _floor_cfg(
+        tmp_path,
+        {"providers": FLOOR_PROVIDERS,
+         "believed_free": ["cheapo/a-free", "cheapo/b-free"],
+         "sync_believed_free_on_startup": False},
+        last_refresh_at=_now(), model_scores={"afree": 0.9},
+        members=["cheapo/a-free", "cheapo/b-free"],
+        free_models=["afree", "bfree"],
+    )
+    assert server._flagship_refresh_due(FLOOR_TIER, cfg) is False
+
+
+def test_a_deployment_that_never_met_the_floor_does_not_refetch_forever(
+    server, tmp_path, caplog,
+):
+    """GUARD, and the one that matters most. If the LAST run also came up
+    short, this deployment simply does not have two free models, and a check
+    against the floor alone would re-fetch every catalog on every interval
+    tick, forever. Compare against what the previous run achieved."""
+    cfg = _floor_cfg(
+        tmp_path,
+        {"providers": FLOOR_PROVIDERS,
+         "believed_free": ["cheapo/a-free"],
+         "sync_believed_free_on_startup": False},
+        last_refresh_at=_now(), model_scores={"afree": 0.9},
+        members=["cheapo/a-free"], free_models=["afree"],
+    )
+    server._flagship_floor_warned = False
+    with caplog.at_level("WARNING"):
+        assert server._flagship_refresh_due(FLOOR_TIER, cfg) is False
+    assert "min_flagship_free_models" in caplog.text
+
+
+def test_the_shortfall_warning_is_latched(server, tmp_path, caplog):
+    """It runs on every interval tick, so it says so once rather than filling
+    the log."""
+    cfg = _floor_cfg(
+        tmp_path,
+        {"providers": FLOOR_PROVIDERS, "believed_free": ["cheapo/a-free"],
+         "sync_believed_free_on_startup": False},
+        last_refresh_at=_now(), model_scores={"afree": 0.9},
+        members=["cheapo/a-free"], free_models=["afree"],
+    )
+    server._flagship_floor_warned = False
+    server._flagship_refresh_due(FLOOR_TIER, cfg)
+    caplog.clear()  # caplog.text spans the whole test, not just the block below
+    with caplog.at_level("WARNING"):
+        server._flagship_refresh_due(FLOOR_TIER, cfg)
+    assert "min_flagship_free_models" not in caplog.text
+
+
+def test_a_zero_floor_skips_the_live_check_entirely(server, tmp_path):
+    """GUARD: with the floor off there is nothing to guarantee, and the check
+    must not cost a config read on every tick."""
+    cfg = _floor_cfg(
+        tmp_path,
+        {"providers": FLOOR_PROVIDERS, "sync_believed_free_on_startup": False},
+        last_refresh_at=_now(), model_scores={"afree": 0.9},
+        members=["cheapo/a-free"], free_models=[],
+    )
+    tier = {**FLOOR_TIER, "min_flagship_free_models": 0}
+    assert server._flagship_refresh_due(tier, cfg) is False
+
+
+def test_a_cache_predating_the_free_count_is_not_dragged_into_the_check(
+    server, tmp_path,
+):
+    """GUARD: `free_models` was not always written. Its absence must read as
+    'unknown', not as 'zero', which would make every upgraded deployment
+    recompute on its first tick for no reason."""
+    cfg = _floor_cfg(
+        tmp_path,
+        {"providers": FLOOR_PROVIDERS, "sync_believed_free_on_startup": False},
+        last_refresh_at=_now(), model_scores={"afree": 0.9},
+        members=["cheapo/a-free"],
+    )
+    assert server._flagship_refresh_due(FLOOR_TIER, cfg) is False
+
+
+def test_the_live_count_is_per_model_not_per_routing_target(server, tmp_path):
+    """The floor counts distinct models, so two providers serving the same
+    free weights is one, and a floor of two is genuinely unmet."""
+    cfg = _floor_cfg(
+        tmp_path,
+        {"providers": {**FLOOR_PROVIDERS,
+                       "other": {"base_url": "http://other.example/v1",
+                                 "api_key": "k"}},
+         "believed_free": ["cheapo/glm-5.3", "other/glm-5.3"],
+         "sync_believed_free_on_startup": False},
+        members=["cheapo/glm-5.3", "other/glm-5.3"],
+    )
+    assert server._live_flagship_free_count(
+        json.loads(Path(cfg).read_text(encoding="utf-8")), cfg) == 1
+
+
 def test_serving_unranked_says_so_once(ranked_server, monkeypatch, caplog):
     """Silent correct degradation is how this survived a deploy. It must be
     visible — but once per process, not once per request."""
