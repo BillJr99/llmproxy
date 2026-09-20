@@ -6,12 +6,14 @@ import time
 
 import requests
 
+from llmproxy import USER_AGENT
+
 from ..base import Evidence, Source
 
 TIMEOUT = (5, 10)
-_HEADERS = {
-    "User-Agent": "llmproxy-update-free-models/1.0 (+https://github.com/billjr99/llmproxy)",
-}
+# One identity for every outbound request, version included, rather than a
+# second hardcoded string that drifts from __version__.
+_HEADERS = {"User-Agent": USER_AGENT}
 _429_RETRY_DELAYS = (5.0, 15.0, 30.0)  # seconds between successive 429 retries
 
 

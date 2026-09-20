@@ -1778,7 +1778,14 @@ def _upstream_headers(provider_cfg: dict) -> dict:
 
     Always injects the provider's API key as the Bearer token.  Selected
     client-supplied headers are forwarded where the upstream is likely to
-    consume them (e.g., HTTP-Referer for OpenRouter rate-limit attribution).
+    consume them (e.g., HTTP-Referer for OpenRouter rate-limit attribution),
+    including the ``User-Agent`` that ``_forwarded_client_headers`` resolves.
+
+    NOTE: nothing in the live request path calls this any more — every one of
+    them goes through a dialect adapter's ``build_request`` instead, and only
+    tests reference this. It is left in place, and wired to the same resolver,
+    so it cannot quietly become the one header builder that still leaks a bare
+    library default if something starts calling it again.
     """
     headers = {"Content-Type": "application/json"}
     api_key = provider_api_key(provider_cfg)
@@ -2130,7 +2137,13 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
     # (case-insensitive). Cloudflare's catalog mixes Text Generation, embeddings,
     # image, etc. into one list; this restricts it to chat-capable models.
     keep_task = provider_cfg.get("models_keep_task")
-    headers = {"Content-Type": "application/json"}
+    # Identify ourselves. This one matters more than the request paths: it
+    # builds the route cache, so a CDN refusing it makes the provider vanish
+    # from every pool at once, which reads as "that provider has no models"
+    # rather than as a block. It also runs on a background thread, where there
+    # is no client UA to relay in the first place.
+    headers = {"Content-Type": "application/json",
+               "User-Agent": _configured_user_agent()}
     api_key = provider_api_key(provider_cfg)
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -2526,7 +2539,9 @@ def _sync_local_provider_models_once() -> None:
         for provider_key, provider_cfg in local_providers.items():
             base_url = provider_base_url(provider_cfg)
             api_key = provider_api_key(provider_cfg)
-            local_headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+            local_headers = {"User-Agent": _configured_user_agent()}
+            if api_key:
+                local_headers["Authorization"] = f"Bearer {api_key}"
             try:
                 resp = requests.get(
                     f"{base_url}/models",
@@ -10967,7 +10982,12 @@ def passthrough(subpath: str) -> Response:
         base_url = provider_base_url(provider_cfg)
         url = f"{base_url}/{subpath}"
         api_key = provider_api_key(provider_cfg)
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        # Passthrough, so the client's own forwarded headers apply here too --
+        # including the resolved User-Agent. This site built its dict by hand
+        # and sent none at all.
+        headers = {**_forwarded_client_headers()}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         params = {k: v for k, v in request.args.items() if k != "provider"}
         try:
             resp = requests.request(

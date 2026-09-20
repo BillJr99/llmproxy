@@ -23,6 +23,8 @@ import os
 
 import requests
 
+from llmproxy import USER_AGENT
+
 from .base import Evidence, Source
 
 REQUESTY_URL = "https://router.requesty.ai/v1/models"
@@ -41,7 +43,8 @@ class RequestySource(Source):
             return []
         resp = requests.get(
             self.url,
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={"Authorization": f"Bearer {api_key}",
+                     "User-Agent": USER_AGENT},
             timeout=TIMEOUT,
         )
         resp.raise_for_status()

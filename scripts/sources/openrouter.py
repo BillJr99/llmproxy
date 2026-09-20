@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import requests
 
+from llmproxy import USER_AGENT
 from llmproxy.providers import capabilities_from_listing  # type: ignore
 
 from .base import Evidence, Source
@@ -28,7 +29,8 @@ class OpenRouterSource(Source):
         self.url = url
 
     def fetch(self) -> list[Evidence]:
-        resp = requests.get(self.url, timeout=TIMEOUT)
+        resp = requests.get(self.url, timeout=TIMEOUT,
+                            headers={"User-Agent": USER_AGENT})
         resp.raise_for_status()
         data = resp.json()
 

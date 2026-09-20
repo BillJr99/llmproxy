@@ -16,6 +16,7 @@ import os
 
 import requests
 
+from llmproxy import USER_AGENT
 from llmproxy.providers import load_data  # type: ignore
 
 from .base import Evidence, Source
@@ -73,7 +74,8 @@ class ApiModelsSource(Source):
     def _fetch_models(base_url: str, api_key: str) -> list[str]:
         resp = requests.get(
             f"{base_url.rstrip('/')}/models",
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={"Authorization": f"Bearer {api_key}",
+                     "User-Agent": USER_AGENT},
             timeout=TIMEOUT,
         )
         resp.raise_for_status()

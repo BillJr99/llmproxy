@@ -28,6 +28,8 @@ import os
 
 import requests
 
+from llmproxy import USER_AGENT
+
 from .base import Evidence, Source
 
 TOGETHER_URL = "https://api.together.xyz/v1/models"
@@ -46,7 +48,8 @@ class TogetherSource(Source):
             return []
         resp = requests.get(
             self.url,
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={"Authorization": f"Bearer {api_key}",
+                     "User-Agent": USER_AGENT},
             timeout=TIMEOUT,
         )
         resp.raise_for_status()

@@ -17,6 +17,8 @@ from collections.abc import Iterable
 
 import requests
 
+from llmproxy import USER_AGENT
+
 from .base import Evidence, Source
 
 # Raw README on GitHub. Pinned to default branch; failures fall through to
@@ -77,7 +79,8 @@ class CommunitySource(Source):
         self.url = url
 
     def fetch(self) -> list[Evidence]:
-        resp = requests.get(self.url, timeout=TIMEOUT)
+        resp = requests.get(self.url, timeout=TIMEOUT,
+                            headers={"User-Agent": USER_AGENT})
         resp.raise_for_status()
         return list(self._parse(resp.text))
 
