@@ -84,7 +84,7 @@ from flask import (
     stream_with_context,
 )
 
-from . import __version__
+from . import USER_AGENT, __version__
 from . import fusion as _fusion
 from . import route_report as _route_report
 from .config import (
@@ -1259,6 +1259,52 @@ def _scrub_secrets(text: str) -> str:
     return text
 
 
+# Cloudflare's own error codes, as they appear in its interstitial HTML. Only
+# the ones an API caller can actually hit and act on are named; anything else
+# falls back to the bare code.
+_CDN_BLOCK_CODES = {
+    "1010": "browser signature",
+    "1015": "rate limited",
+    "1020": "firewall rule",
+    "1006": "IP banned",
+    "1009": "country blocked",
+}
+# Two independent markers must BOTH appear. A single one is not enough: an
+# upstream that serves a model called "cloudflare/llama-3" would otherwise have
+# every one of its ordinary JSON errors relabelled as a CDN block, which is
+# worse than the bare status this replaces.
+_CDN_MARKERS = re.compile(
+    r"cloudflare|cf-error-details|__cf_|attention required|cf-ray",
+    re.IGNORECASE,
+)
+_CDN_ERROR_CODE_RE = re.compile(r"error\s+code[:\s]+(\d{4})", re.IGNORECASE)
+
+
+def _cdn_block_detail(text: str) -> str | None:
+    """A one-line explanation when *text* is a CDN block page, else None.
+
+    An upstream behind a CDN answers a refused request with an HTML
+    interstitial, not with an API error. Recorded raw, that lands in the failure
+    ring as "Backend request failed with status 403" plus four kilobytes of
+    markup, and the one fact that would explain it — that the CDN, not the API,
+    said no — is the fact that gets lost. Naming it turns an afternoon of
+    bisecting headers into a glance at /v1/failures.
+    """
+    if "<html" not in text.lower() and "<!doctype" not in text.lower():
+        return None
+    if not _CDN_MARKERS.search(text):
+        return None
+    match = _CDN_ERROR_CODE_RE.search(text)
+    if match:
+        code = match.group(1)
+        meaning = _CDN_BLOCK_CODES.get(code)
+        named = f"error {code} ({meaning})" if meaning else f"error {code}"
+    else:
+        named = "no error code in the page"
+    return (f"CDN blocked the request before it reached the API: Cloudflare "
+            f"{named}. The upstream never saw it.")
+
+
 def _failure_detail(body: bytes | str | None) -> str:
     """A short, scrubbed, human-readable excerpt of an upstream error body.
 
@@ -1271,6 +1317,11 @@ def _failure_detail(body: bytes | str | None) -> str:
     if isinstance(body, bytes):
         body = body.decode("utf-8", "replace")
     text = body.strip()
+    # Checked BEFORE the JSON parse: a block page is not JSON, so the parse
+    # would fall through and hand back a slice of raw markup.
+    cdn = _cdn_block_detail(text)
+    if cdn:
+        return cdn
     try:
         parsed = json.loads(text)
         if isinstance(parsed, dict):
@@ -1309,6 +1360,13 @@ def _record_failure(
     operational problems with the same status code.
     """
     try:
+        detail_text = _failure_detail(detail)
+        # A CDN refusal and an API error are different problems wearing the same
+        # status code, so they get different kinds. Only an otherwise-unclassified
+        # "upstream" failure is upgraded: a caller that already named the kind
+        # (a timeout, a capability rejection) knows more than this does.
+        if kind == "upstream" and detail_text.startswith("CDN blocked"):
+            kind = "cdn_block"
         record = {
             "at": datetime.datetime.now(datetime.UTC).isoformat(),
             "ts": time.time(),
@@ -1318,7 +1376,7 @@ def _record_failure(
             "virtual_model": virtual_model,
             "status": status,
             "kind": kind,
-            "detail": _failure_detail(detail),
+            "detail": detail_text,
             "duration_ms": round(duration_ms, 1) if duration_ms is not None else None,
         }
         with _failure_log_lock:
@@ -1778,7 +1836,14 @@ def _upstream_headers(provider_cfg: dict) -> dict:
 
     Always injects the provider's API key as the Bearer token.  Selected
     client-supplied headers are forwarded where the upstream is likely to
-    consume them (e.g., HTTP-Referer for OpenRouter rate-limit attribution).
+    consume them (e.g., HTTP-Referer for OpenRouter rate-limit attribution),
+    including the ``User-Agent`` that ``_forwarded_client_headers`` resolves.
+
+    NOTE: nothing in the live request path calls this any more — every one of
+    them goes through a dialect adapter's ``build_request`` instead, and only
+    tests reference this. It is left in place, and wired to the same resolver,
+    so it cannot quietly become the one header builder that still leaks a bare
+    library default if something starts calling it again.
     """
     headers = {"Content-Type": "application/json"}
     api_key = provider_api_key(provider_cfg)
@@ -1788,6 +1853,77 @@ def _upstream_headers(provider_cfg: dict) -> dict:
     return headers
 
 
+# Bare library and runtime defaults. These identify an HTTP STACK rather than a
+# client, and they are exactly what CDN bot filters match on: a relayed
+# "Python-urllib/3.11" is refused by Cloudflare's Browser Integrity Check with a
+# 403 and an HTML block page, measured against a real provider.
+#
+# curl and wget are deliberately absent. Both pass that check, and rewriting
+# them would mislead anyone reproducing a problem by hand -- which is most
+# people, most of the time.
+#
+# Anything naming a product ("OpenAI/Python 2.24.0") passes through untouched:
+# it is a real client identity, upstreams use it for attribution, and replacing
+# it would throw away information the operator may be relying on.
+_GENERIC_CLIENT_UA_RE = re.compile(
+    r"^(?:python-urllib|urllib|python-requests|requests|python-httpx|httpx"
+    r"|aiohttp|go-http-client|java|okhttp|libwww-perl|ruby|php|node-fetch"
+    r"|axios|apache-httpclient|guzzlehttp)[/ ]",
+    re.IGNORECASE,
+)
+
+
+def _configured_user_agent(config: dict | None = None) -> str:
+    """The string llmproxy calls itself, honouring ``server.user_agent``."""
+    try:
+        cfg = config if config is not None else load_config()
+        raw = cfg.get("server", {}).get("user_agent")
+    except Exception:  # noqa: BLE001 -- identifying ourselves must never raise
+        raw = None
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return USER_AGENT
+
+
+def _outbound_user_agent(client_ua: str | None, config: dict | None = None) -> str | None:
+    """The ``User-Agent`` to send upstream for a request from *client_ua*.
+
+    ``server.forward_user_agent`` picks the policy:
+
+    * ``"auto"`` (default) -- replace a MISSING or generic-library UA with our
+      own, pass anything else through. This keeps attribution for clients that
+      identify themselves properly while making sure a caller's choice of HTTP
+      library cannot decide whether an upstream answers.
+    * ``true`` -- relay whatever arrived and nothing else, which is exactly the
+      behaviour that shipped before this setting existed. Returns None when the
+      client sent none, leaving the HTTP library's default in place.
+    * ``false`` -- always send our own, never relay.
+
+    Returns None only in the ``true`` case with no inbound UA; every other path
+    returns a string, so llmproxy is identifiable by default.
+    """
+    try:
+        cfg = config if config is not None else load_config()
+        mode = cfg.get("server", {}).get("forward_user_agent", "auto")
+    except Exception:  # noqa: BLE001
+        cfg, mode = None, "auto"
+
+    ours = _configured_user_agent(cfg)
+    # `true`/`false` are the natural things to write for a setting spelled
+    # "forward_user_agent", so both the booleans and the string modes are
+    # accepted. An unrecognised value reads as "auto" rather than as an error:
+    # a typo should not silently restore the behaviour this exists to fix.
+    if mode is True or str(mode).strip().lower() == "true":
+        return client_ua or None
+    if mode is False or str(mode).strip().lower() == "false":
+        return ours
+    if not client_ua or not client_ua.strip():
+        return ours
+    if _GENERIC_CLIENT_UA_RE.match(client_ua.strip()):
+        return ours
+    return client_ua
+
+
 def _forwarded_client_headers() -> dict:
     """Selected client headers we relay upstream (OpenRouter attribution etc.).
 
@@ -1795,19 +1931,29 @@ def _forwarded_client_headers() -> dict:
     dialect adapters decide whether to merge these (the OpenAI adapter does;
     native Anthropic/Gemini ignore them).
 
-    Returns ``{}`` when there is no active request context (e.g. a background
-    worker thread), so callers off the request thread degrade gracefully rather
-    than raising. Such callers should instead capture these on the request thread
+    The ``User-Agent`` is resolved through ``_outbound_user_agent`` rather than
+    relayed blindly: see the note on ``_GENERIC_CLIENT_UA_RE``. Doing it here,
+    in the single producer of this dict, is what gets every outbound request
+    path -- buffered, streaming, cycling and fusion -- without four separate
+    edits that could drift apart.
+
+    Off the request thread (a background or fusion worker) there is no client to
+    relay, so the result carries our own identity alone rather than being empty.
+    That is the case that previously sent ``python-requests/x``. Such callers
+    should still capture the full set on the request thread
     and pass them down (see _proxy_fusion's panel fan-out, which forwards them via
     ``_proxy_request(..., forwarded_headers=...)``).
     """
     if not has_request_context():
-        return {}
+        return {"User-Agent": _configured_user_agent()}
     out: dict = {}
-    for header in _FORWARDED_REQUEST_HEADERS - {"Content-Type"}:
+    for header in _FORWARDED_REQUEST_HEADERS - {"Content-Type", "User-Agent"}:
         value = request.headers.get(header)
         if value:
             out[header] = value
+    resolved = _outbound_user_agent(request.headers.get("User-Agent"))
+    if resolved:
+        out["User-Agent"] = resolved
     return out
 
 
@@ -2049,7 +2195,13 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
     # (case-insensitive). Cloudflare's catalog mixes Text Generation, embeddings,
     # image, etc. into one list; this restricts it to chat-capable models.
     keep_task = provider_cfg.get("models_keep_task")
-    headers = {"Content-Type": "application/json"}
+    # Identify ourselves. This one matters more than the request paths: it
+    # builds the route cache, so a CDN refusing it makes the provider vanish
+    # from every pool at once, which reads as "that provider has no models"
+    # rather than as a block. It also runs on a background thread, where there
+    # is no client UA to relay in the first place.
+    headers = {"Content-Type": "application/json",
+               "User-Agent": _configured_user_agent()}
     api_key = provider_api_key(provider_cfg)
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -2445,7 +2597,9 @@ def _sync_local_provider_models_once() -> None:
         for provider_key, provider_cfg in local_providers.items():
             base_url = provider_base_url(provider_cfg)
             api_key = provider_api_key(provider_cfg)
-            local_headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+            local_headers = {"User-Agent": _configured_user_agent()}
+            if api_key:
+                local_headers["Authorization"] = f"Bearer {api_key}"
             try:
                 resp = requests.get(
                     f"{base_url}/models",
@@ -10641,6 +10795,165 @@ def failure_report() -> Response:
     })
 
 
+# ---------------------------------------------------------------------------
+# Read-only introspection: /v1/providers and /v1/config
+# ---------------------------------------------------------------------------
+#
+# Both existed only as 404-shaped 400s before: no route matched, so they fell
+# into the OpenAI passthrough below, which demands "?provider=<name>" to know
+# which upstream to forward to. A client asking llmproxy about ITSELF got
+# "Supply '?provider=<name>'", which reads like a malformed request rather than
+# like a missing endpoint.
+#
+# They are deliberately in the same family as /v1/usage and /v1/failures:
+# unauthenticated, read-only, and carrying NO secrets. That last one is a hard
+# constraint rather than an aspiration, which is why neither endpoint emits a
+# key even in masked form. A mask still leaks its last characters, and these
+# endpoints answer to anyone who can reach the port. Whether a credential is
+# configured is the only fact about it worth publishing, and it is a bool.
+#
+# The token-gated /admin/api/config remains the place to read or edit the
+# actual configuration, masks included.
+
+# Key names whose VALUES never appear in these responses, matched case-
+# insensitively as substrings. Belt-and-braces: everything below is assembled
+# field by field rather than copied wholesale, so nothing secret should reach
+# the filter in the first place. It exists because "should" is doing load-
+# bearing work in that sentence, and a future key added to the server block is
+# exactly how that assumption breaks.
+_SECRET_KEY_HINTS = ("key", "token", "secret", "password", "passwd", "credential")
+
+
+def _looks_secret(name: str) -> bool:
+    """True when a config field name suggests it holds a credential.
+
+    ``api_key_set`` and friends are deliberately NOT caught: the suffix marks a
+    boolean derived from a secret, which is the safe form and the whole point of
+    publishing it.
+    """
+    lowered = name.lower()
+    if lowered.endswith(("_set", "_is_env", "_count")):
+        return False
+    return any(hint in lowered for hint in _SECRET_KEY_HINTS)
+
+
+def _public_config_block(block: dict) -> dict:
+    """A copy of *block* with credential-shaped fields dropped entirely.
+
+    Dropped rather than masked, for the reason in the note above. Named apart
+    from ``_scrub_secrets``, which redacts secrets out of free TEXT for the
+    failure log: same intent, different input, and one shadowing the other is a
+    bug that only shows up when a request actually fails.
+    """
+    return {k: v for k, v in block.items()
+            if isinstance(k, str) and not _looks_secret(k)}
+
+
+def _provider_summary(name: str, cfg: dict, route_counts: dict[str, int]) -> dict:
+    """One provider's public shape: what it is, not how to authenticate to it."""
+    base_url = provider_base_url(cfg)
+    try:
+        accounts = provider_accounts(cfg)
+    except Exception:  # noqa: BLE001 — introspection must not fail on bad config
+        accounts = []
+    return {
+        "name": name,
+        "base_url": base_url,
+        "api_key_set": bool(provider_api_key(cfg)),
+        "accounts": len(accounts),
+        "account_strategy": cfg.get("account_strategy"),
+        "models": route_counts.get(name, 0),
+        # Both are per-provider switches an operator is likely to be checking
+        # when they call this at all: "why is this provider not in my free pool"
+        # is usually one of the two.
+        "expose_to_virtual_models": _provider_exposes_to_virtual_models(cfg),
+        "local": _is_local_url(base_url),
+        "model_filter": cfg.get("model_filter"),
+    }
+
+
+@app.route("/v1/providers", methods=["GET"])
+@app.route("/providers", methods=["GET"])
+def list_providers() -> Response:
+    """The configured providers, with no credentials.
+
+    ``?provider=<name>`` is still honoured as a passthrough to that upstream's
+    own ``/v1/providers``, so adding this route cannot break anyone who was
+    relying on the previous behaviour. Without it, the question is about
+    llmproxy and is answered here.
+    """
+    if request.args.get("provider"):
+        return passthrough("providers")
+
+    config = load_config()
+    route_counts: dict[str, int] = {}
+    for provider_name, _upstream in _get_distinct_routes():
+        route_counts[provider_name] = route_counts.get(provider_name, 0) + 1
+
+    providers = [
+        _provider_summary(name, cfg, route_counts)
+        for name, cfg in sorted((config.get("providers") or {}).items())
+        if isinstance(cfg, dict)
+    ]
+    return jsonify({
+        "object": "llmproxy.providers",
+        "total": len(providers),
+        # A provider configured but serving nothing is the single most common
+        # "why is my model missing" cause, and counting it here saves diffing
+        # this response against /v1/models by hand.
+        "serving_models": sum(1 for p in providers if p["models"]),
+        "providers": providers,
+    })
+
+
+@app.route("/v1/config", methods=["GET"])
+@app.route("/config", methods=["GET"])
+def effective_config() -> Response:
+    """The EFFECTIVE configuration llmproxy is running on, with no credentials.
+
+    Effective, not config.json's contents: the routing keys are merged from four
+    layers (provider defaults, learned, listing, curated) before the router sees
+    them, so reading config.json alone shows a deployment as having no free
+    models and no capability data at all. What is reported here is what actually
+    decides routing.
+
+    The routing keys are summarised by SIZE rather than listed. They run to
+    thousands of entries on an ordinary deployment, which is a different request
+    from "show me my settings" — ``/admin/api/config`` and
+    ``/admin/api/routing-metadata`` serve that one, with editing.
+    """
+    if request.args.get("provider"):
+        return passthrough("config")
+
+    config = load_config()
+    merged = _merged_routing_config(config)
+
+    def _size(key: str) -> int:
+        value = merged.get(key)
+        return len(value) if isinstance(value, (list, dict)) else 0
+
+    admin_cfg = config.get("admin") or {}
+    return jsonify({
+        "object": "llmproxy.config",
+        "version": __version__,
+        "config_path": str(get_config_path()),
+        "server": _public_config_block(config.get("server") or {}),
+        "flagship_tier": flagship_tier_cfg(config),
+        "providers": sorted((config.get("providers") or {}).keys()),
+        # Sizes, not contents. See the docstring.
+        "routing_metadata": {key: _size(key) for key in _ROUTING_CONFIG_KEYS},
+        "request_log": _request_log_mode(config),
+        "free_tier_cache_affinity": _free_tier_cache_affinity_enabled(config),
+        "allow_implicit_paid": _allow_implicit_paid(config),
+        "admin": {
+            "enabled": bool(admin_cfg.get("enabled", True) is not False),
+            # Whether a token is configured, never the token.
+            "token_set": bool(admin_cfg.get("token")
+                              or os.environ.get("LLMPROXY_ADMIN_TOKEN")),
+        },
+    })
+
+
 @app.route("/v1/failures/reset", methods=["POST"])
 def failure_reset() -> Response:
     """Clear this worker's failure ring. Gated by the admin auth guard."""
@@ -10727,7 +11040,12 @@ def passthrough(subpath: str) -> Response:
         base_url = provider_base_url(provider_cfg)
         url = f"{base_url}/{subpath}"
         api_key = provider_api_key(provider_cfg)
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        # Passthrough, so the client's own forwarded headers apply here too --
+        # including the resolved User-Agent. This site built its dict by hand
+        # and sent none at all.
+        headers = {**_forwarded_client_headers()}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         params = {k: v for k, v in request.args.items() if k != "provider"}
         try:
             resp = requests.request(

@@ -168,6 +168,15 @@ class GeminiOutbound(OutboundAdapter):
         api_key = provider_api_key(provider_cfg)
         if api_key:
             headers["x-goog-api-key"] = api_key
+        # Only the User-Agent is taken from the forwarded set. This adapter
+        # deliberately ignores the rest (attribution headers aimed at
+        # OpenAI-compatible gateways mean nothing here), but identifying
+        # ourselves is not attribution -- without it this path sends whatever
+        # the HTTP library defaults to, which is what got a caller a CDN block
+        # page instead of an answer. See _outbound_user_agent in server.py.
+        user_agent = (forwarded_headers or {}).get("User-Agent")
+        if user_agent:
+            headers["User-Agent"] = user_agent
         return url, headers, _to_gemini_request(payload)
 
     def translate_response(self, content: bytes) -> bytes:

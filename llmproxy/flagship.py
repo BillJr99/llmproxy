@@ -38,6 +38,8 @@ import re
 from dataclasses import dataclass, field
 from statistics import median
 
+from . import USER_AGENT
+
 # Suffixes that denote a billing or routing variant of the SAME underlying
 # model, not a different one. Collapsed before ranking so a model does not
 # occupy several slots — roughly half of a raw catalog listing is ``:batch``.
@@ -447,7 +449,10 @@ def fetch_openrouter_profiles(url: str = OPENROUTER_MODELS_URL) -> dict[str, dic
 
     from .providers import capabilities_from_listing
 
-    resp = requests.get(url, timeout=_FETCH_TIMEOUT)
+    # A third-party catalog behind a CDN will refuse a bare library
+    # default as readily as a provider will.
+    resp = requests.get(url, timeout=_FETCH_TIMEOUT,
+                        headers={"User-Agent": USER_AGENT})
     resp.raise_for_status()
     out: dict[str, dict] = {}
     for model in resp.json().get("data", []):

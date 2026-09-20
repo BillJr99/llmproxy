@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import requests
 
+from llmproxy import USER_AGENT
 from llmproxy.providers import load_data  # type: ignore
 
 from .base import Evidence, Source
@@ -76,7 +77,8 @@ class XkiroSource(Source):
         # No auth: the catalog is public. A hard failure must propagate so the
         # CLI records succeeded=False ("no evidence") rather than an empty
         # catalog, which would read as "every model was removed".
-        resp = requests.get(self.url, timeout=TIMEOUT)
+        resp = requests.get(self.url, timeout=TIMEOUT,
+                            headers={"User-Agent": USER_AGENT})
         resp.raise_for_status()
         data = resp.json()
         models = data.get("data", data) if isinstance(data, dict) else data

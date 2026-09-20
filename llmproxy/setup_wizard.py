@@ -11,6 +11,7 @@ import json
 
 import requests as _requests
 
+from . import USER_AGENT
 from .config import (
     DEFAULT_SERVER_CONFIG,
     RESERVED_PROVIDER_NAMES,
@@ -461,6 +462,7 @@ def _fetch_provider_models_direct(providers: dict) -> list[tuple[str, str]]:
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
+                    "User-Agent": USER_AGENT,
                 },
                 timeout=10,
             )
@@ -837,7 +839,8 @@ def _auto_register_local_models(provider_key: str, provider_cfg: dict, config: d
     try:
         resp = _requests.get(
             f"{base_url}/models",
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={"Authorization": f"Bearer {api_key}",
+                     "User-Agent": USER_AGENT},
             timeout=8,
         )
         resp.raise_for_status()

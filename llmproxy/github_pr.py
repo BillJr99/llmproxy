@@ -14,6 +14,8 @@ import logging
 
 import requests
 
+from . import USER_AGENT
+
 logger = logging.getLogger("llmproxy.github_pr")
 
 _API = "https://api.github.com"
@@ -64,6 +66,8 @@ def _gh(method: str, url: str, token: str, *, json: dict | None = None) -> reque
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
+            # GitHub asks every API client to identify itself; we sent none.
+            "User-Agent": USER_AGENT,
         },
         json=json,
         timeout=_TIMEOUT,

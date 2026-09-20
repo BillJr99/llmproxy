@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import requests
 
+from llmproxy import USER_AGENT
 from llmproxy.config import (
     get_provider,
     load_config,
@@ -113,7 +114,8 @@ class EndpointProbeSource(Source):
         try:
             resp = requests.get(
                 f"{base_url}/models",
-                headers={"Authorization": f"Bearer {api_key}"},
+                headers={"Authorization": f"Bearer {api_key}",
+                     "User-Agent": USER_AGENT},
                 timeout=self.timeout,
             )
             if resp.status_code >= 400:

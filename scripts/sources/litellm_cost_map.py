@@ -35,6 +35,8 @@ from collections.abc import Iterable
 
 import requests
 
+from llmproxy import USER_AGENT
+
 from .base import Evidence, Source
 
 LITELLM_COST_MAP_URL = (
@@ -83,7 +85,8 @@ class LiteLLMCostMapSource(Source):
         self.url = url
 
     def fetch(self) -> list[Evidence]:
-        resp = requests.get(self.url, timeout=TIMEOUT)
+        resp = requests.get(self.url, timeout=TIMEOUT,
+                            headers={"User-Agent": USER_AGENT})
         resp.raise_for_status()
         data = resp.json()
         return list(self._parse(data))
@@ -179,6 +182,7 @@ def build_pricing_map(data: dict) -> dict[str, dict]:
 
 def fetch_pricing_map(url: str = LITELLM_COST_MAP_URL) -> dict[str, dict]:
     """Download the litellm cost map and return the pricing snapshot."""
-    resp = requests.get(url, timeout=TIMEOUT)
+    resp = requests.get(url, timeout=TIMEOUT,
+                        headers={"User-Agent": USER_AGENT})
     resp.raise_for_status()
     return build_pricing_map(resp.json())

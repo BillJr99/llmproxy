@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
+from llmproxy import USER_AGENT
 from llmproxy.config import (
     get_provider,
     load_config,
@@ -179,6 +180,7 @@ class CostProbeSource(Source):
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
+                    "User-Agent": USER_AGENT,
                 },
                 json={**_PROBE_BODY, "model": model},
                 timeout=self.timeout,
