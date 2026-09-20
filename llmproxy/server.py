@@ -7268,18 +7268,22 @@ def routing_layers(config: dict | None = None,
 def routing_fact_sources(
     model_id: str, provider_name: str = "", config: dict | None = None,
     config_path: str | None = None,
+    layers: list[tuple[str, dict]] | None = None,
 ) -> dict[str, list[str]]:
     """Which layers have something to say about *model_id*, per fact.
 
     Returns ``{fact_key: [layer_name, ...]}`` weakest first. For capabilities
     every contributing layer is listed, because they union; for the
     single-valued facts the LAST name is the one in effect.
+
+    *layers* lets a caller building many rows assemble them once. Rebuilding
+    four layers per row is most of the cost of listing a few thousand models.
     """
     out: dict[str, list[str]] = {}
     upstream = model_id.split("/", 1)[1] if "/" in model_id and provider_name else model_id
     forms = set(_model_fact_keys(provider_name or model_id.split("/", 1)[0], upstream))
     forms.add(model_id.lower())
-    for name, layer in routing_layers(config, config_path):
+    for name, layer in (layers if layers is not None else routing_layers(config, config_path)):
         for key in _ROUTING_LIST_KEYS:
             entries = layer.get(key)
             if isinstance(entries, list) and forms & {e.lower() for e in entries

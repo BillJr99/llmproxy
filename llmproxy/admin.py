@@ -1155,6 +1155,9 @@ def _routing_rows(config: dict, q: str = "") -> list[dict]:
         print(f"[admin:_routing_rows] {e}")
         traceback.print_exc()
 
+    # Assembled once, not per row: four layer rebuilds per model is most of the
+    # cost of listing a few thousand of them.
+    layers = server.routing_layers(config)
     needle = q.strip().lower()
     rows: list[dict] = []
     for model_id in sorted(ids):
@@ -1178,7 +1181,8 @@ def _routing_rows(config: dict, q: str = "") -> list[dict]:
                 server._lookup_capabilities(
                     {k: set(v or ()) for k, v in caps.items()}, provider, upstream)),
             "free_limits": server._lookup_model_fact(limits, provider, upstream) or {},
-            "layers": server.routing_fact_sources(model_id, provider, config),
+            "layers": server.routing_fact_sources(model_id, provider, config,
+                                                  layers=layers),
             "grades": server.learned_fact_grades(key),
         })
     return rows
