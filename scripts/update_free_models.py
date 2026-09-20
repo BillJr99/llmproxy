@@ -473,7 +473,7 @@ def apply_updates(sidecar: dict, updates: dict) -> bool:
 # PR isn't reopened for cosmetic key-order churn). believed_free is a list; the
 # rest are dicts keyed by model id. Top-level `pricing` is already sorted by its
 # own merge path.
-_SORTED_LIST_KEYS = ("believed_free",)
+_SORTED_LIST_KEYS = ("believed_free", "cost_observed_free_tier")
 _SORTED_DICT_KEYS = ("free_limits", "model_reasoning", "model_capabilities")
 # Blocks mapping model id -> list of tags, where the list is logically a SET and
 # so carries no meaning in its order. Sorting the values too means the on-disk

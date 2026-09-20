@@ -2298,7 +2298,7 @@ you may call it.
 | Key | What it decides | Which layer normally supplies it |
 |---|---|---|
 | `believed_free` | which models the free pools may use | `providers.json`, kept current by the free-models sweep |
-| `cost_observed_free_tier` | which of those reported a real cost and are treated as paid | learned, the moment a free-marked model bills something |
+| `cost_observed_free_tier` | which of those reported a real cost and are treated as paid | learned, the moment a free-marked model bills something; `providers.json` can also ship one, via the [providers PR](#pr-providers-list) |
 | `model_reasoning` | the tier a model sits in (`exploratory` / `standard` / `deep`) | learned, inferred from the model's own name; `providers.json` also ships a tier for almost every model it lists as free |
 | `model_capabilities` | `tools` / `vision` / `reasoning` / `json` | each provider's own listing and the OpenRouter catalog, unioned; `providers.json` ships a set of its own for the models it lists as free |
 | `free_limits` | per-model rate and token quotas | `providers.json`, kept current by the free-models sweep |
@@ -2645,7 +2645,22 @@ deployment benefits rather than just yours. Two things go into it:
   `provider/model` id, which is the convention `providers.json` uses.
 
 Promotion is how one deployment's observations become everyone's starting point,
-which is the whole reason the PR flow exists. It is bounded in two ways. Only
+which is the whole reason the PR flow exists. **All five routing keys cross
+over**, including hand-set ones: a `model_capabilities` entry you verified
+yourself is promoted at the `curated` grade, which is the strongest on the
+ladder, and the PR body says so.
+
+`cost_observed_free_tier` is the newest of the five and the one to read most
+carefully. It is the negative counterpart to `believed_free` — a provider seen
+*billing* for something the catalog calls free — and the pair is why promoting
+either is safe: one adds a model to the free pool, the other takes it back out.
+But billing is the most deployment-specific fact llmproxy knows. Trial credits,
+promotional tiers and per-account pricing mean one deployment's `402` may simply
+not be true for the next, and unlike a capability tag, merging one **removes**
+the model from every deployment's free pool. The PR body flags such entries as a
+single deployment's billing observation rather than a catalog reading.
+
+Promotion is bounded in two ways. Only
 providers this repo already ships are touched, because a provider someone added
 locally is theirs rather than a default for everyone, and the PR body names the
 ones left out rather than dropping them silently. And every promoted fact
