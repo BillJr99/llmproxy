@@ -513,7 +513,10 @@ _MAINTENANCE_INT_FIELDS: dict[str, int] = {
     "flagship_frequency_days": 7,
     "min_family_members": 3,
     # Enforced by _maybe_fire_pr_if_due all along, with no way to set it.
-    "pr_providers_frequency_days": 7,
+    # 0, matching what the server reads for a missing key
+    # (pr_cfg.get("frequency_days", 0) = no throttle). Showing 7 here would mean
+    # saving the form once silently turned "PR on every update" into "weekly".
+    "pr_providers_frequency_days": 0,
 }
 
 # The admin API and frontend keep the historical flat field names; storage maps
@@ -1306,7 +1309,15 @@ def api_refresh():
     from . import server
     try:
         if which == "routing_metadata":
-            state = server._recompute_routing_metadata(_load(), None)
+            config = _load()
+            from .config import routing_metadata_cfg
+            if not routing_metadata_cfg(config).get("enabled", True):
+                # Matches the flagship branch, which goes through a fire helper
+                # that checks its own gate. "Refresh now" changes the timing,
+                # never the decision to maintain this at all.
+                return _err("routing_metadata.enabled is false; "
+                            "turn it on before refreshing.", 409)
+            state = server._recompute_routing_metadata(config, None)
             if state is None:
                 return _err("Refresh learned nothing; previous state kept.", 409)
             return jsonify({

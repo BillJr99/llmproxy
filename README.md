@@ -325,9 +325,10 @@ curl http://localhost:8080/v1/models/llmproxy/free | jq '._candidates'
 
 `llmproxy/free` (also accepted: the `llmproxy/free` slash form) pools every model across all providers
 whose upstream ID contains the word `free` (case-insensitive) **or** whose upstream
-ID (or full `provider/upstream` ID) appears in the top-level `believed_free` config
-list — see [Configuration](#configuration). Its pool is **capacity-aware**: among
-healthy candidates, models with more remaining free-tier quota are preferred, while
+ID (or full `provider/upstream` ID) appears in the resolved `believed_free` list
+— see [where routing metadata lives](#routing-metadata). Its pool is
+**capacity-aware**: among healthy candidates, models with more remaining
+free-tier quota are preferred, while
 load is still spread (see [`free_limits`](#free_limits)). Failover then follows the
 [shared rules](#how-cycling--failover-works) above, which is exactly what you want
 when an individual free endpoint is rate-limited.
@@ -369,8 +370,11 @@ successfully.
 > — `llmproxy/local`, `llmproxy/standard__local`, and so on. When the setup
 > wizard auto-registers a local provider, it tags each discovered model in
 > `model_reasoning` only; `believed_free` is reserved for cloud free-tier
-> offerings. If you want a local model to also appear under `llmproxy/free`,
-> add it to `believed_free` by hand.
+> offerings. The same sync also prunes any `believed_free` and `free_limits`
+> entry a local provider had accumulated. It writes to the curated layer of
+> `routing_metadata.json`, not to `config.json`. If you want a local model to
+> also appear under `llmproxy/free`, add it to `believed_free` by hand, through
+> the admin UI.
 
 ### Request-fit triage (every `*/free` and `*/local` virtual)
 
@@ -1058,7 +1062,7 @@ via its "Manage model tags" menu and via the per-provider auto-populate step
 when you add a templated provider; the merged defaults come from
 [`llmproxy/providers.json`](llmproxy/providers.json).
 
-> **Free-tier accuracy:** The `believed_free` entries in `config.example.json` and in
+> **Free-tier accuracy:** The `believed_free` entries in
 > `llmproxy/providers.json` are best-effort estimates based on publicly-stated provider
 > free tiers. Provider offerings change without notice — no guarantee is made as to accuracy.
 > Verify directly with each provider before relying on free availability in production. The
@@ -1090,6 +1094,13 @@ it to `{}`) to disable capability-aware behavior — the proxy then behaves exac
 as before.  The field **auto-populates** from the scraper (OpenRouter's
 `supported_parameters` and image input modality) and from the setup wizard's
 "Manage model tags → Tag model capabilities" menu.
+
+What each of these four keys means is unchanged; where it is stored is not. The
+setup wizard still writes them into `config.json`, and they are still honoured
+there, but the next restart moves them into the curated layer of
+`routing_metadata.json` and leaves `config.json` without them. The admin UI
+writes to that layer directly. See
+[where routing metadata lives](#routing-metadata).
 
 See `config.example.json` for a complete annotated example.
 
@@ -1773,8 +1784,8 @@ you may call it.
 |---|---|---|
 | `believed_free` | which models the free pools may use | `providers.json`, kept current by the free-models sweep |
 | `cost_observed_free_tier` | which of those reported a real cost and are treated as paid | learned, the moment a free-marked model bills something |
-| `model_reasoning` | the tier a model sits in (`exploratory` / `standard` / `deep`) | learned, inferred from the model's own name; `providers.json` ships a tag for every free model too |
-| `model_capabilities` | `tools` / `vision` / `reasoning` / `json` | the provider's own listing, over what the refresh read from the OpenRouter catalog |
+| `model_reasoning` | the tier a model sits in (`exploratory` / `standard` / `deep`) | learned, inferred from the model's own name; `providers.json` also ships a tier for almost every model it lists as free |
+| `model_capabilities` | `tools` / `vision` / `reasoning` / `json` | each provider's own listing and the OpenRouter catalog, unioned; `providers.json` ships a set of its own for the models it lists as free |
 | `free_limits` | per-model rate and token quotas | `providers.json`, kept current by the free-models sweep |
 
 They are resolved across four layers, weakest first:
@@ -1876,11 +1887,14 @@ previous state in place.
 A model that no source describes is exactly the one that most needs a tier, so
 the refresh fills two gaps on its own:
 
-- **A reasoning tier from the model's name**, via the same inference the setup
-  wizard uses for local models: deep keywords win outright, then a parameter
-  count (100B and up is `deep`, 15B and up is `standard`, smaller is
-  `exploratory`), then a handful of size words. Recorded as `inferred`, the
-  weakest grade, so anything better replaces it later.
+- **A reasoning tier from the model's name**, by the same inference the scraper
+  and the setup wizard already use: a deep keyword (`qwq`, `deepseek-r1`,
+  `magistral`, an `-r1` or `o3-` marker, the word `reasoning`) wins outright,
+  then a parameter count (100B and up is `deep`, 15B and up is `standard`,
+  anything smaller is `exploratory`), then a few size hints (`large`, `medium`,
+  `mixtral`, `70`, `72`, `32`) for `standard`. Everything else is
+  `exploratory`. Recorded as `inferred`, the weakest grade, so anything better
+  replaces it later.
 - **A family's unanimous capabilities**, lent only to a family member that
   publishes none of its own. Unanimity rather than a majority: a family spanning
   coder, omni and vision variants agrees on what the weights share and disagrees
@@ -1891,11 +1905,13 @@ the refresh fills two gaps on its own:
   members still benefits from what is known about the other twenty. Recorded as
   `family`.
 
-Both derivations read the **raw upstream id**, never the normalized join key.
-`normalize_model_id` strips separators, so `llama-3.1-8b` becomes `llama318b`
-and a size regex run afterwards reads "318b" as the parameter count and calls an
-8B model `deep`. The family derivation has the same hazard: `llama-2-7b` would
-come out as family `llama27`.
+Both derivations read the **raw upstream id**, never the normalized join key
+the facts are filed under. `normalize_model_id` strips separators, so
+`llama-3.1-8b` becomes `llama318b`, and a size regex run afterwards reads "318b"
+as the parameter count: the raw id infers `exploratory` and the normalized one
+infers `deep`. The family derivation splits on those same separators, so fed the
+normalized form `llama-2-7b` arrives as `llama27b` and groups with nothing at
+all.
 
 Either inference can be switched off, and the family evidence threshold raised,
 in the `routing_metadata` block below.
@@ -1917,7 +1933,7 @@ config without the block behaves exactly as if it contained these values:
 
 | Key | Default | What it does |
 |-----|---------|--------------|
-| `enabled` | `true` | Master switch for the routing-metadata refresh. When false, no pass runs and the learned layer keeps whatever it last held. |
+| `enabled` | `true` | Master switch. When false the cadence never fires, the learned layer keeps whatever it last held, and an on-demand refresh is refused too: "refresh now" changes the timing, never the decision to maintain this at all. |
 | `refresh_frequency_days` | `7` | How often the refresh runs. `0` relearns every time the interval is checked. |
 | `infer_reasoning` | `true` | Derive a reasoning tier from the model's name when nothing stronger says otherwise. Recorded as `inferred`. |
 | `infer_family_capabilities` | `true` | Lend a family its unanimous capabilities to members that publish none. Recorded as `family`. |
@@ -1929,7 +1945,8 @@ disabling the flagship tier does not also stop llmproxy learning what its models
 can do, and neither source costs anything extra: the provider listings are
 already fetched to build the route cache, and the catalog fetch is the one the
 flagship refresh already makes. The last-run timestamp lives in
-`routing_metadata.json` itself.
+`routing_metadata.json` itself, which sits beside your `config.json` with the
+other machine-managed state files.
 
 Which layers are machine-written, and on what schedule:
 
@@ -1948,11 +1965,15 @@ Which layers are machine-written, and on what schedule:
   drops it from the learned `believed_free` so the file does not assert both.
 - **The provider-listing layer** is in memory and has no file. It is refilled
   whenever the route cache is rebuilt.
-- **The curated section** is written only when you write it, or when the startup
-  migration drains `config.json` into it.
+- **The curated section** is written when you write it, when the startup
+  migration drains `config.json` into it, and by the local-model sync, which
+  tags each model a local provider serves and prunes the entries a local
+  provider no longer has.
 
-Each of these is a read-modify-write of one file, so every writer takes the same
-lock: a thread lock within the process and an advisory file lock across workers.
+Every write to `routing_metadata.json` is a read-modify-write under one lock, a
+thread lock within the process and an advisory file lock across workers, so a
+cost observation and a refresh landing at the same moment cannot lose each
+other's write.
 
 #### Reading and editing the merged view
 
@@ -1991,22 +2012,42 @@ the inference switches and the PR throttle are:
 | `min_family_members` | `routing_metadata.min_family_members` | `3` |
 | `flagship_enabled` | `flagship_tier.enabled` | `true` |
 | `flagship_frequency_days` | `flagship_tier.refresh_frequency_days` | `7` |
-| `pr_providers_frequency_days` | `providers_pr.frequency_days` | `7` in the form; the server treats the key as absent, meaning no throttle, until something writes it |
+| `pr_providers_frequency_days` | `providers_pr.frequency_days` | `0`, matching what the server reads for a missing key: no throttle. Showing anything else would mean saving the form once silently turned "PR on every update" into "every N days" |
 
 #### What gets PR'd, and what never leaves the deployment
 
 The free-models sweep rewrites `llmproxy/providers.json` in place, and with
 [`providers_pr`](#pr-providers-list) enabled the running deployment proposes that
 file (plus the regenerated `config.example.json`) as a pull request, so every
-deployment benefits rather than just yours. What is proposed is what the sweep
-scraped: `believed_free`, `free_limits`, `pricing`, and the reasoning tier and
-capability tags it derives for the models it added.
+deployment benefits rather than just yours. Two things go into it:
 
-Neither sidecar is ever committed. `routing_metadata.json` describes one
+- **What the sweep scraped**: `believed_free`, `free_limits`, `pricing`, and the
+  reasoning tier and capability tags it derives for the models it added.
+- **What this deployment learned**, folded in from the sidecar on the way to the
+  PR. For every route it serves, the capability set and reasoning tier are taken
+  from the curated layer if you set one there and from `by_model` otherwise;
+  free status and quotas come from `by_provider`, which is where they already
+  belong per provider. Everything is written under the qualified
+  `provider/model` id, which is the convention `providers.json` uses.
+
+Promotion is how one deployment's observations become everyone's starting point,
+which is the whole reason the PR flow exists. It is bounded in two ways. Only
+providers this repo already ships are touched, because a provider someone added
+locally is theirs rather than a default for everyone, and the PR body names the
+ones left out rather than dropping them silently. And every promoted fact
+carries its grade: the body breaks the count down by provider and by
+`curated` / `observed` / `family` / `inferred`, and says plainly that the last
+two are llmproxy's guesses rather than anything a provider published. A wrong
+capability tag in `providers.json` sends every deployment's request to a model
+that cannot serve it, where a wrong one in a local sidecar costs one deployment
+a retry, so the grades are what make promoting a guess reasonable rather than
+reckless. The whole step is best-effort: a `providers.json` that will not parse,
+or a promotion that raises, yields a PR without promotion rather than no PR.
+
+Neither sidecar is itself ever committed. `routing_metadata.json` describes one
 deployment's providers and is rewritten on a schedule, and `flagship_models.json`
-is computed from whatever that deployment can reach. Nothing copies the learned
-layer into `providers.json`: a fact promoted to the defaults layer is one a
-scrape found, not one a single deployment inferred.
+is computed from whatever that deployment can reach. What crosses into the repo
+crosses as a reviewable diff to `providers.json`, never as the sidecar.
 
 `providers.json` is also never copied next to your `config.json`. It is read
 from the repo checkout, and a second copy beside your config would drift from it
@@ -2040,12 +2081,13 @@ Anything you add to `config.json` by hand afterwards is still honoured, because
 the file is read as part of the curated layer, but only until the next restart
 absorbs it. The curated section wins where both speak.
 
-One consequence worth knowing: `config.example.json` is generated from
-`providers.json` and still carries the five keys flattened to the top level, so
-a `config.json` copied from it is drained into the curated section on first
-boot, which lands the shipped defaults in the strongest layer. Delete the five
-keys from your copy if you would rather they stayed in the defaults layer, where
-the sweep can keep them current.
+`config.example.json` deliberately no longer carries these five keys. It is
+generated from `providers.json`, and a `config.json` copied from it would have
+them drained into the curated section on first boot, pinning the shipped
+defaults in the strongest layer where no later refresh could improve them. The
+same data still reaches routing as the defaults layer, read straight from
+`providers.json`, which is where the sweep and the providers PR keep it
+current.
 
 <a name="favorite_free_models"></a>
 ### `favorite_free_models` — ranked priority list for free-tier routing
@@ -2193,33 +2235,25 @@ Two opt-in, top-level config flags (both default `false`) let you keep
 <a name="sync-on-startup"></a>
 ### Syncing the live config on startup — `free_tier.sync_on_startup`
 
-**On by default.** On every boot, the server reconciles your **live `config.json`**'s
-`believed_free` / `free_limits` / `model_reasoning` / `model_capabilities` from the
-bundled `providers.json` sidecar — the same data that ships with the package and is
-refreshed by the [providers PR workflow](#automated-providersjson-updates-ci). This is the
-piece that makes merged/`pip install -U` updates actually reach a running proxy:
+**On by default, and now a no-op.** This flag used to copy the bundled
+`providers.json` sidecar's `believed_free` / `free_limits` / `model_reasoning` /
+`model_capabilities` into your live `config.json` on every boot, which was how a
+merged or `pip install -U` update reached a running proxy. The proxy now reads
+`providers.json` directly as the [defaults layer](#routing-metadata), so a
+shipped update reaches routing with nothing to copy, and copying is what froze
+the data in the first place.
 
-- It does **no network scraping** and **never writes the sidecar or
-  `config.example.json`**, so it works even when the sidecar is **read-only** (an
-  installed package, or a container image layer) — only your `config.json` is
-  written, and only when something actually changed.
-- Reconciliation is scoped to providers configured in *your* `config.json`:
-  `believed_free` / `free_limits` add newly-free models and drop ones no longer
-  listed as free; `model_reasoning` / `model_capabilities` are **add-only** (your
-  manual tags are never pruned). Custom providers not in the sidecar are untouched.
-- Progress is logged with a `[startup-sync]` prefix at `INFO`. Set it to `false` to
-  opt out (e.g. if you hand-curate `believed_free`).
-
-You can run the same reconcile manually — handy on a read-only checkout:
+The flag is still read and the startup step still runs, logging a
+`[startup-sync]` line saying there is nothing to sync. Setting it to `false`
+skips that line and changes nothing else. The same is true of running the
+reconcile by hand:
 
 ```bash
 python scripts/update_free_models.py --sync-config-only --config ~/.config/llmproxy/config.json
-# add --dry-run to preview without writing
 ```
 
-This is distinct from `free_tier.update_on_startup` below: that one runs the
-**full network scrape** to *refresh* the sidecar first; `free_tier.sync_on_startup`
-only *applies* whatever sidecar data is already present.
+`free_tier.update_on_startup` below is a different thing entirely: it runs the
+**full network scrape** to refresh the sidecar itself.
 
 <a name="update-on-startup"></a>
 ### Running the updater on startup — `free_tier.update_on_startup`
@@ -2235,13 +2269,14 @@ When `true`, the server runs `scripts/update_free_models.py` once per worker in 
 background thread at startup (it never blocks request handling). It:
 
 - **rewrites `llmproxy/providers.json`** (the sidecar) with any `believed_free` /
-  `free_limits` / `pricing` changes, and regenerates `config.example.json`, and
-- **syncs your `config.json`** (`believed_free` / `free_limits` / `model_reasoning`),
-  which the proxy picks up via the normal config hot-reload.
+  `free_limits` / `model_reasoning` / `model_capabilities` / `pricing` changes,
+  and regenerates `config.example.json`. Nothing is written into your
+  `config.json`: the rewritten sidecar is the
+  [defaults layer](#routing-metadata), so the change reaches routing directly.
 
-Every line the updater prints — including `Updated …/providers.json`, each
-`believed_free` add/remove, and `Synced free-tier sections into …` — is re-emitted
-through the server log with a `[startup-update]` prefix (at `INFO` level), so set
+Every line the updater prints — including `Updated …/providers.json` and each
+`believed_free` add/remove — is re-emitted through the server log with a
+`[startup-update]` prefix (at `INFO` level), so set
 `server.log_level` to `INFO` to watch it work. If `free_tier.probe.enabled` is also `true`, the
 startup run includes the active cost probe (and, with `free_tier.probe.autoremove`,
 removes any model it finds is no longer free). Defaults to `false`.
@@ -2327,9 +2362,10 @@ All three default to weekly and all three run at startup when due, but they are
 otherwise independent: the free-models sweep scrapes provider docs and catalogs,
 the routing-metadata refresh reads provider listings and the OpenRouter catalog
 and then infers what neither covers, and the flagship recompute reads benchmark
-scores and re-ranks what you can reach. Each has its own master switch
-(`free_tier.update_on_startup`, `routing_metadata.enabled`,
-`flagship_tier.enabled`), so turning one off leaves the others running.
+scores and re-ranks what you can reach. Each has its own gate, so turning one
+off leaves the others running: the sweep's periodic check needs
+`free_tier.sync_on_startup` or `free_tier.update_on_startup`, and the other two
+are gated by `routing_metadata.enabled` and `flagship_tier.enabled`.
 
 > **The interval keys are not spelled alike, and the nesting differs too.** The
 > routing-metadata refresh and the flagship recompute both use
@@ -2678,6 +2714,11 @@ to a branch and opens (or refreshes) a PR against the base branch — using the
 GitHub API directly, so it **never touches a local git checkout** and works even
 in a container with no `.git`. It logs `[providers-pr] opening PR …` and the PR URL.
 
+Before pushing, the server folds what this deployment learned into the
+`providers.json` it is about to propose, and the PR body breaks the promoted
+facts down by provider and by provenance grade. See
+[what gets PR'd](#routing-metadata).
+
 This works **even when the bundled `providers.json` can't be saved locally** — e.g.
 on a read-only container image. In that case the updater mirrors the computed
 `providers.json` + `config.example.json` into the writable config directory (the
@@ -2694,6 +2735,7 @@ Required / optional settings (all top-level):
 | `providers_pr.token` | yes¹ | — | GitHub token; may be a `${VAR}` ref. ¹Falls back to the `GITHUB_TOKEN` / `GH_TOKEN` environment variables. Needs `contents:write` + `pull_requests:write`. |
 | `providers_pr.base` | — | `"main"` | Base branch for the PR. |
 | `providers_pr.branch` | — | `"llmproxy-auto/providers"` | Head branch (force-updated each run; an open PR for it is reused). |
+| `providers_pr.frequency_days` | — | `0` | Throttle: open at most one PR every _N_ days, with the last-run timestamp in `pr_state.json`. `0` (the default when the key is absent) means no throttle, and the admin API's `pr_providers_frequency_days` field shows the same `0`. |
 
 If the token or `providers_pr.repo` is missing, the server logs a `[providers-pr]`
 warning and skips — it never fails the startup update. This is the **deployment**
@@ -2847,9 +2889,12 @@ http://localhost:8080/admin
 ```
 
 The UI is a self-contained single page (no build step, no external assets) and
-writes straight to `config.json` via a JSON API under `/admin/api/*`. Changes
-take effect without a restart (host/port changes excepted), because every worker
-re-reads the config file when it changes.
+writes through a JSON API under `/admin/api/*`. Server settings and providers go
+straight to `config.json`; the four model categorizations go to the curated
+layer of `routing_metadata.json` instead, because that is where hand-set routing
+facts live (see [where routing metadata lives](#routing-metadata)). Changes take
+effect without a restart (host/port changes excepted), because every worker
+re-reads both files when they change.
 
 ### Security — localhost-only by default
 
@@ -3027,21 +3072,20 @@ You can also have the server run this updater on boot — see
 
 ### Syncing your live config (`--config PATH`)
 
-The proxy reads `believed_free` / `model_reasoning` / `model_capabilities` /
-`free_limits` at runtime from *your* `config.json`, not from the sidecar. Pass
-`--config PATH` to also reconcile a live config in the same run (honors
-`--dry-run`):
+There is nothing left to sync. Copying the sidecar's free-tier sections into
+`config.json` is what froze them: it ran once and the data never moved again,
+which is how a deployment ended up routing on capability tags years out of date.
+`providers.json` is now read directly as the defaults layer, the refresh keeps
+`routing_metadata.json` current above it, and hand-set facts live in that file's
+curated section. See [where routing metadata lives](#routing-metadata).
 
-- **Scope is limited to providers configured in that file.** Entries for custom
-  providers, or sidecar providers you haven't configured, are left untouched —
-  as are non-model keys like the `_note` in `free_limits`.
-- **`believed_free` and `free_limits` are synced** — newly-free models are added
-  and models that are no longer free are removed.
-- **`model_reasoning` and `model_capabilities` are add-only.** Existing tags are
-  never pruned or overwritten, so a model keeps its reasoning level / capability
-  tags (including any you set by hand) even after it leaves the free tier.
-- Your `providers`, `server`, and any other config sections are preserved; only
-  the free-tier sections change.
+`--config PATH` and `--sync-config-only` are still accepted so existing scripts
+and cron entries do not break, and the run prints a line saying the sync is no
+longer needed. `--config PATH` is still worth passing for everything else it
+does: it is where the run reads your `free_tier` settings (whether the cost
+probe is enabled, whether autoremove is on, the shared probe timeout), which
+directory holds `cost_probe_state.json` and `update_state.json`, and which API
+keys the sources may use.
 
 ### Safety properties
 

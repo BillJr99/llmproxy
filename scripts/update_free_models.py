@@ -35,6 +35,7 @@ import argparse
 import copy
 import json
 import sys
+import traceback
 from collections import defaultdict
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -122,14 +123,44 @@ def _dim(s: str) -> str: return f"{_DIM}{s}{_RESET}"
 COST_OBSERVED_KEY = "cost_observed_free_tier"
 
 
-def cost_observed_denylist(cfg: dict | None) -> set[str]:
-    """Lowercased set of cost_observed qualified ids from a (user) config dict."""
-    if not isinstance(cfg, dict):
-        return set()
-    raw = cfg.get(COST_OBSERVED_KEY)
-    if not isinstance(raw, list):
-        return set()
-    return {x.lower() for x in raw if isinstance(x, str)}
+def cost_observed_denylist(cfg: dict | None, config_path: str | None = None) -> set[str]:
+    """Lowercased qualified ids the sweep must never put back in believed_free.
+
+    A model that billed a real request while marked free is the one fact the
+    sweep cannot rediscover, so it has to be carried forward or every run
+    re-adds it.
+
+    Read from the SIDECAR as well as the config. These ids used to live in
+    config.json, and reading only there silently emptied the denylist the
+    moment the startup migration drained that key — every sweep would then
+    happily re-add a model llmproxy had already watched charge money.
+    """
+    out: set[str] = set()
+    if isinstance(cfg, dict):
+        raw = cfg.get(COST_OBSERVED_KEY)
+        if isinstance(raw, list):
+            out |= {x.lower() for x in raw if isinstance(x, str)}
+    try:
+        from llmproxy.config import load_routing_metadata  # type: ignore
+
+        state = load_routing_metadata(config_path)
+        # by_provider stores bare ids, so they take the provider that saw them.
+        for provider, info in (state.get("by_provider") or {}).items():
+            if not isinstance(info, dict):
+                continue
+            for mid in info.get(COST_OBSERVED_KEY) or []:
+                if isinstance(mid, str):
+                    out.add(f"{provider}/{mid}".lower())
+        # curated keeps whatever spelling the user used.
+        curated = state.get("curated")
+        if isinstance(curated, dict):
+            for mid in curated.get(COST_OBSERVED_KEY) or []:
+                if isinstance(mid, str):
+                    out.add(mid.lower())
+    except Exception as e:  # noqa: BLE001 — a missing sidecar is not an error
+        print(f"[update_free_models:cost_observed_denylist] {e}")
+        traceback.print_exc()
+    return out
 
 
 # Absence-based removal is only trusted when the enumerating fetch looks
@@ -630,17 +661,6 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         "model_filter": None,
     }
 
-    believed_free: list[str] = []
-    model_reasoning: dict[str, str] = {}
-    model_capabilities: dict[str, list[str]] = {}
-    free_limits: dict[str, dict] = {}
-    for key in order:
-        prov = sidecar["providers"][key]
-        believed_free.extend(prov.get("believed_free", []))
-        model_reasoning.update(prov.get("model_reasoning", {}))
-        model_capabilities.update(prov.get("model_capabilities", {}))
-        free_limits.update(prov.get("free_limits", {}))
-
     note = top_note or (
         "All providers must expose an OpenAI-compatible API "
         "(/models, /chat/completions, Bearer auth). "
@@ -651,29 +671,17 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         "calls to its models."
     )
 
-    free_limits_with_note: dict = {
-        "_note": (
-            "Rate limits for capacity-aware load balancing on llmproxy/free "
-            "and llmproxy/*__free endpoints. Tracked per-worker-process; "
-            "resets on restart. Both request limits (rpm/rpd) and token limits "
-            "(tpm/tpd) are enforced. Check provider docs — limits change "
-            "frequently."
-        ),
-        **free_limits,
-    }
 
+    # The five routing-metadata keys are deliberately NOT emitted here any more.
+    # config.json is drained into the sidecar's CURATED layer at startup, which
+    # is the strongest layer there is — so shipping providers.json's defaults
+    # inside the example would pin them as though a person had set each one by
+    # hand, at a precedence no refresh could ever improve. They already reach
+    # routing as the defaults layer, read straight from providers.json, which is
+    # where they belong and where the providers PR keeps them current.
     return {
         "_note": note,
         "providers": providers_block,
-        "believed_free": believed_free,
-        # Auto-managed denylist: the proxy appends a qualified id here when a
-        # believed_free model serves a request reporting a non-zero cost, and the
-        # updater then refuses to re-add it to believed_free (removing it if
-        # present). Operator-editable; start empty.
-        "cost_observed_free_tier": [],
-        "model_reasoning": model_reasoning,
-        "model_capabilities": model_capabilities,
-        "free_limits": free_limits_with_note,
 
         # Maintenance flags. See the README: probe_cost / autoremove_believed_free
         # → "Verifying free models are actually free"; update_believed_free_on_startup
@@ -1208,7 +1216,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sidecar = load_data()
     updates = aggregate(all_evidence, sidecar, catalog_succeeded,
-                        denylist=cost_observed_denylist(user_cfg))
+                        denylist=cost_observed_denylist(user_cfg, args.config))
 
     # Provider filter
     if args.provider:

@@ -30,14 +30,33 @@ def test_regen_matches_committed_config_example():
     assert actual == expected
 
 
-def test_regen_includes_every_believed_free_from_sidecar():
-    sidecar = load_data()
-    expected_models: set[str] = set()
-    for prov in sidecar["providers"].values():
-        expected_models.update(prov.get("believed_free", []))
+def test_regen_omits_routing_metadata_entirely():
+    """The example must not carry the five routing keys.
 
-    actual = regenerate_config_example(sidecar)
-    assert set(actual["believed_free"]) == expected_models
+    config.json is drained into the sidecar's CURATED layer at startup, the
+    strongest layer there is. Shipping providers.json's defaults inside the
+    example would pin every one of them as though a person had set it by hand,
+    at a precedence no later refresh could improve — so a fresh install would be
+    frozen on whatever the repo knew on the day it was copied.
+
+    The data still reaches routing, as the defaults layer read straight from
+    providers.json, which is where the providers PR keeps it current.
+    """
+    actual = regenerate_config_example(load_data())
+    for key in ("believed_free", "cost_observed_free_tier", "model_reasoning",
+                "model_capabilities", "free_limits"):
+        assert key not in actual, (
+            f"config.example.json still ships {key!r}; a fresh config.json would "
+            "have it drained into the curated layer and frozen there"
+        )
+
+
+def test_regen_still_carries_the_provider_catalogue():
+    """Dropping the routing keys must not drop the providers with them."""
+    actual = regenerate_config_example(load_data())
+    sidecar = load_data()
+    for key in sidecar["providers"]:
+        assert key in actual["providers"], f"provider {key} missing from the example"
 
 
 def test_regen_preserves_static_providers():
