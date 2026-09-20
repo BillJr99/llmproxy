@@ -43,11 +43,62 @@ def test_oversized_client_key_is_truncated():
 
 
 def test_continuation_keys_on_the_stable_prefix():
-    """The trailing user turn changes every request; the prefix does not."""
+    """The trailing user turn changes every request; the root does not."""
     prefix = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]
     first = server._affinity_key({"messages": prefix + [{"role": "user", "content": "next"}]})
     second = server._affinity_key({"messages": prefix + [{"role": "user", "content": "different"}]})
     assert first is not None and first == second
+
+
+def test_an_agent_loop_keeps_one_key_for_the_whole_conversation():
+    """The regression this whole mechanism turned on.
+
+    Keying on the full cacheable prefix made the key a function of the
+    transcript LENGTH, so an agent appending an assistant turn and a tool
+    result per iteration got a brand-new key on every request. The sticky pin
+    was written every turn and read back never, and each turn restarted from
+    the top of the ranking — paying a 429 on every model above the pinned one
+    before reaching it again.
+    """
+    messages = [
+        {"role": "system", "content": "s" * 400},
+        {"role": "user", "content": "do the thing"},
+    ]
+    keys = {server._affinity_key({"messages": messages})}
+    for i in range(20):
+        messages = messages + [
+            {"role": "assistant", "content": f"calling tool {i}"},
+            {"role": "tool", "content": f"result {i}"},
+        ]
+        keys.add(server._affinity_key({"messages": messages}))
+    messages = messages + [{"role": "user", "content": "and now this"}]
+    keys.add(server._affinity_key({"messages": messages}))
+    assert len(keys) == 1 and None not in keys
+
+
+def test_a_first_turn_and_its_continuation_share_a_key():
+    """Turn 1 pins the model that worked; turn 2 has to be able to read that
+    pin, which means both turns must land in the same key space."""
+    root = [
+        {"role": "system", "content": "s" * 400},
+        {"role": "user", "content": "open the file"},
+    ]
+    turn_two = root + [
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "now close it"},
+    ]
+    assert server._affinity_key({"messages": root}) == server._affinity_key(
+        {"messages": turn_two}
+    )
+
+
+def test_two_conversations_under_one_system_prompt_stay_apart():
+    """The root includes the first user turn, so one agent's system prompt does
+    not funnel every conversation it starts onto a single model."""
+    shared = {"role": "system", "content": "s" * 400}
+    a = server._affinity_key({"messages": [shared, {"role": "user", "content": "task A"}]})
+    b = server._affinity_key({"messages": [shared, {"role": "user", "content": "task B"}]})
+    assert a != b
 
 
 def test_different_conversations_get_different_keys():
@@ -61,11 +112,13 @@ def test_different_conversations_get_different_keys():
 
 
 def test_substantial_system_prompt_is_cacheable_on_a_first_turn():
+    """An agent resends its system prompt verbatim, so a first turn carrying one
+    is already identifiable and does not have to wait for turn 2 to be pinned."""
     payload = {"messages": [
         {"role": "system", "content": "x" * server._AFFINITY_MIN_SYSTEM_CHARS},
         {"role": "user", "content": "hi"},
     ]}
-    assert (server._affinity_key(payload) or "").startswith("system:")
+    assert (server._affinity_key(payload) or "").startswith("conv:")
 
 
 def test_short_system_prompt_is_not_worth_pinning_for():

@@ -130,3 +130,58 @@ def test_the_feature_is_off_by_default():
     assert S._free_tier_cache_affinity_enabled({"server": {}}) is False
     assert S._free_tier_cache_affinity_enabled(
         {"server": {"free_tier_cache_affinity": True}}) is True
+
+
+# ── the key has to survive the conversation ─────────────────────────────────
+#
+# The pass above is only ever reached with a key derived from the payload, and
+# that derivation was the part that did not work. `_affinity_key` hashed the
+# whole cacheable prefix, which an agent rewrites on every iteration, so the
+# pin was written each turn under a key nothing ever looked up again. Every
+# test above passed while the feature did nothing in production. These close
+# that gap by driving the pass with real payloads.
+
+def _agent_payload(turns: int) -> dict:
+    messages = [
+        {"role": "system", "content": "you are a coding agent. " * 40},
+        {"role": "user", "content": "refactor the parser"},
+    ]
+    for i in range(turns):
+        messages += [
+            {"role": "assistant", "content": f"reading file {i}"},
+            {"role": "tool", "content": f"contents {i}"},
+        ]
+    return {"messages": messages}
+
+
+def test_a_pin_set_on_turn_one_is_honoured_forty_turns_later():
+    """The end-to-end regression, through the real key derivation."""
+    S._record_affinity_success(S._affinity_key(_agent_payload(0)), "third", "m-3")
+    for turn in (1, 5, 20, 40):
+        key = S._affinity_key(_agent_payload(turn))
+        assert _heads(POOL, key)[0] == "third", f"lost the pin by turn {turn}"
+
+
+def test_a_second_conversation_is_not_dragged_onto_the_first_ones_model():
+    """GUARD: stickiness must not become a global pin. Two conversations under
+    the same system prompt keep their own choices."""
+    other = {
+        "messages": [
+            {"role": "system", "content": "you are a coding agent. " * 40},
+            {"role": "user", "content": "write the docs"},
+            {"role": "assistant", "content": "ok"},
+        ]
+    }
+    S._record_affinity_success(S._affinity_key(_agent_payload(0)), "third", "m-3")
+    assert _heads(POOL, S._affinity_key(other))[0] == "best"
+
+
+def test_the_pin_follows_a_failover_within_the_conversation():
+    """The pin is written on SUCCESS, so a turn served by a different model
+    re-pins to it, and the next turn starts there instead of replaying the
+    failure that sent it away."""
+    payload = _agent_payload(3)
+    S._record_affinity_success(S._affinity_key(payload), "third", "m-3")
+    assert _heads(POOL, S._affinity_key(payload))[0] == "third"
+    S._record_affinity_success(S._affinity_key(_agent_payload(4)), "second", "m-2")
+    assert _heads(POOL, S._affinity_key(_agent_payload(5)))[0] == "second"
