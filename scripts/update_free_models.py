@@ -91,6 +91,8 @@ _PLACEHOLDER_KEYS: dict[str, str] = {
     "tokenharbor": "thk_live_...",
     "atria-asi": "atr_...",
     "unbiased-ai": "sk_...",
+    "modelscope": "ms-...",
+    "agnes-ai": "sk-...",
 }
 
 
@@ -646,7 +648,8 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         # Carry forward optional model-discovery overrides (non-standard /models
         # path, id field, or task filter) so the example documents the working
         # config for providers like Cloudflare Workers AI.
-        for field in ("models_url", "models_id_field", "models_keep_task", "protocol"):
+        for field in ("models_url", "models_id_field", "models_keep_task",
+                      "protocol", "free_allowance"):
             if prov.get(field):
                 block[field] = prov[field]
         # A per-provider note (e.g. auth/credential gotchas) surfaces in the

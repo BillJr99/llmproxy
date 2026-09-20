@@ -2214,6 +2214,7 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         # Normalize the various shapes upstreams return for /models:
         #   - OpenAI style: {"data": [...]}
         #   - Cloudflare / some gateways: {"result": [...]}
+        #   - Aion Labs: {"models": [...]}
         #   - Together, GitHub catalog, and others return a bare JSON array: [...]
         raw_models: list[dict]
         if isinstance(data, list):
@@ -2226,11 +2227,14 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
                 raw_models = data["data"]
             elif "result" in data:
                 raw_models = data["result"]
+            elif "models" in data:
+                raw_models = data["models"]
             else:
                 raw_models = []
             if not isinstance(raw_models, list):
                 raise ValueError(
-                    f"unexpected 'data'/'result' type {type(raw_models).__name__}; "
+                    f"unexpected 'data'/'result'/'models' type "
+                    f"{type(raw_models).__name__}; "
                     f"top-level keys: {sorted(data.keys())}"
                 )
         else:

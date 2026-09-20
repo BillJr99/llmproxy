@@ -880,6 +880,10 @@ def api_provider_from_template():
     # them — without this, an Anthropic/Gemini template would be saved as openai.
     if template.get("protocol") and template["protocol"] != "openai":
         cfg["protocol"] = template["protocol"]
+    # Same reason the wizard copies it: the loadbalanced virtual reads
+    # free_allowance off the provider block, not off the template sidecar.
+    if template.get("free_allowance"):
+        cfg["free_allowance"] = dict(template["free_allowance"])
 
     with _locked():
         config = _load()

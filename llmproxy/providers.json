@@ -34,6 +34,10 @@
     "minimax",
     "atria-asi",
     "unbiased-ai",
+    "kilo",
+    "modelscope",
+    "aion-labs",
+    "agnes-ai",
     "huggingface",
     "xai",
     "cloudflare-ai-gateway",
@@ -1059,6 +1063,80 @@
       },
       "model_capabilities": {},
       "free_limits": {}
+    },
+    "kilo": {
+      "display": "Kilo AI (multi-vendor gateway)",
+      "base_url": "https://api.kilo.ai/api/gateway",
+      "key_required": true,
+      "key_hint": "Create an API key at app.kilo.ai → Your Profile on your personal account (not an organization), then scroll to the bottom of the page. Requires account credits (docs: kilo.ai/docs/gateway)",
+      "_note": "OpenAI-compatible multi-vendor gateway. The base path is /api/gateway, not /v1, so discovery hits /api/gateway/models; that endpoint answers 200 without a key and returns an OpenRouter-shaped {\"data\": [...]} catalog (~380 models as of September 2026, ids like anthropic/claude-sonnet-5 and kilo-auto/* router pseudo-models), so no models_url override is needed. Inference is credit-based; some catalog entries carry an isFree flag, but no free tier is asserted here because none was observed in use.",
+      "believed_free": [],
+      "model_reasoning": {},
+      "model_capabilities": {},
+      "free_limits": {}
+    },
+    "modelscope": {
+      "display": "ModelScope (Alibaba API-Inference)",
+      "base_url": "https://api-inference.modelscope.cn/v1",
+      "key_required": true,
+      "key_hint": "Create an SDK token at modelscope.cn/my/myaccesstoken. Tokens look like ms-... (docs: modelscope.cn/docs/model-service/API-Inference/intro)",
+      "_note": "OpenAI-compatible. GET /v1/models answers 200 without a key in the plain {\"data\": [...]} shape (35 models as of September 2026), so no models_url override is needed. The free tier is an account-wide allowance of 2,000 requests/day aggregated across all models, recorded below as free_allowance rather than as per-model free_limits. That figure is corroborated across several independent third-party trackers; ModelScope's own limits page is client-rendered and could not be read directly. The per-model daily cap is reported inconsistently across those same sources (200 vs 500 requests/day), so no per-model free_limits are claimed.",
+      "free_allowance": {
+        "requests_per_minute": null,
+        "requests_per_day": 2000,
+        "tokens_per_minute": null,
+        "tokens_per_day": null
+      },
+      "believed_free": [],
+      "model_reasoning": {},
+      "model_capabilities": {},
+      "free_limits": {}
+    },
+    "aion-labs": {
+      "display": "Aion Labs",
+      "base_url": "https://api.aionlabs.ai/v1",
+      "key_required": true,
+      "key_hint": "Create an API key at aionlabs.ai/app/api-keys (docs: aionlabs.ai/docs/api-reference)",
+      "_note": "OpenAI-compatible. Aion's API reference documents GET /v1/models as requiring no authentication and returning its array under a top-level \"models\" key rather than \"data\"; llmproxy's discovery normalizes that shape, so no models_url override is needed. Four models as of September 2026 (aion-2.0, aion-3.0, aion-3.0-mini, aion-rp-llama-3.1-8b), tuned for reasoning and for roleplay/storytelling. Pay-as-you-go, no free tier.",
+      "believed_free": [],
+      "model_reasoning": {},
+      "model_capabilities": {},
+      "free_limits": {}
+    },
+    "agnes-ai": {
+      "display": "Agnes AI (multimodal gateway)",
+      "base_url": "https://apihub.agnes-ai.com/v1",
+      "key_required": true,
+      "key_hint": "Create an API key in the Agnes console at platform.agnes-ai.com → API Key management. Keys look like sk-... (docs: wiki.agnes-ai.com)",
+      "_note": "OpenAI-compatible multimodal gateway. GET /v1/models is key-gated (it answers 401 'Token not provided', where an unknown /v1 path answers 404), which is what llmproxy already sends, so no models_url override is needed. The catalog also carries image and video model ids (agnes-image-*, agnes-video-*) that cannot serve chat/completions; example_model_filter therefore pins the two documented text models, and that lands in config.example.json as an editable model_filter. The free plan is documented at 20 requests/minute for text (1/minute for video); the live id list could not be confirmed without a key.",
+      "example_model_filter": [
+        "agnes-2.5-flash",
+        "agnes-2.0-flash"
+      ],
+      "believed_free": [
+        "agnes-ai/agnes-2.5-flash",
+        "agnes-ai/agnes-2.0-flash"
+      ],
+      "model_reasoning": {},
+      "model_capabilities": {
+        "agnes-ai/agnes-2.5-flash": [
+          "tools"
+        ]
+      },
+      "free_limits": {
+        "agnes-ai/agnes-2.5-flash": {
+          "requests_per_minute": 20,
+          "requests_per_day": null,
+          "tokens_per_minute": null,
+          "tokens_per_day": null
+        },
+        "agnes-ai/agnes-2.0-flash": {
+          "requests_per_minute": 20,
+          "requests_per_day": null,
+          "tokens_per_minute": null,
+          "tokens_per_day": null
+        }
+      }
     },
     "huggingface": {
       "display": "Hugging Face Inference",

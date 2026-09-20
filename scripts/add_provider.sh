@@ -75,10 +75,35 @@ BUILTIN = OrderedDict([
         "key_required": True,
         "key_hint": "Create an API key at platform.unbiased.ai (signup is reviewed by hand). Keys look like sk_...",
     }),
+    ("kilo", {
+        "display": "Kilo AI (multi-vendor gateway)",
+        "base_url": "https://api.kilo.ai/api/gateway",
+        "key_required": True,
+        "key_hint": "Create an API key at app.kilo.ai → Your Profile on your personal account (not an organization), then scroll to the bottom of the page. Requires account credits (docs: kilo.ai/docs/gateway). The base path is /api/gateway, not /v1.",
+    }),
+    ("modelscope", {
+        "display": "ModelScope (Alibaba API-Inference)",
+        "base_url": "https://api-inference.modelscope.cn/v1",
+        "key_required": True,
+        "key_hint": "Create an SDK token at modelscope.cn/my/myaccesstoken. Tokens look like ms-... (docs: modelscope.cn/docs/model-service/API-Inference/intro). Free tier is an account-wide 2,000 requests/day.",
+    }),
+    ("aion-labs", {
+        "display": "Aion Labs",
+        "base_url": "https://api.aionlabs.ai/v1",
+        "key_required": True,
+        "key_hint": "Create an API key at aionlabs.ai/app/api-keys (docs: aionlabs.ai/docs/api-reference)",
+    }),
+    ("agnes-ai", {
+        "display": "Agnes AI (multimodal gateway)",
+        "base_url": "https://apihub.agnes-ai.com/v1",
+        "key_required": True,
+        "key_hint": "Create an API key in the Agnes console at platform.agnes-ai.com → API Key management. Keys look like sk-... (docs: wiki.agnes-ai.com). The catalog also lists image and video models; set model_filter to the text ones.",
+    }),
 ])
 
 # Fields the wizard copies from a template onto the config entry.
-PASSTHROUGH = ("models_url", "models_id_field", "models_keep_task", "protocol", "_note")
+PASSTHROUGH = ("models_url", "models_id_field", "models_keep_task", "protocol",
+               "free_allowance", "_note")
 
 
 def load_sidecar(path):

@@ -44,6 +44,10 @@ _TEMPLATE_FIELDS = frozenset({
     "models_keep_task",
     # Upstream dialect for non-OpenAI-compatible providers (anthropic/gemini).
     "protocol",
+    # Provider-wide free quota. It is a template field rather than free-tier
+    # metadata because it has to reach the config entry to do anything: the
+    # loadbalanced virtual reads it off the provider block, not off this file.
+    "free_allowance",
 })
 
 # Fields that belong to the free-tier metadata view.
