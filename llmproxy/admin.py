@@ -864,9 +864,13 @@ def api_provider_from_template():
             return _err("This template requires a gateway_id.")
         subs["gateway_id"] = gw
 
+    # Same as the wizard: a template's curated model list is the only thing
+    # standing between a catalog-less provider and an inert config entry, so
+    # seed model_filter from it rather than always writing null.
+    template_filter = template.get("example_model_filter")
     cfg: dict = {
         "base_url": _substitute_placeholders(template.get("base_url", ""), subs),
-        "model_filter": None,
+        "model_filter": list(template_filter) if template_filter else None,
     }
     api_key = (payload.get("api_key") or "").strip()
     if api_key:
