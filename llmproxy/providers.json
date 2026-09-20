@@ -59,11 +59,10 @@
       "display": "OpenAI",
       "base_url": "https://api.openai.com/v1",
       "key_required": true,
-      "key_hint": "Get your API key at platform.openai.com/api-keys (paid \u2014 no free tier)",
+      "key_hint": "Get your API key at platform.openai.com/api-keys (paid — no free tier)",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "nous": {
       "display": "Nous Research (Hermes)",
@@ -89,8 +88,7 @@
         "nous/tencent/hy3:free": "exploratory",
         "nous/upstage/solar-pro4:free": "exploratory"
       },
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "nvidia": {
       "display": "Nvidia NIM",
@@ -116,8 +114,7 @@
           "tokens_per_minute": null,
           "tokens_per_day": null
         }
-      },
-      "fallback_models": []
+      }
     },
     "google": {
       "display": "Google Gemini (via OpenAI-compat endpoint)",
@@ -240,8 +237,7 @@
           "tokens_per_minute": 15000,
           "tokens_per_day": null
         }
-      },
-      "fallback_models": []
+      }
     },
     "cerebras": {
       "display": "Cerebras",
@@ -292,8 +288,7 @@
           "tokens_per_minute": 60000,
           "tokens_per_day": 1000000
         }
-      },
-      "fallback_models": []
+      }
     },
     "sambanova": {
       "display": "SambaNova Cloud",
@@ -305,8 +300,7 @@
         "sambanova/Meta-Llama-3.3-70B-Instruct": "standard"
       },
       "model_capabilities": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "mistral": {
       "display": "Mistral AI",
@@ -320,8 +314,7 @@
         "mistral/mistral-large-latest": "standard"
       },
       "model_capabilities": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "groq": {
       "display": "Groq",
@@ -484,14 +477,13 @@
           "tokens_per_minute": null,
           "tokens_per_day": null
         }
-      },
-      "fallback_models": []
+      }
     },
     "cloudflare-workers": {
       "display": "Cloudflare Workers AI",
       "base_url": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
       "key_required": true,
-      "key_hint": "Get your API token at dash.cloudflare.com \u2192 My Profile \u2192 API Tokens",
+      "key_hint": "Get your API token at dash.cloudflare.com → My Profile → API Tokens",
       "account_id_required": true,
       "account_id_label": "Cloudflare Account ID",
       "account_id_hint": "Find your account ID at dash.cloudflare.com (top-right corner)",
@@ -688,8 +680,7 @@
           "tools"
         ]
       },
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "zhipu": {
       "display": "Zhipu AI (BigModel)",
@@ -716,8 +707,7 @@
           "tokens_per_minute": null,
           "tokens_per_day": 1000000
         }
-      },
-      "fallback_models": []
+      }
     },
     "z-ai": {
       "display": "Z.AI",
@@ -758,8 +748,7 @@
           "tokens_per_minute": null,
           "tokens_per_day": 1000000
         }
-      },
-      "fallback_models": []
+      }
     },
     "deepseek": {
       "display": "DeepSeek",
@@ -768,8 +757,7 @@
       "key_hint": "Get your API key at platform.deepseek.com/api_keys",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "cohere": {
       "display": "Cohere",
@@ -798,8 +786,7 @@
         "cohere/command-r7b": "exploratory"
       },
       "model_capabilities": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "openrouter": {
       "display": "OpenRouter",
@@ -862,7 +849,6 @@
         "openrouter/z-ai/glm-5.2:free": "exploratory"
       },
       "free_limits": {},
-      "fallback_models": [],
       "model_capabilities": {
         "openrouter/cohere/north-mini-code:free": [
           "reasoning",
@@ -993,8 +979,7 @@
       "key_hint": "Get your API key at ollama.com/settings/api-keys",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "moonshot": {
       "display": "Moonshot AI (Kimi)",
@@ -1021,8 +1006,7 @@
           "tokens_per_minute": null,
           "tokens_per_day": 500000
         }
-      },
-      "fallback_models": []
+      }
     },
     "minimax": {
       "display": "MiniMax",
@@ -1049,8 +1033,7 @@
           "tokens_per_minute": 1000000,
           "tokens_per_day": null
         }
-      },
-      "fallback_models": []
+      }
     },
     "atria-asi": {
       "display": "Atria ASI",
@@ -1062,22 +1045,20 @@
         "atria-asi/Atria-Dawn-Preview": "deep"
       },
       "model_capabilities": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "unbiased-ai": {
       "display": "Unbiased AI",
       "base_url": "https://api.unbiased.ai/v1",
       "key_required": true,
       "key_hint": "Create an API key at platform.unbiased.ai (signup is reviewed by hand). Keys look like sk_...",
-      "_note": "OpenAI-compatible. The endpoint also answers Anthropic's /v1/messages and accepts either Authorization: Bearer or x-api-key, but the OpenAI pair is what llmproxy sends by default, so no 'protocol' is set. GET /v1/models is registered and key-gated, so model discovery needs no models_url override. One model, 'pareto', a blend of frontier and open models; pay-as-you-go credits, no free tier.",
+      "_note": "OpenAI-compatible. The endpoint also answers Anthropic's /v1/messages and accepts either Authorization: Bearer or x-api-key, but the OpenAI pair is what llmproxy sends by default, so no 'protocol' is set. GET /v1/models is NOT available: an authenticated request returns 404 with code 'unknown_url' (unauthenticated, every path returns 401, because the gateway checks the key before routing — so a 401 here means no key, not a missing endpoint). Model discovery therefore finds nothing. Set \"model_filter\": [\"pareto\"] on this provider in your config.json: when a /models fetch fails, llmproxy synthesizes the model list from model_filter, which is the supported way to use a provider that publishes no catalog. One model, 'pareto', a blend of frontier and open models; pay-as-you-go credits, no free tier.",
       "believed_free": [],
       "model_reasoning": {
         "unbiased-ai/pareto": "deep"
       },
       "model_capabilities": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "huggingface": {
       "display": "Hugging Face Inference",
@@ -1096,8 +1077,7 @@
           "tools"
         ]
       },
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "xai": {
       "display": "xAI (Grok)",
@@ -1110,14 +1090,13 @@
         "xai/grok-3-mini": "standard"
       },
       "model_capabilities": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "cloudflare-ai-gateway": {
       "display": "Cloudflare AI Gateway",
       "base_url": "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai/v1",
       "key_required": true,
-      "key_hint": "Get your API token at dash.cloudflare.com \u2192 My Profile \u2192 API Tokens",
+      "key_hint": "Get your API token at dash.cloudflare.com → My Profile → API Tokens",
       "account_id_required": true,
       "account_id_label": "Cloudflare Account ID",
       "account_id_hint": "Find your account ID at dash.cloudflare.com (top-right corner)",
@@ -1150,8 +1129,7 @@
           "tools"
         ]
       },
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "vercel": {
       "display": "Vercel AI Gateway",
@@ -1160,8 +1138,7 @@
       "key_hint": "Get your API key at vercel.com/account/tokens",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "venice": {
       "display": "Venice AI",
@@ -1170,8 +1147,7 @@
       "key_hint": "Get your API key at venice.ai/settings/api",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "requesty": {
       "display": "Requesty (LLM router)",
@@ -1181,8 +1157,7 @@
       "believed_free": [],
       "model_reasoning": {},
       "model_capabilities": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "bai": {
       "display": "B.AI (unified LLM API)",
@@ -1191,14 +1166,13 @@
       "key_hint": "Create an API key in the B.AI console at b.ai (docs: docs.b.ai/llmservice/api/)",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "xkiro": {
       "display": "xKiro (multi-vendor gateway)",
       "base_url": "https://api.xkiro.com/v1",
       "key_required": true,
-      "key_hint": "Create an API key at xkiro.com \u2014 keys look like sk-xt-... (docs: docs.xkiro.com)",
+      "key_hint": "Create an API key at xkiro.com — keys look like sk-xt-... (docs: docs.xkiro.com)",
       "believed_free": [
         "xkiro/minimax/minimax-m2.1-highspeed:free",
         "xkiro/minimax/minimax-m2.1:free",
@@ -1279,7 +1253,6 @@
         "xkiro/sensenova/sensenova-6.8-flash-lite": "exploratory"
       },
       "free_limits": {},
-      "fallback_models": [],
       "model_capabilities": {
         "xkiro/minimax/minimax-m2.1-highspeed:free": [
           "reasoning",
@@ -1452,11 +1425,10 @@
       "display": "TeamoRouter (LLM routing gateway)",
       "base_url": "https://api.teamorouter.com/v1",
       "key_required": true,
-      "key_hint": "Create an API key at teamorouter.com \u2014 keys look like sk-teamo-... (docs: teamorouter.com/docs/api-integration)",
+      "key_hint": "Create an API key at teamorouter.com — keys look like sk-teamo-... (docs: teamorouter.com/docs/api-integration)",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "tokenharbor": {
       "display": "Token Harbor (multi-vendor gateway)",
@@ -1469,8 +1441,7 @@
         "tokenharbor/mimo-v2.5:free"
       ],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "opencode-zen": {
       "display": "OpenCode Zen (free gateway)",
@@ -1514,8 +1485,7 @@
           "tokens_per_minute": null,
           "tokens_per_day": null
         }
-      },
-      "fallback_models": []
+      }
     },
     "together": {
       "display": "Together AI",
@@ -1524,8 +1494,7 @@
       "key_hint": "Get your API key at api.together.ai/settings/api-keys",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "fireworks": {
       "display": "Fireworks AI",
@@ -1534,28 +1503,25 @@
       "key_hint": "Get your API key at fireworks.ai/account/api-keys",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "scaleway": {
       "display": "Scaleway Generative APIs",
       "base_url": "https://api.scaleway.ai/v1",
       "key_required": true,
-      "key_hint": "Create an API key in the Scaleway console \u2192 Generative APIs (free tier; EU-hosted Mistral/Llama/Qwen)",
+      "key_hint": "Create an API key in the Scaleway console → Generative APIs (free tier; EU-hosted Mistral/Llama/Qwen)",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "ovhcloud": {
       "display": "OVHcloud AI Endpoints",
       "base_url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
       "key_required": false,
-      "key_hint": "Optional \u2014 anonymous tier is free (2 req/min per IP/model). Create an API key at ovhcloud.com for higher limits.",
+      "key_hint": "Optional — anonymous tier is free (2 req/min per IP/model). Create an API key at ovhcloud.com for higher limits.",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "pollinations": {
       "display": "Pollinations (free, no key)",
@@ -1564,8 +1530,7 @@
       "key_hint": "No API key required for basic use.",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "nebius": {
       "display": "Nebius AI Studio",
@@ -1574,8 +1539,7 @@
       "key_hint": "Get your API key at studio.nebius.com (free starter credits + low-cost open models)",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "novita": {
       "display": "Novita AI",
@@ -1584,8 +1548,7 @@
       "key_hint": "Get your API key at novita.ai (free starter credit)",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "hyperbolic": {
       "display": "Hyperbolic",
@@ -1594,8 +1557,7 @@
       "key_hint": "Get your API key at app.hyperbolic.xyz/settings (free starter credit)",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "deepinfra": {
       "display": "DeepInfra",
@@ -1604,18 +1566,16 @@
       "key_hint": "Get your API key at deepinfra.com/dash/api_keys",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "gmi": {
       "display": "GMI Cloud",
       "base_url": "https://api.gmi-serving.com/v1",
       "key_required": true,
-      "key_hint": "Create an API key at console.gmicloud.ai \u2192 Organization Settings \u2192 API Keys (docs: docs.gmicloud.ai/inference-engine). Inference is served from api.gmi-serving.com; the console host is GMI's control plane and serves no /chat/completions.",
+      "key_hint": "Create an API key at console.gmicloud.ai → Organization Settings → API Keys (docs: docs.gmicloud.ai/inference-engine). Inference is served from api.gmi-serving.com; the console host is GMI's control plane and serves no /chat/completions.",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "llm7": {
       "display": "LLM7 (free, no key)",
@@ -1624,8 +1584,7 @@
       "key_hint": "No API key required for basic use (free aggregator; lower reliability).",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "chutes": {
       "display": "Chutes AI",
@@ -1634,8 +1593,7 @@
       "key_hint": "Get your API key at chutes.ai (free tier)",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "meta-llama": {
       "display": "Meta Llama API",
@@ -1644,16 +1602,15 @@
       "key_hint": "Get your API key at llama.developer.meta.com (OpenAI-compatible preview)",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "anthropic": {
       "display": "Anthropic (Claude, native Messages API)",
       "base_url": "https://api.anthropic.com/v1",
       "key_required": true,
-      "key_hint": "Get your API key at console.anthropic.com (paid \u2014 no free tier)",
+      "key_hint": "Get your API key at console.anthropic.com (paid — no free tier)",
       "protocol": "anthropic",
-      "_note": "Reached over Anthropic's native Messages API (x-api-key + anthropic-version). llmproxy translates OpenAI \u21c4 Anthropic, so OpenAI clients can call Claude and Anthropic clients (/v1/messages) can call any provider. Models are advertised from model_filter (no OpenAI-shaped /models endpoint).",
+      "_note": "Reached over Anthropic's native Messages API (x-api-key + anthropic-version). llmproxy translates OpenAI ⇄ Anthropic, so OpenAI clients can call Claude and Anthropic clients (/v1/messages) can call any provider. Models are advertised from model_filter (no OpenAI-shaped /models endpoint).",
       "example_model_filter": [
         "claude-opus-4-8",
         "claude-sonnet-4-6",
@@ -1662,8 +1619,7 @@
       ],
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     },
     "gemini": {
       "display": "Google Gemini (native generateContent)",
@@ -1671,15 +1627,14 @@
       "key_required": true,
       "key_hint": "Get your API key at aistudio.google.com/apikey (free tier available)",
       "protocol": "gemini",
-      "_note": "Reached over Gemini's native generateContent/streamGenerateContent API (x-goog-api-key). llmproxy translates OpenAI \u21c4 Gemini. The OpenAI-compatible 'google' provider above is an alternative; this entry uses Gemini's native protocol. Models are advertised from model_filter.",
+      "_note": "Reached over Gemini's native generateContent/streamGenerateContent API (x-goog-api-key). llmproxy translates OpenAI ⇄ Gemini. The OpenAI-compatible 'google' provider above is an alternative; this entry uses Gemini's native protocol. Models are advertised from model_filter.",
       "example_model_filter": [
         "gemini-2.5-pro",
         "gemini-2.5-flash"
       ],
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {},
-      "fallback_models": []
+      "free_limits": {}
     }
   },
   "pricing": {

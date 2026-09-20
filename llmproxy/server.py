@@ -2210,6 +2210,17 @@ def _rebuild_route_cache(providers_cfg: dict, timeout: int,
         return []
 
     all_models: list[dict] = []
+    # Announce the sweep BEFORE it runs, not only when it finishes. A rebuild
+    # fans out to every provider's /models and can take seconds; logged only on
+    # completion, a slow one is indistinguishable from a hang, and the request
+    # waiting on it shows nothing between its arrival line and its first
+    # candidate. One line here is the difference between "it is working" and an
+    # hour of guessing.
+    _rebuild_started = time.monotonic()
+    logger.info(
+        "[server:_rebuild_route_cache] fetching listings from %d provider(s)…",
+        len(providers_cfg),
+    )
 
     with ThreadPoolExecutor(max_workers=min(len(providers_cfg), 10)) as executor:
         futures = {}
@@ -2283,8 +2294,9 @@ def _rebuild_route_cache(providers_cfg: dict, timeout: int,
         # len(new_cache) is twice the model count while len(new_context) is not
         # — printed side by side they read as though at most half the models
         # have a known context window.
-        "[server:_rebuild_route_cache] %d model(s) (%d with a known context window)",
+        "[server:_rebuild_route_cache] %d model(s) (%d with a known context window) in %.1fs",
         len(set(new_cache.values())), len(new_context),
+        time.monotonic() - _rebuild_started,
     )
     return all_models
 

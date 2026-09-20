@@ -213,7 +213,6 @@ def main():
         entry["believed_free"] = []
         entry["model_reasoning"] = OrderedDict()
         entry["free_limits"] = OrderedDict()
-        entry["fallback_models"] = []
         data["providers"][key] = entry
         data.setdefault("provider_order", []).append(key)
         write_atomic(sidecar, json.dumps(data, indent=2, ensure_ascii=False) + "\n", 0o644)

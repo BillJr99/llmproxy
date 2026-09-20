@@ -130,7 +130,7 @@
       "model_filter": null
     },
     "unbiased-ai": {
-      "_note": "OpenAI-compatible. The endpoint also answers Anthropic's /v1/messages and accepts either Authorization: Bearer or x-api-key, but the OpenAI pair is what llmproxy sends by default, so no 'protocol' is set. GET /v1/models is registered and key-gated, so model discovery needs no models_url override. One model, 'pareto', a blend of frontier and open models; pay-as-you-go credits, no free tier.",
+      "_note": "OpenAI-compatible. The endpoint also answers Anthropic's /v1/messages and accepts either Authorization: Bearer or x-api-key, but the OpenAI pair is what llmproxy sends by default, so no 'protocol' is set. GET /v1/models is NOT available: an authenticated request returns 404 with code 'unknown_url' (unauthenticated, every path returns 401, because the gateway checks the key before routing \u2014 so a 401 here means no key, not a missing endpoint). Model discovery therefore finds nothing. Set \"model_filter\": [\"pareto\"] on this provider in your config.json: when a /models fetch fails, llmproxy synthesizes the model list from model_filter, which is the supported way to use a provider that publishes no catalog. One model, 'pareto', a blend of frontier and open models; pay-as-you-go credits, no free tier.",
       "base_url": "https://api.unbiased.ai/v1",
       "api_key": "sk_...",
       "model_filter": null
