@@ -8978,9 +8978,12 @@ def _get_flagship_models(config: dict | None = None,
         )
 
     tier_cfg = flagship_tier_cfg(cfg)
-    pin = tier_cfg.get("pin")
-    if isinstance(pin, list):
-        members |= {m.lower() for m in pin if isinstance(m, str)}
+    # Entries may be bare strings or {"name": ..., "percentile": ...} objects,
+    # freely mixed; parse_pins normalises both to names. Before it did, a dict
+    # entry was silently dropped here, so a placed pin would not have joined the
+    # tier at all.
+    from .flagship import parse_pins
+    members |= set(parse_pins(tier_cfg.get("pin")))
     exclude = tier_cfg.get("exclude")
     if isinstance(exclude, list):
         members -= {m.lower() for m in exclude if isinstance(m, str)}
@@ -9056,7 +9059,86 @@ def _get_flagship_scores(config_path: str | None = None) -> dict[str, float]:
             value = _coerce(raw)
             if value is not None:
                 out[ident.lower()] = value
-    return out
+    return _apply_pin_percentiles(out)
+
+
+# Latched per (target, measured, pinned) so an override that displaces a real
+# score is said once rather than on every request.
+_pin_override_warned: set[tuple[str, float, float]] = set()
+
+
+def _apply_pin_percentiles(scores: dict[str, float],
+                           config: dict | None = None) -> dict[str, float]:
+    """Overlay the placements named by ``flagship_tier.pin`` onto *scores*.
+
+    Applied at READ time rather than only at refresh, so editing a pin's
+    percentile takes effect on the next request instead of on the next cadence
+    tick — matching how pins and excludes already behave in
+    ``_get_flagship_models``.
+
+    A pin wins over a measured score. That is what makes the field able to
+    demote a model you distrust as well as promote one nothing has scored, and
+    it matches pins already bypassing the bar and the spec veto. Because the
+    override is otherwise invisible, displacing real evidence is logged once.
+
+    Pins resolve against the LIVE route cache by the same precedence
+    ``select_flagship`` uses — an exact qualified id first, a bare upstream id
+    second — rather than by writing a normalised key and hoping. That is not a
+    refinement: ``normalize_model_id`` strips the provider, so
+    "atria-asi/Atria-Dawn-Preview" and "Atria-Dawn-Preview" normalise to the
+    SAME key. Placing a qualified pin through that key would silently move
+    every provider serving those weights, which is precisely what naming the
+    provider was meant to prevent.
+    """
+    try:
+        from .flagship import parse_pins
+        cfg = config if config is not None else load_config()
+        pins = parse_pins(flagship_tier_cfg(cfg).get("pin"))
+    except Exception as e:  # noqa: BLE001 — a bad pin must not break routing
+        print(f"[server:_apply_pin_percentiles] {e}")
+        traceback.print_exc()
+        return scores
+
+    if not any(v is not None for v in pins.values()):
+        return scores  # no placements: nothing to do, and no route walk
+
+    known: set[str] = set()
+    by_upstream: dict[str, set[str]] = {}
+    try:
+        for provider_name, upstream_id in _get_distinct_routes():
+            qualified = f"{provider_name}/{upstream_id}".lower()
+            known.add(qualified)
+            by_upstream.setdefault(upstream_id.lower(), set()).add(qualified)
+    except Exception as e:  # noqa: BLE001
+        print(f"[server:_apply_pin_percentiles] route walk failed: {e}")
+        traceback.print_exc()
+
+    for name, percentile in pins.items():
+        if percentile is None:
+            continue  # a pin with no placement keeps today's behaviour
+        if name in known:
+            targets = {name}
+        elif name in by_upstream:
+            targets = by_upstream[name]
+        else:
+            # Unresolvable against anything this deployment serves — most often
+            # a cold route cache on the first request after a restart. Honoured
+            # literally, which is right for a qualified pin and a no-op for a
+            # bare one until the cache warms.
+            targets = {name}
+        for target in targets:
+            measured = scores.get(target)
+            if measured is not None and measured != percentile:
+                token = (target, measured, percentile)
+                if token not in _pin_override_warned:
+                    _pin_override_warned.add(token)
+                    logger.info(
+                        "[flagship] pin places %s at %.3f, overriding its "
+                        "measured percentile of %.3f",
+                        target, percentile, measured,
+                    )
+            scores[target] = percentile
+    return scores
 
 
 def _get_reasoning_model_candidates(level: str) -> list[tuple[str, dict, str]]:
