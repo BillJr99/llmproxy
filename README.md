@@ -1900,10 +1900,11 @@ the refresh fills two gaps on its own:
   coder, omni and vision variants agrees on what the weights share and disagrees
   on the rest, and only the agreement is safe to lend. The generation-scoped
   family is tried first, so `llama4` never lends to `llama2`, falling back to the
-  bare family when a generation is too sparse to speak. Families are computed
-  over every observation, the catalog included, so a deployment serving three
-  members still benefits from what is known about the other twenty. Recorded as
-  `family`.
+  bare family when a generation is too sparse to speak, and falling back once
+  more to the longest known family key contained in the model's own key when
+  neither exact lookup matches. Families are computed over every observation,
+  the catalog included, so a deployment serving three members still benefits
+  from what is known about the other twenty. Recorded as `family`.
 
 Both derivations read the **raw upstream id**, never the normalized join key
 the facts are filed under. `normalize_model_id` strips separators, so
@@ -1912,6 +1913,46 @@ as the parameter count: the raw id infers `exploratory` and the normalized one
 infers `deep`. The family derivation splits on those same separators, so fed the
 normalized form `llama-2-7b` arrives as `llama27b` and groups with nothing at
 all.
+
+The two exact lookups assume the vendor sits behind a path separator, which is
+not always where a provider puts it. `zai-glm-5-turbo` folds the vendor into the
+name, so it derives `zaiglm5` and `zaiglm`, a family of its own with no observed
+members; `claude-haiku-4.5-us-east-1` folds a region onto the end and derives
+`claudehaiku45useast1`. Neither model reached a family that had anything to
+lend, and on one real 1,751-model deployment 916 models carried no capabilities
+at all. So when the generation-scoped and bare lookups both miss, the model's
+normalized key is searched for any known family key appearing inside it, and the
+longest match wins. `zaiglm5` contains `glm`, and `claudehaiku45useast1`
+contains `claudehaiku`. Longest wins is load bearing rather than a tie-break: it
+lets a more specific family supersede a more general one, so `llama32` beats
+`llama3` where llama-3.2's vision variants do not share llama-3's capability
+set. Only a family key of at least three characters is eligible to match this
+way, so a very short family name cannot catch models that merely happen to
+contain its letters. Three rather than four because the shortest families that
+carry real weight on a live deployment are `glm` and `gpt`, and excluding them
+would discard most of what the fallback is for. An exact family match is
+trusted at any length; the floor applies to the substring pass alone.
+
+Nothing else about the lending changes. The substring match only chooses which
+family speaks, and that family still has to be unanimous, still has to clear
+`min_family_members`, still lends only to a model publishing no capabilities of
+its own, and the result is still recorded as `family`, the weakest grade, so a
+later reading from a provider or a hand correction in the admin UI overrides it
+and no refresh undoes that.
+
+Measured on real data, 12 of 25 sampled chat models that carried no capabilities
+gained them, with zero false positives among the embedding, reranker, TTS and
+summarisation models alongside them. Those stay empty for a structural reason
+rather than by luck: chat families are named after chat models, so `bge`,
+`allminilm` and `aura` share no stem with any of them. A holdout test against
+the shipped `providers.json` agreed independently, raising coverage by 50% with
+no over-predictions.
+
+What this does not fix is a family with too little data to lend. A model whose
+family has fewer than `min_family_members` members carrying observed
+capabilities still inherits nothing, because a substring match can only find a
+family that already has data, never invent one. That is the `min_family_members`
+lever, and it is tunable.
 
 Either inference can be switched off, and the family evidence threshold raised,
 in the `routing_metadata` block below.

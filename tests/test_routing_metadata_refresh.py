@@ -760,3 +760,109 @@ def test_promotion_survives_a_malformed_providers_file(monkeypatch, tmp_path):
     text, report = s._promote_sidecar_to_providers("{not json")
     assert text == "{not json"
     assert report["total"] == 0
+
+
+# ── substring family matching ───────────────────────────────────────────────
+
+BY_GEN = {"glm53": {"json", "reasoning", "tools"},
+          "llama32": {"tools", "vision"},
+          "claudehaiku45": {"json", "reasoning", "tools", "vision"}}
+BY_BARE = {"glm": {"json", "reasoning", "tools"},
+           "claudehaiku": {"json", "reasoning", "tools", "vision"},
+           "gpt": {"json", "tools"}, "llama": {"tools"}}
+
+
+@pytest.mark.parametrize("key,raw,want_family", [
+    # An exact derived family still wins, and is trusted at any length.
+    ("glm53flash", "z-ai/glm-5.3-flash", "glm53"),
+    # The vendor folded into the NAME rather than behind a path separator.
+    # These derive zaiglm5 / zhipuglm5, families of one with nothing to lend.
+    ("zaiglm5", "zai-glm-5", "glm"),
+    ("zhipuglm5", "zhipu-glm-5", "glm"),
+    ("cerebraszaiglm47", "cerebras/zai-glm-4.7", "glm"),
+    # Regional deployments of one model: eleven of these carried no
+    # capabilities on a live box while claudehaiku sat there with data.
+    ("claudehaiku45useast1", "claude-haiku-4.5-us-east-1", "claudehaiku45"),
+    ("claudehaiku4520251001", "claude-haiku-4.5-20251001", "claudehaiku45"),
+    ("cerebrasgptoss120b", "cerebras-gpt-oss-120b", "gpt"),
+])
+def test_a_family_reaches_a_model_whose_id_hides_it(key, raw, want_family):
+    """Deriving a family from the id only works when the vendor sits behind a
+    path separator. Matching the normalized key as a substring finds the family
+    that is plainly there when it does not."""
+    from llmproxy import server as s
+    caps, fam = s._family_capabilities_for(key, raw, BY_GEN, BY_BARE)
+    assert fam == want_family, f"{key} was lent by {fam}, expected {want_family}"
+    assert caps
+
+
+def test_the_longest_matching_family_wins():
+    """A more specific family must supersede a more general one.
+
+    llama-3.2's vision variants do not share llama-3's capability set, so
+    shortest-wins would actively mislead rather than merely under-inform.
+    """
+    from llmproxy import server as s
+    caps, fam = s._family_capabilities_for("llama32vision11b", "llama-3.2-vision-11b",
+                                           BY_GEN, BY_BARE)
+    assert fam == "llama32"
+    assert caps == {"tools", "vision"}, "took the broader llama family instead"
+
+    # Same rule between a generation family and its bare form.
+    _caps, fam = s._family_capabilities_for("claudehaiku45useast1",
+                                            "claude-haiku-4.5-us-east-1",
+                                            BY_GEN, BY_BARE)
+    assert fam == "claudehaiku45"
+
+
+@pytest.mark.parametrize("key,raw", [
+    ("bgem3", "bge-m3"),
+    ("bgererankerbase", "bge-reranker-base"),
+    ("allminilml6v2", "all-minilm-l6-v2"),
+    ("allmpnetbasev2", "all-mpnet-base-v2"),
+    ("aura2en", "aura-2-en"),
+    ("bartlargecnn", "bart-large-cnn"),
+    ("aisyntheticvideodetector", "ai-synthetic-video-detector"),
+])
+def test_embeddings_and_speech_models_are_lent_nothing(key, raw):
+    """A model with no chat capabilities must stay empty.
+
+    This holds structurally rather than by luck: chat families are named after
+    chat models, so an embedding, reranker or TTS name shares no stem with one.
+    Tagging these would put a model that cannot answer into llmproxy/tools.
+    """
+    from llmproxy import server as s
+    caps, fam = s._family_capabilities_for(key, raw, BY_GEN, BY_BARE)
+    assert caps is None and fam is None, f"{key} was wrongly lent {caps} by {fam}"
+
+
+def test_a_family_below_the_substring_floor_never_matches():
+    """A two-character family would collide with almost anything."""
+    from llmproxy import server as s
+    from llmproxy.providers import FAMILY_MIN_SUBSTRING_LENGTH
+    assert FAMILY_MIN_SUBSTRING_LENGTH == 3
+    caps, fam = s._family_capabilities_for(
+        "someunrelatedmodel", "some-unrelated-model", {}, {"ed": {"tools"}})
+    assert caps is None and fam is None
+    # ...but an EXACT match is trusted at any length, floor or no floor.
+    caps, fam = s._family_capabilities_for("ed", "ed", {}, {"ed": {"tools"}})
+    assert fam == "ed" and caps == {"tools"}
+
+
+def test_substring_lending_still_records_the_family_grade(monkeypatch, tmp_path):
+    """Whatever route it arrives by, a lend is a guess and must say so.
+
+    The grade is what lets a later reading from the provider, or one click in
+    the admin UI, replace it — and what stops it outranking either.
+    """
+    s = _make_server(monkeypatch, tmp_path)
+    caps = {f"alpha/glm-5.{i}": {"reasoning", "tools"} for i in range(1, 4)}
+    caps["beta/zhipu-glm-5-turbo"] = set()          # the one with no data
+    state = _refresh(s, monkeypatch, tmp_path,
+                     routes=[("alpha", f"glm-5.{i}") for i in range(1, 4)]
+                            + [("beta", "zhipu-glm-5-turbo")],
+                     caps=caps, profiles={})
+    assert state is not None
+    entry = state["by_model"]["zhipuglm5turbo"]
+    assert set(entry["capabilities"]) == {"reasoning", "tools"}
+    assert entry["capabilities_source"] == "family"

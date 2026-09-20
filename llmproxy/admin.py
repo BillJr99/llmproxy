@@ -1137,9 +1137,21 @@ def _effective_routing(config: dict | None = None) -> dict:
     return {k: merged.get(k) for k in server._ROUTING_CONFIG_KEYS}
 
 
+def layers_for_ids(config: dict):
+    """The routing layers, assembled once.
+
+    Once, not once per row: four layer rebuilds per model was most of the cost
+    of listing a few thousand of them.
+    """
+    from . import server
+    return server.routing_layers(config)
+
+
 def _routing_rows(config: dict, q: str = "") -> list[dict]:
     """One row per known model: what is in effect, and which layers said so."""
     from . import server
+
+    layers = layers_for_ids(config)
 
     eff = _effective_routing(config)
     believed = {m.lower() for m in eff.get("believed_free") or []}
@@ -1148,19 +1160,26 @@ def _routing_rows(config: dict, q: str = "") -> list[dict]:
     caps = eff.get("model_capabilities") or {}
     limits = eff.get("free_limits") or {}
 
+    # Rows are ROUTING TARGETS and ids a person actually typed — never the
+    # learned layer's keys. Those are normalized join keys by design
+    # ("aionlabsaion30mini"), not anything callable, and listing them showed
+    # thousands of phantom models that no request could ever address.
     ids: set[str] = set()
-    for source in (believed, observed_cost, set(reasoning), set(caps), set(limits)):
-        ids |= {m for m in source if isinstance(m, str) and m != "_note"}
     try:
         for provider_name, upstream in server._get_distinct_routes():
             ids.add(f"{provider_name}/{upstream}".lower())
     except Exception as e:  # noqa: BLE001 — a cold route cache is not an error
         print(f"[admin:_routing_rows] {e}")
         traceback.print_exc()
+    for layer_name, layer in layers_for_ids(config):
+        if layer_name == "learned":
+            continue
+        for key in server._ROUTING_LIST_KEYS:
+            ids |= {m.lower() for m in layer.get(key) or [] if isinstance(m, str)}
+        for key in server._ROUTING_DICT_KEYS:
+            ids |= {m.lower() for m in (layer.get(key) or {})
+                    if isinstance(m, str) and m != "_note"}
 
-    # Assembled once, not per row: four layer rebuilds per model is most of the
-    # cost of listing a few thousand of them.
-    layers = server.routing_layers(config)
     needle = q.strip().lower()
     rows: list[dict] = []
     for model_id in sorted(ids):

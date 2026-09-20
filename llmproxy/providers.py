@@ -241,6 +241,13 @@ _FAMILY_SPLIT_RE = re.compile(r"[-_.]+")
 _FAMILY_MAX_BASE_TOKENS = 2
 _FAMILY_MAX_VERSION_TOKENS = 2
 
+# Shortest family key allowed to match as a SUBSTRING of another model's key.
+# Three, because the shortest families that carry real weight on a live
+# deployment are "glm" and "gpt", and excluding them would discard most of what
+# substring matching is for. Two would admit fragments that collide by accident.
+# An exact family match is never subject to this floor; only the fallback is.
+FAMILY_MIN_SUBSTRING_LENGTH = 3
+
 
 def family_key(model_id: str, *, generation: bool = True) -> str | None:
     """Group a model with its siblings: ``z-ai/glm-5.3-flash`` -> ``glm5``/``glm``.
