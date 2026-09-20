@@ -68,6 +68,27 @@ from scripts.sources.litellm_cost_map import fetch_pricing_map  # noqa: E402
 
 CONFIG_EXAMPLE_PATH = REPO_ROOT / "config.example.json"
 
+# Per-token rates transcribed from a provider's own published pricing, for
+# models no live source and no LiteLLM entry covers. The pricing block is
+# rebuilt on every run from the baseline plus live-source overrides, so a rate
+# hand-added to providers.json would be dropped by the next scrape; pinning it
+# here is what makes it survive. Without a rate the loadbalanced virtual cannot
+# rank the model in its paid tier at all.
+#
+# Keep this small and sourced. Each entry needs a provider-qualified lowercase
+# key and the two non-negative per-token costs test_pricing_block_shape checks.
+# Drop an entry once a live source starts carrying the model.
+_PINNED_PRICING: dict[str, dict[str, float]] = {
+    # unbiased.ai/pricing: $2.50/Mtok in, $7.50/Mtok out (cached input $0.25/Mtok
+    # is not modelled here — the block carries two costs). Corroborated by the
+    # openrouter/unbiased/pareto entry the baseline already supplies at the same
+    # rates. Unbiased publishes no catalog, so no live source will ever cover it.
+    "unbiased-ai/pareto": {
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 7.5e-06,
+    },
+}
+
 # Placeholder API keys used when regenerating config.example.json. Keeping
 # the pattern matches the existing example so a `diff` post-refactor is
 # byte-clean.
@@ -559,7 +580,10 @@ def _merge_pricing(sidecar: dict, updates: dict, litellm_ran: bool) -> bool:
             print(_warn(f"  pricing baseline refresh failed: {exc}"))
             baseline = existing
     overrides = _collect_source_pricing(updates)
-    merged = {**baseline, **overrides}
+    # Pinned rates sit between the two: they fill gaps the baseline does not
+    # cover, but a live source still wins, because it is fresher and provider-
+    # specific where these are hand-transcribed.
+    merged = {**baseline, **_PINNED_PRICING, **overrides}
     # Strip any model that is currently believed_free — their cost accounting
     # belongs in the free-tier path, not the paid pricing block.
     free_models: set[str] = set()
