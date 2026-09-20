@@ -1767,38 +1767,46 @@ Five keys decide how llmproxy routes: which models are free, which of those
 turned out to cost money, what tier each sits in, what each can do, and how fast
 you may call it.
 
-| Key | What it decides |
-|---|---|
-| `believed_free` | which models the free pools may use |
-| `cost_observed_free_tier` | which of those reported a real cost and are treated as paid |
-| `model_reasoning` | the tier a model sits in (`exploratory` / `standard` / `deep`) |
-| `model_capabilities` | `tools` / `vision` / `reasoning` / `json` |
-| `free_limits` | per-model rate and token quotas |
+| Key | What it decides | Which layer normally supplies it |
+|---|---|---|
+| `believed_free` | which models the free pools may use | `providers.json`, kept current by the free-models sweep |
+| `cost_observed_free_tier` | which of those reported a real cost and are treated as paid | learned, the moment a free-marked model bills something |
+| `model_reasoning` | the tier a model sits in (`exploratory` / `standard` / `deep`) | learned, inferred from the model's own name; `providers.json` ships a tag for every free model too |
+| `model_capabilities` | `tools` / `vision` / `reasoning` / `json` | the provider's own listing, over what the refresh read from the OpenRouter catalog |
+| `free_limits` | per-model rate and token quotas | `providers.json`, kept current by the free-models sweep |
 
-They are resolved across four layers, highest priority first:
+They are resolved across four layers, weakest first:
 
 | Layer | Where | Who writes it | Committed |
 |---|---|---|---|
-| **Your overrides** | `config.json` | you, and the admin UI | no |
-| **Provider listings** | in memory | each provider's own `/models` | n/a |
-| **Learned** | `routing_metadata.json` | the refresh cadence | **no** |
-| **Defaults** | `llmproxy/providers.json` | the repo, via the providers PR | yes |
+| **Defaults** | `llmproxy/providers.json` | the repo, via the [providers PR](#pr-providers-list) | yes |
+| **Learned** | `routing_metadata.json`, in `by_model` and `by_provider` | the routing-metadata refresh, and runtime cost observations | **no** |
+| **Provider listings** | in memory | each provider's own `/models`, as the route cache is built | n/a |
+| **Curated** | `routing_metadata.json`, in `curated` | you, through the admin UI, plus whatever the startup migration drained out of `config.json` | **no** |
 
-**Your config always wins.** A correction you make by hand, or through the admin
-UI, outranks everything discovered and survives every refresh. That is what
-makes the admin editors worth using rather than something the next cadence
-quietly undoes.
+**Curated wins.** A correction you make by hand, or through the admin UI,
+outranks everything discovered and survives every refresh. That is what makes
+the admin editors worth using rather than something the next cadence quietly
+undoes.
 
-**A provider outranks the catalog about its own models.** A gateway knows what it
-actually deployed; the catalog is the broad base beneath it.
+**A provider outranks the catalog about its own models.** A gateway knows what
+it actually deployed, so its listing sits above the refresh; `providers.json` is
+the broad base beneath both.
 
-**List keys union; dict keys merge per entry.** `believed_free` and
-`cost_observed_free_tier` accumulate across layers, which still gives complete
-control because they are a pair: one adds a model to the free pool and the other
-takes it out again. Replacing would mean one hand-added entry silently
-discarding everything the refresh had learned. `model_reasoning`,
-`model_capabilities` and `free_limits` merge per model, with the higher layer
-winning that entry.
+**`config.json` is not one of the layers.** It is an inbox that is emptied at
+startup, described under
+[config.json is drained, not read](#routing-metadata-inbox) below.
+
+> **The defaults layer only started arriving recently.** Every one of
+> `providers.json`'s 603 entries was double-prefixed on the way in: the file
+> stores ids already qualified (`google/gemini-2.0-flash`) and the layer
+> prepended the provider name again, producing `google/google/gemini-2.0-flash`,
+> which matches no lookup. If you read an older README saying the shipped
+> defaults apply, they did not: none of that data reached a routing decision
+> until this was fixed. Each layer now states its own convention rather than
+> guessing, because the same string can be qualified in one file and bare in
+> another (Groq's own ids carry a `groq/` vendor namespace, so `providers.json`
+> holds `groq/groq/compound` while the sidecar holds `groq/compound`).
 
 #### What is keyed by what
 
@@ -1808,8 +1816,8 @@ So the learned layer splits them:
 - `model_capabilities` and `model_reasoning` are keyed by **normalized model**,
   so one entry covers every provider serving those weights. `glm-5.3-flash`
   appears as `z-ai/glm-5.3-flash`, `zai/glm-5.3-flash`, `zai-org/glm-5.3-flash`
-  and bare across a couple of dozen providers — one learned fact answers for all
-  of them.
+  and bare across a couple of dozen providers, and one learned fact answers for
+  all of them.
 - `believed_free`, `cost_observed_free_tier` and `free_limits` are keyed **per
   provider**, because the same weights can be free on one provider and metered
   on another.
@@ -1818,42 +1826,224 @@ Lookups try the qualified id, then the bare id, then the normalized model. The
 normalized form is tried last, so an entry for this exact model on this exact
 provider always beats a fact inherited from the same weights elsewhere.
 
+#### What combines, and what is simply overridden
+
+The five keys do not merge the same way, because they do not mean the same kind
+of thing:
+
+- **The two lists accumulate.** `believed_free` and `cost_observed_free_tier`
+  union across layers. That still gives complete control because they are a
+  pair: one adds a model to the free pool and the other takes it out again.
+  Replacing would mean one hand-added entry silently discarding everything the
+  refresh had learned. It also means the curated layer can only *add* to a list,
+  which is why taking a model out of the free pool is done by recording it as
+  cost-observed rather than by deleting it.
+- **Capabilities union too, in both directions.** When written, the refresh
+  unions what every provider serving the same weights publishes; when read, the
+  qualified, bare and normalized entries are unioned rather than stopping at the
+  first hit. A provider that omits a tag is silent, not authoritative, so a
+  gateway publishing a thin `supported_parameters` cannot retract what the
+  catalog or another provider asserted about the same model.
+- **A tier and a quota are single-valued.** `model_reasoning` and `free_limits`
+  merge per model, with the higher layer winning that entry outright.
+
+#### Provenance: a reading is not a guess
+
+The learned layer holds facts of very different quality side by side, so each
+one carries a `<fact>_source` grade beside it. Weakest first:
+
+| Grade | What it means |
+|---|---|
+| `inferred` | derived from this model's own name |
+| `family` | unanimous across the models sharing its family |
+| `observed` | a provider listing or the OpenRouter catalog said so |
+| `curated` | set by hand, in the admin UI or migrated out of a `config.json` |
+
+A refresh may replace a fact of equal or weaker grade, never a stronger one, so
+an inference can never overwrite a reading and nothing can overwrite a hand
+correction. A fact with no recorded source reads as `observed`, so a sidecar
+written before the field existed is not quietly overwritten by a guess.
+
+Two further rules protect the same data. A model this pass could not see keeps
+what it had, so one provider being unreachable at refresh time cannot thin the
+routing data; and a pass that learns nothing at all writes nothing, leaving the
+previous state in place.
+
+#### Inferring a tier, and lending a family its capabilities
+
+A model that no source describes is exactly the one that most needs a tier, so
+the refresh fills two gaps on its own:
+
+- **A reasoning tier from the model's name**, via the same inference the setup
+  wizard uses for local models: deep keywords win outright, then a parameter
+  count (100B and up is `deep`, 15B and up is `standard`, smaller is
+  `exploratory`), then a handful of size words. Recorded as `inferred`, the
+  weakest grade, so anything better replaces it later.
+- **A family's unanimous capabilities**, lent only to a family member that
+  publishes none of its own. Unanimity rather than a majority: a family spanning
+  coder, omni and vision variants agrees on what the weights share and disagrees
+  on the rest, and only the agreement is safe to lend. The generation-scoped
+  family is tried first, so `llama4` never lends to `llama2`, falling back to the
+  bare family when a generation is too sparse to speak. Families are computed
+  over every observation, the catalog included, so a deployment serving three
+  members still benefits from what is known about the other twenty. Recorded as
+  `family`.
+
+Both derivations read the **raw upstream id**, never the normalized join key.
+`normalize_model_id` strips separators, so `llama-3.1-8b` becomes `llama318b`
+and a size regex run afterwards reads "318b" as the parameter count and calls an
+8B model `deep`. The family derivation has the same hazard: `llama-2-7b` would
+come out as family `llama27`.
+
+Either inference can be switched off, and the family evidence threshold raised,
+in the `routing_metadata` block below.
+
 #### What updates itself, and when
 
+Paste this block at the top level of `config.json`. Every key is optional; a
+config without the block behaves exactly as if it contained these values:
+
 ```json
-"routing_metadata": { "enabled": true, "refresh_frequency_days": 7 }
+"routing_metadata": {
+  "enabled": true,
+  "refresh_frequency_days": 7,
+  "infer_reasoning": true,
+  "infer_family_capabilities": true,
+  "min_family_members": 3
+}
 ```
 
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `enabled` | `true` | Master switch for the routing-metadata refresh. When false, no pass runs and the learned layer keeps whatever it last held. |
+| `refresh_frequency_days` | `7` | How often the refresh runs. `0` relearns every time the interval is checked. |
+| `infer_reasoning` | `true` | Derive a reasoning tier from the model's name when nothing stronger says otherwise. Recorded as `inferred`. |
+| `infer_family_capabilities` | `true` | Lend a family its unanimous capabilities to members that publish none. Recorded as `family`. |
+| `min_family_members` | `3` | How many members carrying observed capabilities a family needs before it may lend anything. One or two models agreeing is not evidence about a third. |
+
 The refresh relearns capabilities from each provider's listing and from the
-OpenRouter catalog. It has its own cadence, so disabling the flagship tier does
-not also stop llmproxy learning what its models can do. Two sources that cost
-nothing extra: the provider listings are already fetched to build the route
-cache, and the catalog fetch is the one the flagship refresh already makes.
+OpenRouter catalog, then fills the gaps by inference. It has its own cadence, so
+disabling the flagship tier does not also stop llmproxy learning what its models
+can do, and neither source costs anything extra: the provider listings are
+already fetched to build the route cache, and the catalog fetch is the one the
+flagship refresh already makes. The last-run timestamp lives in
+`routing_metadata.json` itself.
 
-Cost observations are written here too. A model that reports a real cost while
-marked free is something llmproxy discovered at runtime, so it belongs with the
-rest of what the refresh learns — not in the file you hand-edit.
+Which layers are machine-written, and on what schedule:
 
-#### What gets PR'd
+- **Defaults** are rewritten by the free-models sweep on
+  [`free_tier.update_frequency_days`](#refresh-cadence) (default 7), which is also what a
+  [providers PR](#pr-providers-list) proposes back to the repo.
+- **The learned `by_model` section** is rewritten by the routing-metadata
+  refresh on `routing_metadata.refresh_frequency_days` (default 7). It writes
+  capabilities and reasoning tiers only, and only for models this deployment
+  actually has a route to: the catalog covers thousands of models a deployment
+  never touches, and their capabilities still feed the family evidence without
+  being persisted.
+- **The learned `by_provider` section** is written on no cadence at all. A
+  cost observation lands the moment a `believed_free` model serves a request
+  reporting a non-zero cost, which adds it to `cost_observed_free_tier` and
+  drops it from the learned `believed_free` so the file does not assert both.
+- **The provider-listing layer** is in memory and has no file. It is refilled
+  whenever the route cache is rebuilt.
+- **The curated section** is written only when you write it, or when the startup
+  migration drains `config.json` into it.
 
-With [`providers_pr`](#providers_pr) enabled, learned metadata is proposed as
-`providers.json` defaults so every deployment benefits, not just yours.
-`routing_metadata.json` itself is never committed: it describes one deployment's
-providers and is rewritten on a schedule. Neither is `providers.json` ever
-copied next to your `config.json` — it is read from the repo checkout, and a
-second copy beside your config would drift from it immediately and invite
-hand-edits to a machine-written file.
+Each of these is a read-modify-write of one file, so every writer takes the same
+lock: a thread lock within the process and an advisory file lock across workers.
 
-#### Migrating an existing config
+#### Reading and editing the merged view
 
-If your `config.json` still holds these five keys, they are still honoured — the
-layers merge, so nothing breaks and nothing needs doing. But they are frozen at
-whatever they were when they were written, which is the problem this structure
-solves. Moving them out lets the refresh keep them current.
+The admin API exposes the resolved result rather than any one layer:
 
-The migration script backs up your config, seeds the sidecar and
-`providers.json` from what it finds, strips the five keys, and reports what
-moved. It is safe to re-run and supports `--dry-run`.
+- **`GET /admin/api/routing-metadata`** returns the effective facts per model,
+  paged and filtered (`q`, `offset`, `limit`, with `limit` capped at 500). Each
+  row names the layers contributing to each fact and the learned grade behind
+  it, which answers "why is this model tagged that way" in a way a merged dict
+  cannot.
+- **`PUT /admin/api/routing-metadata`** sets one model's `capabilities`,
+  `reasoning`, `free_limits` or `free` flag by hand, recorded as curated. Per
+  model rather than whole-section, so editing one row cannot blank the rest.
+- **`POST /admin/api/refresh`** runs a pass now instead of waiting out a
+  cadence, with `{"what": "routing_metadata"}` or `{"what": "flagship"}`.
+
+The four older section editors (`believed-free`, `model-reasoning`,
+`model-capabilities`, `free-limits`) now read the merged view and write the
+curated layer, recording only the entries that **differ** from the layers
+below. Saving a form you did not touch is a no-op, and clearing an override
+restores whatever the machine had learned instead of freezing today's guesses as
+permanent corrections.
+
+#### The same knobs from the admin API
+
+`PUT /admin/api/maintenance` keeps the historical flat field names while storing
+into the nested config blocks. The fields covering the two learning cadences,
+the inference switches and the PR throttle are:
+
+| Field | Stored at | Default |
+|-------|-----------|---------|
+| `routing_metadata_enabled` | `routing_metadata.enabled` | `true` |
+| `routing_metadata_frequency_days` | `routing_metadata.refresh_frequency_days` | `7` |
+| `infer_reasoning` | `routing_metadata.infer_reasoning` | `true` |
+| `infer_family_capabilities` | `routing_metadata.infer_family_capabilities` | `true` |
+| `min_family_members` | `routing_metadata.min_family_members` | `3` |
+| `flagship_enabled` | `flagship_tier.enabled` | `true` |
+| `flagship_frequency_days` | `flagship_tier.refresh_frequency_days` | `7` |
+| `pr_providers_frequency_days` | `providers_pr.frequency_days` | `7` in the form; the server treats the key as absent, meaning no throttle, until something writes it |
+
+#### What gets PR'd, and what never leaves the deployment
+
+The free-models sweep rewrites `llmproxy/providers.json` in place, and with
+[`providers_pr`](#pr-providers-list) enabled the running deployment proposes that
+file (plus the regenerated `config.example.json`) as a pull request, so every
+deployment benefits rather than just yours. What is proposed is what the sweep
+scraped: `believed_free`, `free_limits`, `pricing`, and the reasoning tier and
+capability tags it derives for the models it added.
+
+Neither sidecar is ever committed. `routing_metadata.json` describes one
+deployment's providers and is rewritten on a schedule, and `flagship_models.json`
+is computed from whatever that deployment can reach. Nothing copies the learned
+layer into `providers.json`: a fact promoted to the defaults layer is one a
+scrape found, not one a single deployment inferred.
+
+`providers.json` is also never copied next to your `config.json`. It is read
+from the repo checkout, and a second copy beside your config would drift from it
+immediately and invite hand-edits to a machine-written file.
+
+<a name="routing-metadata-inbox"></a>
+#### `config.json` is drained, not read
+
+`config.json` stopped being a routing layer because it could not be a stable
+record of intent. It is the file a person hand-edits, and machine processes were
+writing it too: the local-model sync tagged every model a local provider served
+and saved the file back, silently re-seeding the very keys a migration had just
+stripped.
+
+It is now an inbox. At startup, before any background work, the server moves the
+five keys out of `config.json` and into the sidecar's curated section, at the
+same precedence they had, and in their original shape, so migrated data resolves
+through exactly the same lookup it always did and moving it cannot change a
+single routing decision. Specifically:
+
+- `config.json` is **backed up first**, as `config.json.backup-YYYYmmdd-HHMMSS`
+  beside itself. If the backup fails, nothing is migrated.
+- An existing curated entry **wins** over the incoming config value, so running
+  the migration again after you have corrected a fact in the admin UI cannot
+  resurrect the older `config.json` value over your correction.
+- The five keys are then removed from `config.json`, which afterwards holds none
+  of them. The move is logged with a `[config-migration]` prefix, naming how
+  many entries of each key were new and which backup it wrote.
+
+Anything you add to `config.json` by hand afterwards is still honoured, because
+the file is read as part of the curated layer, but only until the next restart
+absorbs it. The curated section wins where both speak.
+
+One consequence worth knowing: `config.example.json` is generated from
+`providers.json` and still carries the five keys flattened to the top level, so
+a `config.json` copied from it is drained into the curated section on first
+boot, which lands the shipped defaults in the strongest layer. Delete the five
+keys from your copy if you would rather they stayed in the defaults layer, where
+the sweep can keep them current.
 
 <a name="favorite_free_models"></a>
 ### `favorite_free_models` — ranked priority list for free-tier routing

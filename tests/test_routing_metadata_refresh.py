@@ -689,3 +689,74 @@ def test_the_sidecar_cache_is_keyed_by_path_not_mtime_alone(monkeypatch, tmp_pat
     assert first["by_model"]["m"]["capabilities"] == ["tools"]
     assert second["by_model"]["m"]["capabilities"] == ["vision"], \
         "the second path was served the first path's cached state"
+
+
+# ── promotion into providers.json ───────────────────────────────────────────
+
+def _providers_text() -> str:
+    from pathlib import Path
+
+    import llmproxy.providers as providers_mod
+    return Path(providers_mod.DATA_PATH).read_text(encoding="utf-8")
+
+
+def _promotion_server(monkeypatch, tmp_path, sidecar, routes):
+    s = _make_server(monkeypatch, tmp_path)
+    (tmp_path / "routing_metadata.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    s._reset_routing_sidecar_cache()
+    monkeypatch.setattr(s, "_get_distinct_routes", lambda: routes)
+    return s
+
+
+def test_promotion_carries_each_fact_with_its_provenance(monkeypatch, tmp_path):
+    """Inferred facts are promoted alongside observed ones, so the PR body has
+    to say which is which. A wrong capability tag in providers.json routes every
+    deployment's request to a model that cannot serve it."""
+    s = _promotion_server(monkeypatch, tmp_path, {
+        "by_model": {
+            "llama3370b": {"capabilities": ["tools", "json"],
+                           "capabilities_source": "observed",
+                           "reasoning": "standard", "reasoning_source": "inferred"},
+            "qwen332b": {"capabilities": ["tools"], "capabilities_source": "family"},
+        },
+        "curated": {"model_reasoning": {"groq/qwen3-32b": "deep"}},
+    }, [("groq", "llama-3.3-70b"), ("groq", "qwen3-32b")])
+
+    text, report = s._promote_sidecar_to_providers(_providers_text())
+    grades = report["providers"]["groq"]
+    assert grades["observed"] >= 1 and grades["inferred"] >= 1
+    assert grades["family"] >= 1 and grades["curated"] >= 1
+
+    groq = json.loads(text)["providers"]["groq"]
+    assert groq["model_capabilities"]["groq/llama-3.3-70b"] == ["json", "tools"]
+    # A hand correction outranks the learned tier even here.
+    assert groq["model_reasoning"]["groq/qwen3-32b"] == "deep"
+
+    body = s._promotion_body(report)
+    for grade in ("curated", "observed", "family", "inferred"):
+        assert grade in body
+    assert "guesses" in body, "the body must flag which entries are not provider-stated"
+
+
+def test_promotion_never_invents_a_provider_this_repo_does_not_ship(
+        monkeypatch, tmp_path):
+    """A provider someone added locally is theirs, not a default for everyone."""
+    s = _promotion_server(monkeypatch, tmp_path, {
+        "by_model": {"mything": {"capabilities": ["tools"],
+                                 "capabilities_source": "observed"}},
+    }, [("bills-homebrew-provider", "my-thing")])
+
+    before = _providers_text()
+    text, report = s._promote_sidecar_to_providers(before)
+    assert text == before
+    assert report["total"] == 0
+    assert report["skipped_providers"] == ["bills-homebrew-provider"]
+    assert s._promotion_body(report) == ""
+
+
+def test_promotion_survives_a_malformed_providers_file(monkeypatch, tmp_path):
+    """Promotion is best effort. A PR without it beats no PR at all."""
+    s = _promotion_server(monkeypatch, tmp_path, {"by_model": {}}, [])
+    text, report = s._promote_sidecar_to_providers("{not json")
+    assert text == "{not json"
+    assert report["total"] == 0

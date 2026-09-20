@@ -3168,6 +3168,187 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
     threading.Thread(target=_run, daemon=True, name="startup-tasks").start()
 
 
+def _promote_sidecar_to_providers(
+    providers_text: str, config_path: str | None = None
+) -> tuple[str, dict]:
+    """Fold what this deployment learned into the providers.json about to be PR'd.
+
+    The sidecar is per deployment and never committed; providers.json is the
+    shipped default every deployment inherits. Promotion is how one deployment's
+    observations become everyone's starting point, which is the whole reason the
+    PR flow exists.
+
+    Facts are carried WITH their provenance so a reviewer can tell a reading
+    from a guess. That matters more here than anywhere else: a wrong capability
+    tag in providers.json makes every deployment route a request to a model that
+    cannot serve it, where a wrong one in a local sidecar costs one deployment a
+    retry.
+
+    Only providers already present in providers.json are touched. A provider
+    someone added locally is theirs, not a default for everyone, and inventing a
+    catalog entry for it from one deployment's config would be a bigger claim
+    than the data supports.
+
+    Returns ``(text, report)``; the text is unchanged when nothing was promoted.
+    """
+    from .flagship import normalize_model_id
+    from .providers import DEFAULT_FACT_SOURCE
+
+    report: dict = {"providers": {}, "skipped_providers": [], "total": 0}
+    try:
+        data = json.loads(providers_text)
+    except Exception as e:  # noqa: BLE001 — never break the PR over a parse
+        print(f"[server:_promote_sidecar_to_providers] {e}")
+        traceback.print_exc()
+        return providers_text, report
+    known = data.get("providers")
+    if not isinstance(known, dict):
+        return providers_text, report
+
+    state = _load_routing_sidecar(config_path)
+    by_model = state.get("by_model") or {}
+    curated = state.get("curated") or {}
+    by_provider = state.get("by_provider") or {}
+
+    # Curated facts are keyed however the user keyed them; index them by the
+    # same three forms the router resolves so they can be matched to a route.
+    curated_caps = {k.lower(): v for k, v in (curated.get("model_capabilities") or {}).items()
+                    if isinstance(k, str)}
+    curated_tier = {k.lower(): v for k, v in (curated.get("model_reasoning") or {}).items()
+                    if isinstance(k, str)}
+
+    def _bump(provider: str, grade: str) -> None:
+        report["providers"].setdefault(provider, {})
+        report["providers"][provider][grade] = \
+            report["providers"][provider].get(grade, 0) + 1
+        report["total"] += 1
+
+    changed = False
+    for provider_name, upstream_id in _get_distinct_routes():
+        if provider_name not in known:
+            if provider_name not in report["skipped_providers"]:
+                report["skipped_providers"].append(provider_name)
+            continue
+        entry = known[provider_name]
+        if not isinstance(entry, dict):
+            continue
+        qualified = f"{provider_name}/{upstream_id}".lower()
+        key = normalize_model_id(upstream_id)
+        facts = by_model.get(key) if isinstance(by_model.get(key), dict) else {}
+
+        caps = curated_caps.get(qualified) or curated_caps.get(upstream_id.lower())
+        grade = "curated"
+        if caps is None:
+            caps = facts.get("capabilities")
+            grade = facts.get("capabilities_source") or DEFAULT_FACT_SOURCE
+        if isinstance(caps, list) and caps:
+            target = entry.setdefault("model_capabilities", {})
+            if target.get(qualified) != sorted(caps):
+                target[qualified] = sorted(caps)
+                changed = True
+                _bump(provider_name, grade)
+
+        tier = curated_tier.get(qualified) or curated_tier.get(upstream_id.lower())
+        tgrade = "curated"
+        if tier is None:
+            tier = facts.get("reasoning")
+            tgrade = facts.get("reasoning_source") or DEFAULT_FACT_SOURCE
+        if isinstance(tier, str) and tier:
+            target = entry.setdefault("model_reasoning", {})
+            if target.get(qualified) != tier:
+                target[qualified] = tier
+                changed = True
+                _bump(provider_name, tgrade)
+
+    # Free status and quota belong to the provider, so they promote directly.
+    for provider_name, info in by_provider.items():
+        if provider_name not in known or not isinstance(info, dict):
+            continue
+        entry = known[provider_name]
+        if not isinstance(entry, dict):
+            continue
+        free = [f"{provider_name}/{m}".lower() for m in info.get("believed_free") or []
+                if isinstance(m, str)]
+        if free:
+            existing = entry.setdefault("believed_free", [])
+            added = [m for m in free if m not in existing]
+            if added:
+                entry["believed_free"] = sorted(set(existing) | set(free))
+                changed = True
+                for _ in added:
+                    _bump(provider_name, "observed")
+        for model, limits in (info.get("free_limits") or {}).items():
+            if not isinstance(model, str) or not isinstance(limits, dict):
+                continue
+            target = entry.setdefault("free_limits", {})
+            qualified = f"{provider_name}/{model}".lower()
+            if target.get(qualified) != limits:
+                target[qualified] = limits
+                changed = True
+                _bump(provider_name, "observed")
+
+    if not changed:
+        return providers_text, report
+    try:
+        from scripts.update_free_models import canonicalize_sidecar, dump_sidecar
+        return dump_sidecar(canonicalize_sidecar(data)), report
+    except Exception as e:  # noqa: BLE001 — fall back to plain json
+        print(f"[server:_promote_sidecar_to_providers] {e}")
+        traceback.print_exc()
+        return json.dumps(data, indent=2) + "\n", report
+
+
+def _promotion_body(report: dict) -> str:
+    """The PR body's provenance summary.
+
+    The body was a fixed two sentences with no diff summary at all. Since
+    inferred facts are promoted alongside observed ones, a reviewer needs to see
+    at a glance which is which — that visibility is what makes promoting a guess
+    reasonable rather than reckless.
+    """
+    if not report.get("total"):
+        return ""
+    order = ("curated", "observed", "family", "inferred")
+    meaning = {
+        "curated": "set by hand in the admin UI",
+        "observed": "published by the provider or the OpenRouter catalog",
+        "family": "unanimous across the model's family, not stated by the provider",
+        "inferred": "derived from the model's name, not stated by the provider",
+    }
+    totals: dict[str, int] = {}
+    for grades in report["providers"].values():
+        for grade, n in grades.items():
+            totals[grade] = totals.get(grade, 0) + n
+
+    lines = ["", "### Where these facts came from", ""]
+    lines.append(f"{report['total']} fact(s) promoted from a running deployment:")
+    lines.append("")
+    for grade in order:
+        if totals.get(grade):
+            lines.append(f"* **{grade}** — {totals[grade]}, {meaning[grade]}.")
+    extra = sorted(set(totals) - set(order))
+    for grade in extra:
+        lines.append(f"* **{grade}** — {totals[grade]}.")
+    lines.append("")
+    lines.append("`family` and `inferred` entries are llmproxy's guesses rather than "
+                 "anything a provider published. They are worth more scrutiny than the "
+                 "rest, because a wrong capability tag here routes every deployment's "
+                 "request to a model that cannot serve it.")
+    lines.append("")
+    lines.append("| provider | " + " | ".join(order) + " |")
+    lines.append("|---|" + "---|" * len(order))
+    for provider in sorted(report["providers"]):
+        grades = report["providers"][provider]
+        lines.append(f"| `{provider}` | "
+                     + " | ".join(str(grades.get(g, 0)) for g in order) + " |")
+    if report.get("skipped_providers"):
+        lines.append("")
+        lines.append("Not promoted, because they are not providers this repo ships: "
+                     + ", ".join(f"`{p}`" for p in sorted(report["skipped_providers"]))
+                     + ".")
+    return "\n".join(lines)
+
+
 def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: str | None = None) -> None:
     """When config['providers_pr']['enabled'] is true, open a PR with the refreshed
     providers.json (+ config.example.json) against the configured base branch.
@@ -3239,6 +3420,17 @@ def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: st
     base = config.get("providers_pr", {}).get("base", "main")
     branch = config.get("providers_pr", {}).get("branch", "llmproxy-auto/providers")
 
+    # Fold in what this deployment learned, so the PR carries observations and
+    # not just whatever the scraper happened to see this run.
+    promotion: dict = {}
+    try:
+        providers_text, promotion = _promote_sidecar_to_providers(providers_text)
+        if promotion.get("total"):
+            logger.info("[providers-pr] promoted %d learned fact(s) from the sidecar",
+                        promotion["total"])
+    except Exception as exc:  # noqa: BLE001 — a PR without promotion beats no PR
+        logger.warning("[providers-pr] could not promote sidecar facts: %s", exc)
+
     files = {"llmproxy/providers.json": providers_text}
     if example_text is not None:
         files["config.example.json"] = example_text
@@ -3251,8 +3443,9 @@ def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: st
             title="chore: automated providers.json refresh (llmproxy)",
             body=(
                 "Automated `providers.json` refresh opened by a running llmproxy "
-                "deployment (`providers_pr.enabled`). Free-tier status is best-effort — "
-                "review the diff before merging."
+                "deployment (`providers_pr.enabled`). Free-tier status is best-effort, "
+                "so review the diff before merging."
+                + _promotion_body(promotion)
             ),
             # config.example.json is derived from providers.json; only a real
             # providers.json change should open/refresh a PR. This stops a
