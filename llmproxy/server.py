@@ -1999,11 +1999,21 @@ def _sync_local_provider_models_once() -> None:
         # sync is a machine process, and having it rewrite the file a person
         # hand-edits is what made config.json unusable as a record of intent —
         # it silently re-seeded the very keys a migration had just stripped.
-        with _routing_sidecar_txn() as _state:
-            _curated = _curated_facts(_state)
-            existing_kf: list = _curated.setdefault("believed_free", [])
-            existing_mr: dict = _curated.setdefault("model_reasoning", {})
-            existing_fl: dict = _curated.setdefault("free_limits", {})
+        #
+        # Read without the write lock: this is a read, and taking the
+        # transaction here would rewrite the file just to look at it.
+        _curated = (_load_routing_sidecar() or {}).get("curated") or {}
+        existing_kf: list = list(_curated.get("believed_free") or [])
+        existing_mr: dict = dict(_curated.get("model_reasoning") or {})
+        existing_fl: dict = dict(_curated.get("free_limits") or {})
+        # Deltas rather than a wholesale snapshot. The network calls below take
+        # seconds, and assigning the whole section afterwards would discard any
+        # edit made in between — including an admin correction to a model this
+        # sync knows nothing about.
+        drop_kf: set[str] = set()
+        drop_fl: set[str] = set()
+        drop_mr: set[str] = set()
+        add_mr: dict[str, str] = {}
         modified = False
 
         for provider_key, provider_cfg in local_providers.items():
@@ -2030,7 +2040,7 @@ def _sync_local_provider_models_once() -> None:
             # never belong here (one-time cleanup for historically polluted configs).
             stale_kf = [e for e in existing_kf if e.startswith(prefix)]
             for e in stale_kf:
-                existing_kf.remove(e)
+                drop_kf.add(e)
                 modified = True
                 logger.info(
                     "[local-sync] Removed %s from believed_free "
@@ -2041,7 +2051,7 @@ def _sync_local_provider_models_once() -> None:
             # free-tier scheduler.
             stale_fl = [k for k in existing_fl if isinstance(k, str) and k.startswith(prefix)]
             for k in stale_fl:
-                del existing_fl[k]
+                drop_fl.add(k)
                 modified = True
                 logger.info("[local-sync] Removed %s from free_limits.", k)
 
@@ -2049,7 +2059,7 @@ def _sync_local_provider_models_once() -> None:
             # contributed but no longer serves.
             stale_mr = [k for k in existing_mr if k.startswith(prefix) and k not in expected]
             for k in stale_mr:
-                del existing_mr[k]
+                drop_mr.add(k)
                 modified = True
                 logger.info("[local-sync] Pruned stale model_reasoning: %s", k)
 
@@ -2057,19 +2067,26 @@ def _sync_local_provider_models_once() -> None:
             for qualified in expected:
                 if qualified not in existing_mr:
                     model_id = qualified[len(prefix):]
-                    existing_mr[qualified] = _infer_local_reasoning_level(model_id)
+                    add_mr[qualified] = _infer_local_reasoning_level(model_id)
                     modified = True
-                    logger.info("[local-sync] Added model_reasoning: %s -> %s", qualified, existing_mr[qualified])
+                    logger.info("[local-sync] Added model_reasoning: %s -> %s",
+                                qualified, add_mr[qualified])
 
         if modified:
-            # Re-read under the lock and re-apply, rather than writing back the
-            # copy taken before the network calls: a refresh or a cost
-            # observation may have landed in between.
+            # Apply the deltas to whatever the file says NOW, so nothing written
+            # while the providers were being polled is lost.
             with _routing_sidecar_txn() as state:
                 curated = _curated_facts(state)
-                curated["believed_free"] = existing_kf
-                curated["model_reasoning"] = existing_mr
-                curated["free_limits"] = existing_fl
+                kf = curated.setdefault("believed_free", [])
+                curated["believed_free"] = [e for e in kf if e not in drop_kf]
+                fl = curated.setdefault("free_limits", {})
+                for k in drop_fl:
+                    fl.pop(k, None)
+                mr = curated.setdefault("model_reasoning", {})
+                for k in drop_mr:
+                    mr.pop(k, None)
+                for k, level in add_mr.items():
+                    mr.setdefault(k, level)   # never over-write a later edit
 
     import threading as _t
     _t.Thread(target=_run, daemon=True, name="local-model-sync").start()

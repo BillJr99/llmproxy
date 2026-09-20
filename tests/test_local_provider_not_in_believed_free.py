@@ -330,3 +330,44 @@ def test_local_provider_does_not_trigger_free_tier_prompt(monkeypatch):
     cloud_calls = [c for c in call_log if c[1]["name"] == "groq"]
     assert ("offer_free", {"name": "groq"}) in cloud_calls
     assert ("auto_register_local", {"name": "groq"}) not in cloud_calls
+
+
+def test_sync_does_not_clobber_an_edit_made_while_it_polls(
+        monkeypatch, config_with_polluted_local):
+    """A correction saved during the sync's network calls must survive it.
+
+    The sync reads the curated section, then spends seconds polling every local
+    provider. Writing its whole in-memory snapshot back afterwards would discard
+    anything saved in between, including an admin edit to a model this sync
+    knows nothing about. It applies deltas to the file as it stands instead.
+    """
+    server_mod = _load_server(monkeypatch, config_with_polluted_local)
+
+    with patch.object(server_mod, "requests") as req_mock:
+        def _respond(*_a, **_k):
+            # Land an unrelated edit while the provider is being polled, which
+            # is exactly the window the old snapshot-and-overwrite lost.
+            with server_mod._routing_sidecar_txn() as state:
+                curated = server_mod._curated_facts(state)
+                curated.setdefault("model_reasoning", {})["cloud/other-model"] = "deep"
+            return _fake_ollama_models_resp(["llama3.2-3b"])
+        req_mock.get.side_effect = _respond
+        server_mod._local_sync_done = False
+        import threading as _real_threading
+
+        class _ImmediateThread:
+            def __init__(self, target, daemon=False, name=""):
+                self._target = target
+
+            def start(self):
+                self._target()
+
+        with patch.object(_real_threading, "Thread", _ImmediateThread):
+            server_mod._sync_local_provider_models_once()
+
+    saved = _synced(config_with_polluted_local)
+    assert saved["model_reasoning"].get("cloud/other-model") == "deep", \
+        "the sync overwrote an edit made while it was polling"
+    # and it still did its own job
+    assert "ollama/llama3.2-3b" in saved["model_reasoning"]
+    assert not any(e.startswith("ollama/") for e in saved["believed_free"])
