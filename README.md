@@ -1083,7 +1083,8 @@ chat reply is not. Paste this into the `server` block:
   "free_tier_cache_affinity": true,
   "context_aware_routing": true,
   "cycle_deadline_seconds": 240,
-  "virtual_timeout_seconds": 120
+  "virtual_timeout_seconds": 120,
+  "stream_commit_on_content": true
 }
 ```
 
@@ -1093,15 +1094,39 @@ chat reply is not. Paste this into the `server` block:
 | [`context_aware_routing`](#context_aware_routing) | A long agentic session outgrows small windows; this sinks candidates known not to fit instead of walking the pool collecting `400 context_length_exceeded`. |
 | [`cycle_deadline_seconds`](#cycle_deadline_seconds) | Bounds the whole candidate walk. Without it a run of slow upstreams can keep a client waiting for minutes, which presents to the user as "the proxy is broken". |
 | [`virtual_timeout_seconds`](#virtual-timeout-agentic) | Raises the per-candidate idle bound above its hard-coded 60s, which the deadline above otherwise clamps the first-token wait down to. Reasoning models routinely think for longer than a minute before emitting anything. |
+| [`stream_commit_on_content`](#stream_commit_on_content) | Waits for a chunk carrying real output before committing, so the common free-tier failure "accept, emit a role preamble, then die" becomes a clean failover instead of a corrupt stream the client has already started reading. |
 
-[`stream_buffer_full`](#stream_buffer_full) is deliberately **absent** from that
-block. It gives genuine end-to-end failover on a streamed request, which suits
-an agent well, but it also means the client receives nothing until generation
-completes — and an agent SDK's own read timeout is measured against exactly that
-silence. Enable it only once the pool is healthy and your client's read timeout
-comfortably exceeds your longest generation.
+<a name="streaming-posture"></a>
+#### Choosing a streaming posture
 
-Four things worth knowing before you enable these:
+Once a stream is committed its bytes belong to the client and no failover is
+possible, so the only question is how long llmproxy waits before committing.
+Three settings answer it, and they layer:
+
+| Posture | Unprotected window | Added time-to-first-token | What the client sees |
+|---|---|---|---|
+| **Default** (neither flag) | everything after the first non-empty chunk — including a bare role preamble | none | tokens as they arrive |
+| **`stream_commit_on_content`** | everything after the first chunk carrying real output | up to `stream_precommit_max_seconds` (default `2.0`) | tokens as they arrive, after that window |
+| **`stream_buffer_full`** | none | the **entire generation** | nothing until the response is complete |
+
+`stream_buffer_full` is deliberately **absent** from the block above. It is the
+only setting that gives genuine end-to-end failover, which suits an agent well
+— but it also means the client receives nothing for the whole turn, and an agent
+SDK's own read timeout is measured against exactly that silence. A model that
+takes three minutes over a long tool call is, from the client's side,
+indistinguishable from a dead one. llmproxy will not time out, because it is
+receiving tokens and its own bounds measure silence; the client may abandon the
+request underneath it.
+
+So enable it only once the pool is healthy **and** your client's read timeout
+comfortably exceeds your longest generation. Until then
+`stream_commit_on_content` is the better trade for an agent: it closes the
+failure that actually happens on free tiers, costs a bounded couple of seconds
+rather than the whole generation, and never withholds the response. It is
+redundant once `stream_buffer_full` is on, since buffering re-validates the
+entire response with the same checks — so set one or the other, not both.
+
+Three things worth knowing before you enable these:
 
 - **Stream.** All of llmproxy's streaming bounds measure *silence*, never total
   duration, so a model producing tokens steadily is never cut off however long
@@ -1109,9 +1134,6 @@ Four things worth knowing before you enable these:
   nothing until the whole reply is ready, so the read timeout necessarily bounds
   total generation time and a slow-but-healthy model is indistinguishable from a
   dead one. Streaming is what makes that distinction possible at all.
-- **`stream_commit_on_content` is not needed alongside `stream_buffer_full`.**
-  Buffering runs after the pre-commit window and re-validates the entire
-  response with the same checks, so the narrower window is subsumed.
 - **If you do enable `stream_buffer_full`, your client's read timeout bounds
   time-to-first-byte, not `cycle_deadline_seconds`.** The deadline bounds
   time-to-*commit*, and buffering moves the commit to the end of generation.
