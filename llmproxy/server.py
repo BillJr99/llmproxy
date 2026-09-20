@@ -68,6 +68,7 @@ import time
 import traceback
 import urllib.parse
 import uuid
+from collections import deque
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -429,6 +430,15 @@ _PROVIDER_CIRCUIT_MODEL = "__provider__"  # sentinel model for a provider-wide c
 _oversize_registry: dict[str, int] = {}  # provider/model -> smallest 413'd body, bytes
 _oversize_lock = threading.Lock()
 
+# provider/model -> capabilities the upstream has REFUSED to serve, learned from
+# rejections rather than from any listing. The proactive path (a provider's own
+# supported_parameters, the catalog, the learned layer) is only as good as what
+# providers publish, and a gateway that advertises tool support it cannot route
+# to is exactly the case no amount of metadata-reading catches. See
+# _record_capability_gap.
+_capability_gap_registry: dict[str, set[str]] = {}
+_capability_gap_lock = threading.Lock()
+
 
 def _oversize_key(provider_name: str, upstream_model: str) -> str:
     """Registry key for a routing target's body limit.
@@ -489,6 +499,89 @@ def _is_oversize_for(provider_name: str, upstream_model: str, size_bytes: int) -
     with _oversize_lock:
         limit = _oversize_registry.get(_oversize_key(provider_name, upstream_model))
     return limit is not None and size_bytes >= limit
+
+
+# OpenRouter names the filter that eliminated every endpoint; other gateways
+# only say it in prose. Both are matched, and narrowly: a false positive here
+# sidelines a working model for a capability it actually has.
+_CAPABILITY_REJECTION_STEPS: dict[str, str] = {
+    "filter by tool compatibility": "tools",
+}
+_CAPABILITY_REJECTION_PHRASES: tuple[tuple[str, str], ...] = (
+    ("no endpoints found that support tool use", "tools"),
+    ("no endpoints found that support tool calling", "tools"),
+    ("no endpoints found that support image input", "vision"),
+    ("no endpoints found that support structured outputs", "json"),
+)
+
+
+def _detect_capability_rejection(status: int | None, body: bytes | None) -> str | None:
+    """The capability an upstream rejection proves this target cannot serve.
+
+    Returns a capability name, or None when the body is not capability-shaped.
+
+    This is the reactive counterpart to the spec gate: a provider that lists a
+    model it cannot actually route a tool call to produces a non-transient 404
+    that no listing predicted. Keeping the matcher narrow is the whole safety
+    story, so it fires only on a recognised routing-funnel step or one of a few
+    exact phrases, never on the mere presence of the word "tool".
+    """
+    if not body:
+        return None
+    if status is not None and status not in (400, 404, 422):
+        return None
+    try:
+        text = body.decode("utf-8", "replace").lower()
+    except Exception as e:  # noqa: BLE001 — a diagnostic must never fail a request
+        print(f"[server:_detect_capability_rejection] {e}")
+        traceback.print_exc()
+        return None
+    for step, cap in _CAPABILITY_REJECTION_STEPS.items():
+        if step in text:
+            return cap
+    for phrase, cap in _CAPABILITY_REJECTION_PHRASES:
+        if phrase in text:
+            return cap
+    return None
+
+
+def _record_capability_gap(provider_name: str, upstream_model: str, cap: str) -> None:
+    """Remember that this exact target refused to serve *cap*.
+
+    Per routing target, never per normalized model: the whole reason this exists
+    is that one deployment of some weights cannot do what another can. Logged at
+    warning because silently deciding a model is incapable would be invisible
+    exactly when it is wrong.
+    """
+    if not cap:
+        return
+    key = _oversize_key(provider_name, upstream_model)
+    with _capability_gap_lock:
+        known = _capability_gap_registry.setdefault(key, set())
+        if cap in known:
+            return
+        known.add(cap)
+    logger.warning(
+        "[capability] %s/%s rejected a request for lack of '%s'; it will not be "
+        "selected for requests needing that capability",
+        provider_name, upstream_model, cap,
+    )
+
+
+def _learned_capability_gaps(provider_name: str, upstream_model: str) -> set[str]:
+    """Capabilities this target has been observed refusing."""
+    with _capability_gap_lock:
+        return set(_capability_gap_registry.get(_oversize_key(provider_name, upstream_model), ()))
+
+
+def _note_capability_rejection(
+    provider_name: str, upstream_model: str, status: int | None, body: bytes | None
+) -> str | None:
+    """Record a capability gap when *body* is a capability-shaped rejection."""
+    cap = _detect_capability_rejection(status, body)
+    if cap:
+        _record_capability_gap(provider_name, upstream_model, cap)
+    return cap
 
 
 def _note_accepted_size(provider_name: str, upstream_model: str, size_bytes: int) -> None:
@@ -1112,6 +1205,253 @@ def _response_cache_put(
 
 
 # ---------------------------------------------------------------------------
+# Recent upstream failures
+# ---------------------------------------------------------------------------
+#
+# Health scores say a candidate is unwell; they cannot say WHY, because
+# ``record_outcome`` stores a bare boolean. When a pool is exhausted and the
+# client gets a 502, the operator's next question is always which models failed
+# and with what — and the answer should not require turning on the request log
+# and grepping it, not least because the log is off by default.
+#
+# So failures are recorded structurally, in a bounded in-process ring: newest
+# first, capped, and pruned by age. Per worker, exactly like /v1/usage, which is
+# one more reason server.workers defaults to 1.
+
+_FAILURE_LOG_MAX: int = 250
+_FAILURE_LOG_TTL_S: float = 6 * 60 * 60
+_FAILURE_DETAIL_MAX_CHARS: int = 300
+
+_failure_log: deque = deque(maxlen=_FAILURE_LOG_MAX)
+_failure_log_lock = threading.Lock()
+
+# Credential shapes that must never reach the failure report. Request headers
+# are never recorded at all (see the audit-record note below, and _log_request),
+# but an upstream is free to quote a key back inside an error MESSAGE, and that
+# message is the one field here that comes from outside.
+_SECRET_PATTERNS: tuple[re.Pattern, ...] = (
+    # A labelled credential, consuming the value that follows the label so
+    # "Authorization: Bearer abc123" does not leave "abc123" behind.
+    re.compile(
+        r"(?i)\b(?:authorization|api[-_ ]?key|access[-_ ]?token|token|bearer)\b"
+        r"\s*[:=]?\s*(?:bearer\s+)?[A-Za-z0-9._\-]{6,}"
+    ),
+    # Vendor-prefixed keys, which are recognisable on their own.
+    re.compile(r"\b(?:sk|pk|rk|xoxb|ghp|gho|glpat)-[A-Za-z0-9_\-]{8,}"),
+    # A long unbroken opaque run. Deliberately excludes hyphens and requires 40
+    # characters, so hyphenated model ids and ordinary prose survive intact
+    # while base64/hex key material does not.
+    re.compile(r"\b[A-Za-z0-9_]{40,}\b"),
+)
+
+
+def _scrub_secrets(text: str) -> str:
+    """Redact anything credential-shaped from a string bound for the report."""
+    if not text:
+        return ""
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("[redacted]", text)
+    return text
+
+
+def _failure_detail(body: bytes | str | None) -> str:
+    """A short, scrubbed, human-readable excerpt of an upstream error body.
+
+    Prefers the ``error.message`` an OpenAI-compatible error carries, since that
+    is the sentence an operator wants; falls back to the raw body. Always
+    scrubbed and always truncated — this is a diagnostic, not a transcript.
+    """
+    if not body:
+        return ""
+    if isinstance(body, bytes):
+        body = body.decode("utf-8", "replace")
+    text = body.strip()
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            err = parsed.get("error")
+            if isinstance(err, dict) and isinstance(err.get("message"), str):
+                text = err["message"]
+            elif isinstance(err, str):
+                text = err
+    except Exception:  # noqa: BLE001 — a non-JSON body is fine, use it as-is
+        pass
+    text = _scrub_secrets(" ".join(text.split()))
+    if len(text) > _FAILURE_DETAIL_MAX_CHARS:
+        text = text[:_FAILURE_DETAIL_MAX_CHARS].rstrip() + "…"
+    return text
+
+
+def _record_failure(
+    provider_name: str,
+    upstream_model: str,
+    *,
+    status: int | None = None,
+    kind: str = "upstream",
+    detail: bytes | str | None = None,
+    virtual_model: str | None = None,
+) -> None:
+    """Append one structured failure record to the ring.
+
+    *kind* classifies the failure for the report: ``timeout``, ``quota``,
+    ``capability``, ``oversize``, ``stream`` or ``upstream``. Never raises: a
+    diagnostic that can fail a request is worse than no diagnostic.
+    """
+    try:
+        record = {
+            "at": datetime.datetime.now(datetime.UTC).isoformat(),
+            "ts": time.time(),
+            "provider": provider_name,
+            "model": upstream_model,
+            "target": f"{provider_name}/{upstream_model}",
+            "virtual_model": virtual_model,
+            "status": status,
+            "kind": kind,
+            "detail": _failure_detail(detail),
+        }
+        with _failure_log_lock:
+            _failure_log.append(record)
+    except Exception as e:  # noqa: BLE001 — never fail a request over a diagnostic
+        print(f"[server:_record_failure] {e}")
+        traceback.print_exc()
+
+
+# Statuses that describe THE REQUEST rather than the upstream, and so remain
+# true no matter which candidate served it. Passed through on exhaustion only
+# when every candidate agreed, because one gateway rejecting a parameter another
+# accepts is a routing fact, not a verdict on the request.
+_CLIENT_FAULT_STATUSES: frozenset[int] = frozenset({400, 413, 422})
+
+
+def _exhausted_pool_status(attempted: list[tuple[str, str, int | None]]) -> int:
+    """The status llmproxy should return once every candidate has failed.
+
+    llmproxy is a gateway, so the status it returns describes ITS boundary. The
+    client asked for a virtual id that exists; replaying the last candidate's
+    status attributes the upstream's problem to the caller. A relayed 404 is the
+    damaging case: to an OpenAI-compatible client it means "no such model",
+    which is terminal, so a client with a perfectly good retry budget abandons
+    the request instead of retrying a transient pool outage.
+
+    The rule is deliberately narrow, so only the misleading case changes:
+
+    * a UNANIMOUS status that is already honest is relayed untouched — a
+      client-fault 400/413/422 (if every candidate rejects the request
+      identically, the request really is the problem), a 429 (accurate, and it
+      clears by itself), or any 5xx (already says "server side", and relaying it
+      preserves the upstream diagnostic);
+    * anything else -> 502. That is every 4xx which attributes the failure to
+      the caller when it belongs to the upstream — 404, 401, 403 and whatever
+      a gateway invents next — plus any MIXTURE, where no single upstream
+      status can speak for the pool.
+
+    503 is deliberately not produced here; it keeps its existing meaning of
+    "there was nothing to try", so the status line alone distinguishes an empty
+    pool from an exhausted one.
+    """
+    statuses = {st for _p, _m, st in attempted if st is not None}
+    if len(statuses) == 1:
+        only = next(iter(statuses))
+        if only in _CLIENT_FAULT_STATUSES or only == 429 or only >= 500:
+            return only
+    return 502
+
+
+def _exhausted_pool_body(
+    label: str, attempted: list[tuple[str, str, int | None]], detail: str
+) -> dict:
+    """The error body for an exhausted pool, naming every candidate tried.
+
+    The per-candidate roll-call is the point: "all candidates failed" with no
+    list is precisely the message that sends an operator to the logs. Details
+    are scrubbed on the way in (see ``_failure_detail``).
+    """
+    return {
+        "error": {
+            "message": (
+                f"All {len(attempted)} '{label}' candidate(s) failed. "
+                f"Last upstream error: {detail}" if detail
+                else f"All {len(attempted)} '{label}' candidate(s) failed."
+            ),
+            "type": "upstream_error",
+            "code": "all_candidates_failed",
+            "llmproxy_candidates": [
+                {"target": f"{pn}/{um}", "status": st} for pn, um, st in attempted
+            ],
+        }
+    }
+
+
+def _classify_failure(
+    status: int | None,
+    body: bytes | str | None,
+    *,
+    capability: str | None = None,
+    timed_out: bool = False,
+) -> str:
+    """Bucket one failure for the report, most specific cause first.
+
+    The ordering matters: a capability rejection and an oversize rejection are
+    both 4xx, and both would otherwise read as a generic "upstream" failure,
+    which is exactly the ambiguity this report exists to remove.
+    """
+    if timed_out:
+        return "timeout"
+    if capability:
+        return "capability"
+    if status == 413:
+        return "oversize"
+    if _is_quota_error(status, body):
+        return "quota"
+    if status is not None and status >= 500:
+        return "server"
+    return "upstream"
+
+
+def _failure_records(since_ts: float | None = None) -> list[dict]:
+    """Recent failures, newest first, pruned of anything past the TTL."""
+    cutoff = time.time() - _FAILURE_LOG_TTL_S
+    with _failure_log_lock:
+        rows = [r for r in _failure_log if r.get("ts", 0) >= cutoff]
+        if len(rows) != len(_failure_log):
+            _failure_log.clear()
+            _failure_log.extend(rows)
+    if since_ts is not None:
+        rows = [r for r in rows if r.get("ts", 0) >= since_ts]
+    return list(reversed(rows))
+
+
+_SINCE_UNITS: dict[str, int] = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def _parse_since(raw: str | None) -> float | None:
+    """A ``since`` query parameter as an absolute unix timestamp, or None.
+
+    Accepts a bare unix timestamp or a relative age (``30s``, ``15m``, ``2h``,
+    ``1d``). Anything unparseable means "no filter" rather than an error: this
+    is a diagnostic endpoint and a typo should not turn into a 400.
+    """
+    if not raw:
+        return None
+    raw = raw.strip().lower()
+    try:
+        unit = _SINCE_UNITS.get(raw[-1:])
+        if unit is not None and raw[:-1]:
+            return time.time() - float(raw[:-1]) * unit
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    # A small number is an age in seconds; a large one is an absolute epoch.
+    return value if value > 10_000_000 else time.time() - value
+
+
+def _reset_failures() -> None:
+    """Clear the failure ring."""
+    with _failure_log_lock:
+        _failure_log.clear()
+
+
+# ---------------------------------------------------------------------------
 # Per-request audit records
 # ---------------------------------------------------------------------------
 #
@@ -1426,6 +1766,18 @@ def _error(message: str, status: int = 400, code: str = "invalid_request_error")
             "code": None,
         }
     }), status)
+
+
+def _error_body_response(body: dict, status: int) -> Response:
+    """Return a pre-built error object as JSON, for errors richer than _error().
+
+    ``_error`` builds the body from a single message; an exhausted pool needs to
+    carry a per-candidate roll-call alongside it, which is the whole reason that
+    response is worth reading.
+    """
+    # Built without jsonify: the cycling loops can reach this outside a Flask
+    # application context, and a diagnostic must not fail for want of one.
+    return Response(json.dumps(body), status=status, content_type="application/json")
 
 
 def _upstream_error(provider_name: str, e: Exception, status: int = 502) -> Response:
@@ -2415,6 +2767,62 @@ def _flagship_refresh_due(tier_cfg: dict, config_path: str | None) -> bool:
     return due
 
 
+def _flagship_specs_for(
+    provider_name: str,
+    upstream_id: str,
+    profile: dict,
+    cap_snapshot: dict[str, set[str]],
+    ctx_snapshot: dict[str, int],
+) -> tuple[int | None, bool | None]:
+    """The ``(context_length, supports_tools)`` to gate one routing target on.
+
+    Three sources, most specific first, because a spec belongs to the endpoint a
+    request actually hits rather than to the weights in the abstract:
+
+    1. **The provider's own listing for this exact qualified id.** A gateway is
+       authoritative about its own routing target. A non-empty capability set
+       that omits ``tools`` means False, not unknown: ``_rebuild_route_cache``
+       only files a set when it is non-empty, so "no entry" genuinely means the
+       provider said nothing and correctly falls through.
+    2. **The catalog's entry for this exact id** (``profile["by_id"]``). For a
+       gateway whose ids are the catalog's own, this is what the catalog said
+       about *this* variant rather than about its siblings.
+    3. **The merged profile**, joined on the normalized key. This is the
+       documented cross-provider carry-across: a provider that publishes no
+       capability data of its own is still gated on the same weights served
+       elsewhere. It stays ``None`` on a miss, so a model nothing can verify
+       still fails the spec gate.
+
+    The first two exist because the merged view cannot distinguish a billing
+    variant from its parent: ``z-ai/glm-5.2:free`` normalizes onto
+    ``z-ai/glm-5.2`` and would otherwise inherit tool support it does not have
+    and a 1M context window that is really 32k. Deliberately NOT
+    ``_lookup_capabilities`` or ``_lookup_model_fact``: both reach the
+    normalized form, the first by unioning it and the second by falling back to
+    it, which is exactly the inheritance this is here to prevent.
+    """
+    qualified = f"{provider_name}/{upstream_id}".lower()
+
+    listed_caps = cap_snapshot.get(qualified)
+    supports_tools: bool | None = None
+    if listed_caps:
+        supports_tools = "tools" in listed_caps
+
+    context_length = ctx_snapshot.get(qualified)
+
+    by_id = (profile.get("by_id") or {}).get(upstream_id.lower()) or {}
+    if supports_tools is None and "supports_tools" in by_id:
+        supports_tools = by_id["supports_tools"]
+    if context_length is None:
+        context_length = by_id.get("context_length")
+
+    if supports_tools is None:
+        supports_tools = profile.get("supports_tools")
+    if context_length is None:
+        context_length = profile.get("context_length")
+    return context_length, supports_tools
+
+
 def _recompute_flagship_members(config: dict, config_path: str | None) -> dict | None:
     """Recompute flagship membership against everything this deployment sees.
 
@@ -2423,9 +2831,14 @@ def _recompute_flagship_members(config: dict, config_path: str | None) -> dict |
     one gateway's catalog. Free status is evaluated per candidate, so the same
     weights can be free on one provider and paid on another.
 
-    Capability specs come from the provider's own listing where the sidecar has
-    them and from the benchmark profile otherwise, joined on the normalised
-    model key. That join is heuristic, which is why a pin exists to override it.
+    Capability specs come from the provider's own listing for this exact
+    routing target where it publishes one, then from the catalog's entry for
+    this exact id, and only then from the benchmark profile joined on the
+    normalised model key — see ``_flagship_specs_for``. That last join is
+    heuristic, which is why a pin exists to override it, and why the two
+    exact-id sources take precedence: a ``:free`` variant must not be admitted
+    on the tool support and context window of the paid sibling it normalises
+    onto.
 
     Returns the state written to flagship_models.json, or None if the refresh
     could not run.
@@ -2443,19 +2856,25 @@ def _recompute_flagship_members(config: dict, config_path: str | None) -> dict |
         logger.warning("[flagship] no benchmark source returned data; keeping previous membership")
         return None
 
+    cap_snapshot = _get_model_capability_snapshot()
+    ctx_snapshot = _get_model_context_snapshot()
+
     candidates: list[Candidate] = []
     for provider_name, upstream_id in _get_distinct_routes():
         provider_cfg = get_provider(config, provider_name)
         if not provider_cfg or not _provider_exposes_to_virtual_models(provider_cfg):
             continue
         profile = profiles.get(normalize_model_id(upstream_id), {})
+        context_length, supports_tools = _flagship_specs_for(
+            provider_name, upstream_id, profile, cap_snapshot, ctx_snapshot,
+        )
         candidates.append(Candidate(
             provider=provider_name,
             upstream_id=upstream_id,
             is_free=(not _is_local_url(provider_base_url(provider_cfg))
                      and _is_model_free(provider_name, upstream_id, config)),
-            context_length=profile.get("context_length"),
-            supports_tools=profile.get("supports_tools"),
+            context_length=context_length,
+            supports_tools=supports_tools,
             scores=dict(profile.get("scores") or {}),
         ))
 
@@ -4632,6 +5051,22 @@ def _model_fact_keys(provider_name: str, upstream_id: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(f for f in forms if f))
 
 
+def _is_variant_id(upstream_id: str) -> bool:
+    """Whether this id names a billing/routing variant of another model.
+
+    Thin wrapper so a lookup can never fail a request on an import or a regex:
+    an unknown answer here simply means "treat it as an ordinary id", which is
+    the pre-existing behaviour.
+    """
+    try:
+        from .flagship import has_variant_suffix
+        return has_variant_suffix(upstream_id)
+    except Exception as e:  # noqa: BLE001 — a lookup must never fail a request
+        print(f"[server:_is_variant_id] {e}")
+        traceback.print_exc()
+        return False
+
+
 def _lookup_model_fact(mapping: dict, provider_name: str, upstream_id: str):
     """Find a per-model fact by qualified id, bare id, then normalized model.
 
@@ -4669,9 +5104,27 @@ def _lookup_capabilities(
     publishing a partial ``supported_parameters`` shadowed the joined entry, so
     ``_capability_state`` returned KNOWN_INCAPABLE — ranking the model BELOW an
     untagged one for a capability it demonstrably has.
+
+    ONE EXCEPTION, for ids naming a billing or routing variant. When the id
+    carries a variant suffix (``:free``, ``:batch``, ...) and this map holds an
+    exact entry for it, that entry is returned alone rather than unioned with
+    the normalized key. A provider listing both ``z-ai/glm-5.2`` and
+    ``z-ai/glm-5.2:free`` is discriminating between two routing targets, not
+    being terse about one, so the union would hand the free variant its paid
+    sibling's tool support — which is how a model that cannot call tools
+    reached the flagship tier and then 404'd at request time. Every
+    non-variant id keeps the union, so the regression described above stays
+    prevented: terseness still cannot retract what another provider asserted.
     """
     if not cap_map:
         return set()
+    if _is_variant_id(upstream_id):
+        # Name the exact forms rather than slicing _model_fact_keys, whose
+        # ordering and de-duplication are not this function's to depend on.
+        for form in (f"{provider_name}/{upstream_id}".lower(), upstream_id.lower()):
+            hit = cap_map.get(form)
+            if hit:
+                return set(hit)
     out: set[str] = set()
     for form in _model_fact_keys(provider_name, upstream_id):
         hit = cap_map.get(form)
@@ -4681,7 +5134,14 @@ def _lookup_capabilities(
 
 
 def _model_has_capability(provider_name: str, upstream_id: str, cap: str, cap_map: dict[str, set[str]]) -> bool:
-    """Whether this model is known to support *cap*, across all three id forms."""
+    """Whether this model is known to support *cap*, across all three id forms.
+
+    A capability this target has been observed refusing is never reported, so a
+    model that 404'd on a tool call drops out of ``llmproxy/tools`` as well as
+    out of the ordering.
+    """
+    if cap in _learned_capability_gaps(provider_name, upstream_id):
+        return False
     return cap in _lookup_capabilities(cap_map, provider_name, upstream_id)
 
 
@@ -4716,10 +5176,75 @@ def _capability_state(
     *ordering*, where an untagged model deserves to sit between a confirmed
     match and a confirmed mismatch rather than tied with the mismatch.
     """
+    # An observed refusal outranks every listing. A provider saying it supports
+    # tools and then refusing to route one is not ambiguous evidence: the
+    # request already failed against this exact target.
+    if cap in _learned_capability_gaps(provider_name, upstream_id):
+        return _CAP_KNOWN_INCAPABLE
     caps = _lookup_capabilities(cap_map, provider_name, upstream_id)
     if not caps:
         return _CAP_UNKNOWN
     return _CAP_KNOWN_CAPABLE if cap in caps else _CAP_KNOWN_INCAPABLE
+
+
+def _drop_known_incapable(
+    candidates: list[tuple[str, dict, str]],
+    needed: set[str],
+    cap_map: dict[str, set[str]],
+) -> tuple[list[tuple[str, dict, str]], int]:
+    """Remove candidates KNOWN to lack a needed capability. Never empties the pool.
+
+    Ordering alone cannot express a hard requirement: ``_order_by_capability``
+    only sorts, so a model that cannot call tools stays selectable and any later
+    pass that re-sorts — affinity, favourites — can put it back in front. A
+    model that positively cannot do the job should not be *selected* at all, in
+    any virtual pool, free or otherwise.
+
+    What makes that safe is the three-valued state. Only ``KNOWN_INCAPABLE`` is
+    dropped: there is evidence the model lacks the capability. ``UNKNOWN`` is
+    kept, because capability metadata is sparse and untagged models include some
+    of the strongest tool-callers available — dropping those is what would turn
+    a thin pool into a hard 503.
+
+    Returns ``(survivors, dropped_count)``. When EVERY candidate is known
+    incapable the pool is returned unchanged: a request that is attempted and
+    fails over is strictly better than a 503 with no upstream call made, and a
+    capability map can be wrong. A no-op when *needed* is empty.
+    """
+    if not needed or not candidates:
+        return candidates, 0
+    survivors = [
+        c for c in candidates
+        if not any(
+            _capability_state(c[0], c[2], cap, cap_map) == _CAP_KNOWN_INCAPABLE
+            for cap in needed
+        )
+    ]
+    if not survivors:
+        return candidates, 0
+    return survivors, len(candidates) - len(survivors)
+
+
+def _apply_capability_gate(
+    candidates: list[tuple[str, dict, str]],
+    needed: set[str],
+    cap_map: dict[str, set[str]],
+    label: str,
+) -> tuple[list[tuple[str, dict, str]], int]:
+    """Drop known-incapable candidates, then order the survivors capable-first.
+
+    The two passes belong together at every call site, so they are wrapped here
+    rather than repeated. Logs the drop: a pool that silently shrank is hard to
+    debug, and this is the pass most likely to be blamed for a 503 it did not
+    cause.
+    """
+    kept, dropped = _drop_known_incapable(candidates, needed, cap_map)
+    if dropped:
+        logger.info(
+            "  [%s] capability gate dropped %d candidate(s) known to lack %s",
+            label, dropped, "+".join(sorted(needed)),
+        )
+    return _order_by_capability(kept, needed, cap_map), dropped
 
 
 def _order_by_capability(
@@ -6059,6 +6584,7 @@ def _proxy_cycling_non_streaming(
     deadline = _cycle_deadline(config)
     total = len(candidates)
     last: Response | None = None
+    _attempted: list[tuple[str, str, int | None]] = []
     for idx, (provider_name, provider_cfg, upstream_model) in enumerate(candidates):
         # The first candidate always gets its attempt: an already-tight budget
         # must never produce a 503 with zero upstream calls made.
@@ -6183,11 +6709,44 @@ def _proxy_cycling_non_streaming(
         if _is_upstream_failure(status=resp.status_code):
             _record_outcome(provider_name, upstream_model, False,
                             latency_ms=_elapsed_ms, account_id=account_id)
+        _body = resp.get_data()
+        _cap = _note_capability_rejection(
+            provider_name, upstream_model, resp.status_code, _body
+        )
+        _record_failure(
+            provider_name, upstream_model,
+            status=resp.status_code,
+            kind=_classify_failure(resp.status_code, _body, capability=_cap,
+                                   timed_out=_is_timeout_response(resp)),
+            detail=_body,
+            virtual_model=virtual_model,
+        )
         logger.warning(
             "  [%s] %s/%s returned %d, trying next", label, provider_name, upstream_model, resp.status_code
         )
+        _attempted.append((provider_name, upstream_model, resp.status_code))
         last = resp
-    return last or _error(f"No '{label}' models available.", status=503)
+
+    if last is None:
+        return _error(f"No '{label}' models available.", status=503)
+    if last.status_code < 400:
+        # A 200 that failed a content check (a forced tool call that never came,
+        # an unusable body). There is no upstream error status to sanitize, and
+        # handing the client the real body is deliberate — see the docstring.
+        return last
+    status = _exhausted_pool_status(_attempted)
+    if status == last.status_code:
+        # Unanimous and meaningful to the client — relay it untouched, headers
+        # and all, so a Retry-After on a 429 survives.
+        return last
+    logger.warning(
+        "  [%s] every candidate failed (%s); returning %d rather than relaying %d",
+        label, ", ".join(f"{pn}/{um}={st}" for pn, um, st in _attempted),
+        status, last.status_code,
+    )
+    return _error_body_response(
+        _exhausted_pool_body(label, _attempted, _failure_detail(last.get_data())), status
+    )
 
 
 def _proxy_cycling_streaming(
@@ -6229,6 +6788,7 @@ def _proxy_cycling_streaming(
     inbound = inbound or get_inbound("openai")
     total = len(candidates)
     last_error: tuple[bytes, int, str] | None = None
+    _attempted: list[tuple[str, str, int | None]] = []
 
     for idx, (provider_name, provider_cfg, upstream_model) in enumerate(candidates):
         # As on the non-streaming path, candidate 0 always gets its attempt.
@@ -6337,6 +6897,18 @@ def _proxy_cycling_streaming(
             )
             if _is_upstream_failure(status=resp.status_code):
                 _record_outcome(provider_name, upstream_model, False, account_id=account_id)
+            _body = resp.content
+            _cap = _note_capability_rejection(
+                provider_name, upstream_model, resp.status_code, _body
+            )
+            _record_failure(
+                provider_name, upstream_model,
+                status=resp.status_code,
+                kind=_classify_failure(resp.status_code, _body, capability=_cap),
+                detail=_body,
+                virtual_model=virtual_model,
+            )
+            _attempted.append((provider_name, upstream_model, resp.status_code))
             resp.close()
             logger.warning(
                 "  [%s] %s/%s -> %d, trying next", label, provider_name, upstream_model, resp.status_code
@@ -6539,6 +7111,22 @@ def _proxy_cycling_streaming(
 
     if last_error:
         body, status, ct = last_error
+        # Same sanitising as the non-streaming path: a relayed 404 tells an
+        # OpenAI-compatible client the model does not exist, which is terminal,
+        # so a pool outage silently disables the client's own retry. See
+        # _exhausted_pool_status. Synthesized SSE errors (status 502, already
+        # ours) carry no upstream status and pass straight through.
+        if _attempted:
+            sanitized = _exhausted_pool_status(_attempted)
+            if sanitized != status:
+                logger.warning(
+                    "  [%s] every candidate failed (%s); returning %d rather than relaying %d",
+                    label, ", ".join(f"{pn}/{um}={st}" for pn, um, st in _attempted),
+                    sanitized, status,
+                )
+                return _error_body_response(
+                    _exhausted_pool_body(label, _attempted, _failure_detail(body)), sanitized
+                )
         return Response(body, status=status, content_type=ct)
     return _error(f"All '{label}' model candidates failed or are unavailable.", status=503)
 
@@ -6649,6 +7237,114 @@ def _rendezvous_rank(key: str, identity: str) -> int:
     """
     digest = hashlib.sha256(f"{key}\x00{identity}".encode("utf-8", "ignore")).hexdigest()
     return int(digest[:32], 16)
+
+
+# affinity key -> (target, last_touched). Model-level stickiness for free
+# pools, opt-in via server.free_tier_cache_affinity.
+#
+# Rendezvous hashing was the previous mechanism and is the wrong shape for a
+# RANKED pool. It is stateless: it remembers no choice, it derives one, and the
+# winner is uncorrelated with rank. On an unranked free pool that is invisible,
+# because no candidate was better than another to begin with. On
+# flagship__free, whose whole premise is strict best-first, it would hand most
+# conversations a hash-chosen member from their very first turn.
+#
+# Sticky-until-failure is what the flag is understood to mean and works on both
+# kinds of pool: the first turn gets whatever the ordering says is best, the
+# pin records what actually WORKED, and later turns keep it until it stops
+# working. Best-first and stickiness stop being in tension, because the pin is
+# set by the ordering rather than competing with it.
+_AFFINITY_PIN_MAX: int = 2048
+_AFFINITY_PIN_TTL_S: float = 6 * 60 * 60
+_affinity_pins: dict[str, tuple[tuple[str, str], float]] = {}
+_affinity_pin_lock = threading.Lock()
+
+
+def _prune_affinity_pins_locked() -> None:
+    """Drop expired pins, then the oldest, until the map is back inside its cap.
+
+    Caller holds ``_affinity_pin_lock``. The cap matters more than the TTL: an
+    unbounded map keyed by conversation is a slow leak on a long-lived process.
+    """
+    cutoff = time.monotonic() - _AFFINITY_PIN_TTL_S
+    for key in [k for k, (_t, seen) in _affinity_pins.items() if seen < cutoff]:
+        _affinity_pins.pop(key, None)
+    if len(_affinity_pins) <= _AFFINITY_PIN_MAX:
+        return
+    for key, _ in sorted(_affinity_pins.items(), key=lambda kv: kv[1][1])[
+        : len(_affinity_pins) - _AFFINITY_PIN_MAX
+    ]:
+        _affinity_pins.pop(key, None)
+
+
+def _record_affinity_success(affinity_key: str | None, provider_name: str, upstream_model: str) -> None:
+    """Pin this conversation to the target that just served it successfully.
+
+    Pinned on SUCCESS rather than on selection, so the pin always names a model
+    that demonstrably worked for this conversation rather than one that was
+    merely tried first.
+    """
+    if not affinity_key:
+        return
+    with _affinity_pin_lock:
+        _affinity_pins[affinity_key] = ((provider_name, upstream_model), time.monotonic())
+        _prune_affinity_pins_locked()
+
+
+def _affinity_pinned_target(affinity_key: str | None) -> tuple[str, str] | None:
+    """The target this conversation is pinned to, if the pin is still live."""
+    if not affinity_key:
+        return None
+    with _affinity_pin_lock:
+        entry = _affinity_pins.get(affinity_key)
+        if not entry:
+            return None
+        target, seen = entry
+        if seen < time.monotonic() - _AFFINITY_PIN_TTL_S:
+            _affinity_pins.pop(affinity_key, None)
+            return None
+        return target
+
+
+def _reset_affinity_pins() -> None:
+    """Clear every pin. Used by tests and by an explicit usage reset."""
+    with _affinity_pin_lock:
+        _affinity_pins.clear()
+
+
+def _order_by_sticky_affinity(
+    candidates: list[tuple[str, dict, str]],
+    affinity_key: str | None,
+) -> list[tuple[str, dict, str]]:
+    """Move this conversation's pinned target to the front, if it is still here.
+
+    Never drops and never reorders anything else, so failover is unaffected and
+    an unpinned conversation keeps exactly the order the earlier passes built.
+    A pin for a target that is no longer a candidate is simply ignored, and the
+    next success re-pins.
+
+    A pinned target that is currently COOLING is deliberately not promoted. The
+    orderings demote a candidate cooling after a 402/429 to the back, and
+    hoisting it straight back to the front would spend the conversation's next
+    turn on the one model already known to be rate limited — turning stickiness
+    into a guaranteed wasted attempt every turn until the window cleared.
+
+    No explicit unpin is needed on failure. The pin is written on SUCCESS, so a
+    turn whose pinned model fails and which is then served by another candidate
+    re-pins to that candidate as part of the same request: the pin always names
+    the last model that actually worked, and corrects itself in one turn.
+    """
+    target = _affinity_pinned_target(affinity_key)
+    if not target or len(candidates) < 2:
+        return candidates
+    if _is_candidate_saturated(target[0], target[1]):
+        return candidates
+    for idx, (pn, _cfg, um) in enumerate(candidates):
+        if (pn, um) == target:
+            if idx == 0:
+                return candidates
+            return [candidates[idx]] + candidates[:idx] + candidates[idx + 1:]
+    return candidates
 
 
 def _order_by_cache_affinity(
@@ -8017,7 +8713,7 @@ def _loadbalanced_ordered_candidates(
             # paid bucket — the free tier wants spreading, not stickiness.
             bucket = _order_by_cache_affinity(bucket, _affinity_key(payload))
         if needed:
-            bucket = _order_by_capability(bucket, needed, cap_map)
+            bucket, _ = _apply_capability_gate(bucket, needed, cap_map, "loadbalanced")
         ordered.extend(bucket)
     return ordered
 
@@ -8478,12 +9174,25 @@ def _fusion_pool(model_full: str, config: dict, fcfg: dict, payload: dict, free:
     if needed:
         cap_map = _model_capabilities(config)
         if fcfg.get("forced_capability") == "restrict":
-            pool = [
+            # "restrict" is the stricter opt-in: it additionally excludes models
+            # that are merely UNPROVEN, not just ones disproven. The non-empty
+            # floor matters more here than anywhere, because sparse metadata
+            # could otherwise leave a forced-tools request with no panel at all.
+            strict = [
                 c for c in pool
                 if all(_model_has_capability(c[0], c[2], cap, cap_map) for cap in needed)
             ]
-        else:  # "bypass": keep all, but order capable-first
-            pool = _order_by_capability(pool, needed, cap_map)
+            if strict:
+                pool = strict
+            else:
+                logger.warning(
+                    "[fusion] forced_capability=restrict matched no model for %s; "
+                    "falling back to the capability gate so the panel is not empty",
+                    "+".join(sorted(needed)),
+                )
+                pool, _ = _apply_capability_gate(pool, needed, cap_map, "fusion")
+        else:  # "bypass": drop the disproven, then order capable-first
+            pool, _ = _apply_capability_gate(pool, needed, cap_map, "fusion")
     return pool
 
 
@@ -8982,6 +9691,11 @@ def _proxy_endpoint(
                 config=config,
                 account_id=account_id,
             )
+            # Pin this conversation to whatever actually served it, so the next
+            # turn keeps the same model (and therefore the same prompt cache and
+            # the same tool-calling conventions) until it stops working.
+            if is_free_virtual and _free_tier_cache_affinity_enabled(config):
+                _record_affinity_success(_affinity_key(payload), pn, um)
         # Proactively prefer candidates that support the capabilities this
         # request needs (tools/vision/reasoning/json).  Stable, never drops
         # candidates, and a no-op when nothing is needed or no metadata exists.
@@ -9019,8 +9733,12 @@ def _proxy_endpoint(
                     sig.tests_passed, score_signals(sig)[0],
                 )
         if needed:
-            ordered = _order_by_capability(ordered, needed, _model_capabilities(config))
+            ordered, _cap_dropped = _apply_capability_gate(
+                ordered, needed, _model_capabilities(config), model_full,
+            )
             decisions.append(f"{ROUTE_SOURCE_CAPABILITY}={'+'.join(sorted(needed))}")
+            if _cap_dropped:
+                decisions.append(f"{ROUTE_SOURCE_CAPABILITY}_dropped={_cap_dropped}")
         # favorite_free_models is a soft preference over an otherwise unranked
         # free pool. Flagship is ranked on measured capability, which is the
         # stronger claim, so a favorite does not reorder it.
@@ -9030,16 +9748,19 @@ def _proxy_endpoint(
             if ordered and ordered[0] is not before:
                 decisions.append(ROUTE_SOURCE_FAVORITE)
         # Model-level stickiness for free pools, opt-in. Runs after favorites so
-        # an explicitly ranked favorite still wins; among the rest, one
-        # conversation keeps landing on the same model instead of being spread.
-        # Not on a ranked flagship pool: pinning a conversation to whichever
-        # member it first landed on directly contradicts best-first.
-        if (is_free_virtual and not flagship_ranked
-                and _free_tier_cache_affinity_enabled(config)):
+        # an explicitly ranked favorite still wins; among the rest, a
+        # conversation keeps landing on the model that last worked for it.
+        #
+        # This applies to a ranked flagship pool too, which rendezvous hashing
+        # could not: the pin is SET by whatever the ordering chose and only
+        # moves the pinned target forward, so the first turn of a conversation
+        # still gets the best-ranked candidate and best-first is never
+        # contradicted. See _order_by_sticky_affinity.
+        if is_free_virtual and _free_tier_cache_affinity_enabled(config):
             akey = _affinity_key(payload)
             if akey and len(ordered) > 1:
                 pinned = ordered[0] if ordered else None
-                ordered = _order_by_cache_affinity(ordered, akey)
+                ordered = _order_by_sticky_affinity(ordered, akey)
                 if ordered and ordered[0] is not pinned:
                     decisions.append(f"{ROUTE_SOURCE_AFFINITY}=free")
         # Context fit runs last of the model-level passes. It is an identity
@@ -9408,6 +10129,79 @@ def usage_stats() -> Response:
     reports only the requests it served. Resets on restart or POST /v1/usage/reset.
     """
     return jsonify(_build_usage_report())
+
+
+@app.route("/v1/failures", methods=["GET"])
+@app.route("/failures", methods=["GET"])
+def failure_report() -> Response:
+    """Report which routing targets have failed recently, and why.
+
+    Answers the question a 502 from an exhausted pool always raises: which
+    models were tried and what did each say. Two views of the same ring buffer —
+    ``by_model``, aggregated per ``provider/model`` so a repeatedly failing
+    target reads as one row with a count, and ``recent``, the flat newest-first
+    list.
+
+    Query parameters: ``limit`` bounds the ``recent`` list (default 50), and
+    ``since`` takes a unix timestamp or a relative age like ``15m`` / ``2h``.
+
+    In-memory and per-process, like /v1/usage: under a multi-worker WSGI server
+    each worker reports only the requests it served. No secrets are recorded —
+    request headers never enter the record at all, and each upstream detail is
+    scrubbed of credential-shaped text and truncated.
+    """
+    since_ts = _parse_since(request.args.get("since"))
+    rows = _failure_records(since_ts)
+    try:
+        limit = max(0, int(request.args.get("limit", 50)))
+    except (TypeError, ValueError):
+        limit = 50
+
+    by_model: dict[str, dict] = {}
+    for row in rows:  # newest first, so the first sighting of a target is its latest
+        entry = by_model.get(row["target"])
+        if entry is None:
+            entry = by_model[row["target"]] = {
+                "target": row["target"],
+                "provider": row["provider"],
+                "model": row["model"],
+                "failures": 0,
+                "last_status": row.get("status"),
+                "last_seen": row.get("at"),
+                "last_detail": row.get("detail") or "",
+                "kinds": {},
+                "statuses": {},
+            }
+        entry["failures"] += 1
+        kind = row.get("kind") or "upstream"
+        entry["kinds"][kind] = entry["kinds"].get(kind, 0) + 1
+        status = row.get("status")
+        if status is not None:
+            key = str(status)
+            entry["statuses"][key] = entry["statuses"].get(key, 0) + 1
+
+    ranked = sorted(by_model.values(), key=lambda e: (-e["failures"], e["target"]))
+    return jsonify({
+        "object": "llmproxy.failures",
+        "window_seconds": _FAILURE_LOG_TTL_S,
+        "capacity": _FAILURE_LOG_MAX,
+        "total": len(rows),
+        "distinct_targets": len(ranked),
+        "by_model": ranked,
+        "recent": rows[:limit],
+    })
+
+
+@app.route("/v1/failures/reset", methods=["POST"])
+def failure_reset() -> Response:
+    """Clear this worker's failure ring. Gated by the admin auth guard."""
+    from .admin import enforce_admin_auth  # local import: admin is wired after routes
+    auth_err = enforce_admin_auth()
+    if auth_err is not None:
+        body, status = auth_err
+        return make_response(body, status)
+    _reset_failures()
+    return jsonify({"object": "llmproxy.failures.reset", "ok": True})
 
 
 @app.route("/v1/usage/reset", methods=["POST"])

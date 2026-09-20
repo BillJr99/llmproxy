@@ -1069,6 +1069,50 @@ when you add a templated provider; the merged defaults come from
 > [`scripts/update_free_models.py`](#keeping-the-free-models-list-current) scraper exists to
 > keep these entries current.
 
+<a name="coding-agent-settings"></a>
+### Recommended settings for a coding agent
+
+The defaults are tuned for a general-purpose proxy serving mixed traffic. A
+long-running tool-calling agent — Hermes, Claude Code, Aider, OpenHands — wants
+a different set of trade-offs, because it is one person's load, it cannot act on
+half a tool call, and a turn abandoned mid-task is expensive in a way a dropped
+chat reply is not. Paste this into the `server` block:
+
+```json
+"server": {
+  "free_tier_cache_affinity": true,
+  "stream_buffer_full": true,
+  "context_aware_routing": true,
+  "cycle_deadline_seconds": 240
+}
+```
+
+| Setting | Why it helps an agent |
+|---|---|
+| [`free_tier_cache_affinity`](#free_tier_cache_affinity) | Keeps one conversation on one model, so tool-calling conventions and instruction-following do not change mid-task and the upstream prompt cache keeps paying. The load being spread by the default was yours anyway. |
+| [`stream_buffer_full`](#stream_buffer_full) | Genuine end-to-end failover on a streamed request: a provider that dies four fifths of the way through is retried instead of leaving the agent holding half a tool call. |
+| [`context_aware_routing`](#context_aware_routing) | A long agentic session outgrows small windows; this sinks candidates known not to fit instead of walking the pool collecting `400 context_length_exceeded`. |
+| [`cycle_deadline_seconds`](#cycle_deadline_seconds) | Bounds the whole candidate walk. Without it a run of slow upstreams can keep a client waiting for minutes, which presents to the user as "the proxy is broken". |
+
+Three things worth knowing before you enable these:
+
+- **`stream_commit_on_content` is not needed alongside `stream_buffer_full`.**
+  Buffering runs after the pre-commit window and re-validates the entire
+  response with the same checks, so the narrower window is subsumed. Leave it
+  off.
+- **With `stream_buffer_full` on, your client's read timeout is what bounds
+  time-to-first-byte, not `cycle_deadline_seconds`.** The deadline bounds
+  time-to-*commit*, and buffering moves the commit to the end of generation, so
+  set the client's timeout above your longest expected response.
+- **Reasoning effort and any fallback provider belong in your agent's config,
+  not llmproxy's.** llmproxy routes; it does not set reasoning effort on your
+  behalf. `flagship` is also rejected if you try to set it in
+  [`model_reasoning`](#model_reasoning), since membership is computed rather
+  than tagged.
+
+When a request does fail, [`GET /v1/failures`](#v1-failures) reports which
+models failed recently and why.
+
 <a name="model_reasoning"></a>
 `model_reasoning` is an **optional** top-level object that tags individual
 models with a reasoning level.  Valid levels are `exploratory`, `standard`,
@@ -1367,6 +1411,193 @@ parsed it is served exactly as the upstream sent it, field omitted.
 | Key                   | Default | Meaning |
 |-----------------------|---------|---------|
 | `server.report_route` | `true`  | Emit the `llmproxy_route` body block. Set it to `false` for a client that validates its response schema strictly enough to reject an unknown key; the response headers are unaffected either way. |
+
+<a name="error-reporting"></a>
+### Error reporting — what a failed request tells you
+
+#### What an exhausted pool returns
+
+Failover is unconditional: every upstream status at or above `400` fails over to
+the next candidate. A non-transient status such as `404` simply skips the
+same-candidate retries (which only apply to `429` and `5xx`, since a `404` will
+not improve against the same endpoint) and moves on immediately.
+
+The question is what to return once **every** candidate has failed. llmproxy is
+a gateway, so the status it returns describes *its* boundary. Replaying the last
+candidate's status attributes the upstream's problem to the caller, and one case
+is actively damaging: a relayed `404` tells an OpenAI-compatible client that the
+model does not exist. Clients classify that as terminal, so a transient pool
+outage silently disabled the client's own retry logic — the caller gave up with
+its retry budget untouched, having asked for a virtual model that exists.
+
+The rule is narrow, so only the misleading case changes:
+
+| Situation | Returned | Why |
+|---|---|---|
+| No candidates at all | `503` | Unchanged; "there was nothing to try" |
+| Every candidate agreed on `400` / `413` / `422` | that status | If all of them reject it identically, the request really is the problem |
+| Every candidate returned `429` | `429` + `Retry-After` | Accurate, and it clears by itself |
+| Every candidate returned the same `5xx` | that status | Already says "server side"; relaying preserves the diagnostic |
+| **Anything else, including any mixture** | **`502`** | No single upstream status can speak for the pool |
+
+So `503` keeps meaning *nothing to try* and `502` means *tried, and all of them
+failed* — the status line alone tells them apart. The upstream body is still
+included as the diagnostic, alongside a roll-call of every candidate tried:
+
+```json
+{
+  "error": {
+    "message": "All 3 'flagship__free' candidate(s) failed. Last upstream error: No endpoints found that support tool use.",
+    "type": "upstream_error",
+    "code": "all_candidates_failed",
+    "llmproxy_candidates": [
+      {"target": "teamorouter/glm-5.3-flash-free", "status": 504},
+      {"target": "openrouter/qwen/qwen3.8-27b:free", "status": 504},
+      {"target": "openrouter/z-ai/glm-5.2:free", "status": 404}
+    ]
+  }
+}
+```
+
+A `200` that failed a content check — a forced tool call that never arrived, an
+unusable body — is still returned as-is. There is no upstream error status to
+sanitise, and handing the client the real body is deliberate.
+
+<a name="v1-failures"></a>
+#### `GET /v1/failures` — which models have been failing, and why
+
+Health scores record *that* a candidate is unwell, not *why*: `record_outcome`
+stores a bare boolean. This endpoint answers the question a `502` always raises,
+without needing [`server.request_log`](#request_log) turned on.
+
+```bash
+curl -s localhost:8080/v1/failures | jq '.by_model'
+```
+
+```json
+[
+  {
+    "target": "openrouter/z-ai/glm-5.2:free",
+    "provider": "openrouter",
+    "model": "z-ai/glm-5.2:free",
+    "failures": 12,
+    "last_status": 404,
+    "last_seen": "2026-09-20T04:50:22.573000+00:00",
+    "last_detail": "No endpoints found that support tool use.",
+    "kinds": {"capability": 12},
+    "statuses": {"404": 12}
+  },
+  {
+    "target": "teamorouter/glm-5.3-flash-free",
+    "provider": "teamorouter",
+    "model": "glm-5.3-flash-free",
+    "failures": 4,
+    "last_status": 504,
+    "last_seen": "2026-09-20T04:49:41.880000+00:00",
+    "last_detail": "upstream timed out",
+    "kinds": {"timeout": 4},
+    "statuses": {"504": 4}
+  }
+]
+```
+
+Two views of the same data: `by_model` aggregates per routing target, busiest
+first, so a repeatedly failing model reads as one row with a count rather than
+forty lines; `recent` is the flat newest-first list, each entry carrying the
+virtual model that was requested. Each failure is classified as `timeout`,
+`quota`, `capability`, `oversize`, `server` or `upstream`, which is what
+separates "this model is rate limited" from "this model cannot do what you
+asked" at a glance.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `limit` | `50` | How many entries the flat `recent` list carries. `by_model` is never truncated. |
+| `since` | — | A unix timestamp or a relative age (`30s`, `15m`, `2h`, `1d`). An unparseable value means "no filter" rather than a `400`: a diagnostic endpoint should not fail on a typo. |
+
+`POST /v1/failures/reset` clears the ring and is gated by the same admin auth
+guard as [`/v1/usage/reset`](#usage-accounting).
+
+**No secrets are recorded.** Request headers never enter a record at all — they
+carry the client's `Authorization` — and because an upstream is free to quote a
+credential back inside an error *message*, every detail is additionally scrubbed
+of credential-shaped text (`sk-…`, `Bearer …`, `api_key=…`, long opaque tokens)
+and truncated to 300 characters. Ordinary text, including hyphenated model ids,
+survives intact.
+
+Like [`/v1/usage`](#usage-accounting), this is in-memory and **per process**: the ring
+holds the most recent 250 failures from the last six hours, and under a
+multi-worker WSGI server each worker reports only the requests it served. That
+is one more reason [`server.workers`](#workers) defaults to `1`.
+
+<a name="capability-enforcement"></a>
+### Capability enforcement — a model that cannot, is not picked
+
+When a request needs a capability (`tools`, `vision`, `json`, `reasoning`), any
+candidate **known** to lack it is removed from the pool rather than merely
+sorted to the back.
+
+**This applies to every virtual model, not just the flagship tier, and to paid
+candidates exactly as to free ones.** The gate runs where each pool's candidate
+list is finalised: once for `llmproxy/free`, `llmproxy/flagship`, the reasoning
+tiers, the `llmproxy/<provider>__*` slices and every other virtual, and once per
+bucket of the `llmproxy/loadbalanced` cost waterfall, so a paid model that
+cannot call tools is no more eligible for a tool-calling request than a free one
+is. Cost tier buys no exemption.
+
+The one deliberate exception is a **direct** `provider/model` request. There you
+named the model, so llmproxy routes to it and lets the upstream answer for
+itself rather than second-guessing you.
+
+**This applies to every virtual model, not just the flagship tier, and to paid
+candidates exactly as to free ones.** The gate runs where each pool's candidate
+list is finalised: once for `llmproxy/free`, `llmproxy/flagship`, the reasoning
+tiers, the `llmproxy/<provider>__*` slices and every other virtual, and once per
+bucket of the `llmproxy/loadbalanced` cost waterfall, so a paid model that
+cannot call tools is no more eligible for a tool-calling request than a free one
+is. Cost tier buys no exemption.
+
+The one deliberate exception is a **direct** `provider/model` request. There you
+named the model, so llmproxy routes to it and lets the upstream answer for
+itself rather than second-guessing you. Ordering alone cannot express a hard requirement: a later
+pass that re-sorts, such as affinity, could put the model back in front, and a
+model that cannot call tools is not a usable fallback for a request that needs
+them — it is a guaranteed failure wearing the costume of a retry.
+
+What makes removal safe is that "known to lack it" and "not known to have it"
+are kept apart. Capability metadata is sparse, and untagged models include some
+of the strongest tool-callers available:
+
+| State | Evidence | Treatment |
+|---|---|---|
+| **Capable** | tagged with the capability | kept, sorted first |
+| **Unknown** | no capability metadata at all | **kept**, sorted after capable |
+| **Incapable** | carries metadata that omits it, or has refused it | **dropped** |
+
+Two guarantees bound it. **The pool is never emptied**: if every candidate is
+known incapable, all of them are kept, because a request that is attempted and
+fails over is strictly better than a `503` with no upstream call made, and a
+capability map can be wrong. And when candidates are dropped, the route reason
+says so (`capability_dropped=N`) and the count is logged, so a pool that
+silently shrank is never a mystery.
+
+**Refusals are learned.** A provider that advertises a capability it cannot
+actually route to is exactly the case no amount of metadata-reading catches, so
+a capability-shaped rejection — OpenRouter's `Filter by Tool Compatibility`
+routing step, or a message such as *"No endpoints found that support tool
+use"* — records a gap against that **exact** routing target. The same weights
+on another provider are unaffected. A learned gap outranks any listing that
+claims otherwise, because the request already failed against that endpoint, and
+each one is logged at `warning` when first recorded. Gaps live in process
+memory and clear on restart.
+
+The matcher is deliberately narrow: a recognised routing-funnel step or one of a
+few exact phrases, never the mere presence of the word "tool". A false positive
+here sidelines a working model.
+
+**`fusion.forced_capability: "restrict"`** is the stricter opt-in: it
+additionally excludes models that are merely *unproven*, not just ones
+disproven. It now shares the same non-empty floor, so a forced-tools request
+can no longer produce an empty panel.
 
 <a name="context_aware_routing"></a>
 ### Context-window-aware routing
@@ -1743,10 +1974,33 @@ quotas is the entire point of that tier.
 That default is wrong for a single-user coding agent. There, consecutive turns
 landing on different models means different tool-calling conventions and different
 instruction-following *inside one task*, and the load being spread is one person's.
-Enabling this applies the same rendezvous-hashed affinity to model choice within
-free pools, so a conversation sticks to one model for as long as it keeps answering.
-As with every ordering pass it only reorders, so failover is unaffected, and
-`favorite_free_models` still outranks it.
+
+Enabling this makes a conversation **stick to the model that last served it
+successfully**, for as long as that model keeps answering. The pin is written on
+success rather than on selection, so it always names a model that demonstrably
+worked; a turn whose pinned model fails and is then served by another candidate
+re-pins to that candidate in the same request, so the pin corrects itself in one
+turn and no explicit expiry is needed.
+
+Three properties make it safe to combine with every other pass:
+
+- **It only ever moves the pinned target forward.** Nothing is dropped, so
+  failover is unaffected, and `favorite_free_models` still outranks it.
+- **The first turn is unpinned**, so it takes whatever the ordering chose. On
+  [`flagship__free`](#flagship-ordering) that is the top-ranked member, which is
+  why this can now apply to a ranked pool at all.
+- **A cooling pin is not promoted.** A candidate demoted for saturation stays
+  demoted, rather than being hoisted back and wasting the turn on the one model
+  already known to be rate limited.
+
+The cost is the thing it trades away: a pinned conversation stops spreading load
+across quotas, which is the free tier's whole default purpose. Pins are held in
+process memory, capped, and expire after six hours.
+
+> **Earlier builds used rendezvous hashing here.** That was stateless — it
+> remembered no choice, it derived one — and its winner was uncorrelated with
+> rank, which is why the pass had to be suppressed on ranked flagship pools.
+> Sticky-until-failure replaces it and behaves the same way on an unranked pool.
 
 <a name="workers"></a>
 ### `server.workers` — why the default is 1
@@ -2497,6 +2751,17 @@ Four rules, in this order:
    everything, but they correctly reject a model that cannot call tools, which
    cannot drive an agent loop whatever it scores. A model whose capabilities
    cannot be determined fails the gate.
+
+   Specs are read **per routing target**, from the most specific source that
+   has anything to say: the provider's own listing for that exact
+   `provider/model` id, then the catalog's entry for that exact id, and only
+   then the merged profile joined on the normalised name. The last of those is
+   the [carry-across](#coverage-and-when-to-use-a-pin) that lets an unscraped
+   provider be gated at all; the first two exist because a *billing variant* is
+   a different set of endpoints. `vendor/model:free` normalises onto
+   `vendor/model`, so without them it inherits its paid sibling's tool support
+   and context window, joins the tier, and then fails every tool call with an
+   upstream `404` that no failover can fix.
 3. **The bar floats.** Starting from `start_percentile`, the bar is lowered
    until at least `min_flagship_free_models` **distinct** free models qualify.
    There is no lower bound, so a thin free tier produces a smaller tier rather
@@ -2538,17 +2803,27 @@ Because the ranking is measured capability, it outranks the softer ordering
 passes, which are suppressed for a ranked flagship pool: [request-fit
 triage](#request-fit-triage-every-free-and-local-virtual) (whose effective key
 inside a single tier is a parameter count guessed from the model id — precisely
-the crude proxy the benchmark score replaces),
-[`favorite_free_models`](#favorite_free_models), and free-tier cache affinity.
+the crude proxy the benchmark score replaces) and
+[`favorite_free_models`](#favorite_free_models).
 The *hard* passes still win, because they predict an outright failure rather
-than a preference: forced tool/vision/JSON capability ordering, and
+than a preference: forced tool/vision/JSON
+[capability enforcement](#capability-enforcement), and
 [context fit](#context_aware_routing).
 
-One consequence is worth stating plainly: **`flagship__free` no longer spreads
+[Free-tier cache affinity](#free_tier_cache_affinity) is **not** suppressed
+here, because it no longer competes with the ranking. It pins a conversation to
+the model that last served it successfully, and the first turn of a
+conversation is pinned by whatever the ranking already chose — so the strongest
+member is still the first pick, and stickiness only decides whether later turns
+stay there. A pinned model that is cooling after a `402`/`429` is never
+promoted, so affinity cannot undo a saturation demotion.
+
+One consequence is worth stating plainly: **`flagship__free` does not spread
 load.** It walks the ranking instead of sampling by remaining quota, so the
 top-scored free model absorbs every request until it saturates and drops to the
 back. That is the point of asking for flagship, but it is a real change from how
-the other `/free` virtuals behave.
+the other `/free` virtuals behave — and with affinity enabled a conversation
+stays put even longer, by design.
 
 If the membership cache carries no scores yet — a first run, or a file written
 by an older build — the pool falls back to its previous ordering and says so in
@@ -2691,6 +2966,16 @@ Where a provider does not publish capability data but serves the same weights
 as a provider that does, the specs and score are carried across by matching
 normalised model names. That join is a heuristic and can be wrong; a pin or an
 exclude is the way to overrule it.
+
+**One thing is never carried across: a billing variant's specs.** When a
+catalog or a provider lists `vendor/model:free` separately from
+`vendor/model`, it is distinguishing two sets of endpoints rather than being
+terse about one, so what it says about the variant is taken to be about the
+variant alone. The *score* still joins, because the weights really are the
+same; the tool-support and context-window **specs** do not. Only ids carrying a
+recognised variant suffix (`:free`, `:batch`, `:nitro`, `:extended`, `:floor`)
+are treated this way, so an ordinary model whose gateway publishes a thin
+listing still inherits everything known about those weights elsewhere.
 
 #### When the tier is empty
 

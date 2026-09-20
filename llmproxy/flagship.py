@@ -75,6 +75,29 @@ def normalize_model_id(model_id: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s)
 
 
+def has_variant_suffix(model_id: str) -> bool:
+    """Whether *model_id* names a billing or routing variant of another model.
+
+    True for ``z-ai/glm-5.2:free``, ``deepseek/deepseek-v4:batch`` and the
+    ``-free`` spelling some gateways use; False for a plain id.
+
+    The check mirrors the double application inside ``normalize_model_id``: the
+    suffix is tested against the raw id and again against the post-``/`` tail,
+    because a vendor path may carry the variant on either side.
+
+    Callers use this to decide when NOT to join a fact across the normalized
+    key. A provider that lists both ``z-ai/glm-5.2`` and ``z-ai/glm-5.2:free``
+    is discriminating between two routing targets rather than being terse about
+    one, so what it says about the variant is about the variant alone.
+    """
+    if not model_id:
+        return False
+    s = model_id.lower().strip()
+    for prefix in _PATH_PREFIXES:
+        s = s.replace(prefix, "")
+    return bool(_VARIANT_RE.search(s) or _VARIANT_RE.search(s.split("/")[-1]))
+
+
 @dataclass
 class Candidate:
     """One routing target: a specific model on a specific provider."""
@@ -306,9 +329,20 @@ def fetch_openrouter_profiles(url: str = OPENROUTER_MODELS_URL) -> dict[str, dic
     loop — where chat-arena style ratings measure conversational preference.
 
     Returns ``{model_key: {"scores": {...}, "context_length": int|None,
-    "supports_tools": bool, "capabilities": set[str], "model_id": str}}``.
-    Specs come from the same entry so a provider that publishes no capability
-    data of its own can still be gated on the same weights served elsewhere.
+    "supports_tools": bool, "capabilities": set[str], "model_id": str,
+    "by_id": {exact_id: {"supports_tools": bool, "context_length": int|None}}}}``.
+    The merged specs come from every entry sharing the key, so a provider that
+    publishes no capability data of its own can still be gated on the same
+    weights served elsewhere.
+
+    ``by_id`` records what the catalog said about each EXACT id, unmerged. Both
+    are needed and neither replaces the other. The merged view is the right
+    answer for a provider the catalog does not list at all, which is the
+    cross-provider carry-across the tier depends on. It is the wrong answer for
+    a billing variant the catalog lists separately: ``z-ai/glm-5.2:free``
+    normalizes onto ``z-ai/glm-5.2``, so without the exact-id view it inherits
+    tool support and a 1M context window from its paid sibling and is admitted
+    to a tier it cannot serve, failing at request time with an upstream 404.
 
     ``capabilities`` is the broad base the routing-metadata refresh joins under
     its normalized key. It is derived with the same
@@ -336,8 +370,16 @@ def fetch_openrouter_profiles(url: str = OPENROUTER_MODELS_URL) -> dict[str, dic
         supported = model.get("supported_parameters") or []
         profile = out.setdefault(key, {"scores": {}, "context_length": None,
                                        "supports_tools": False,
-                                       "capabilities": set(), "model_id": mid})
+                                       "capabilities": set(), "model_id": mid,
+                                       "by_id": {}})
         profile["capabilities"] |= capabilities_from_listing(model)
+        ctx_raw = model.get("context_length")
+        # This entry's own claim, from this entry alone: no latch, no max-wins.
+        # A variant that says less than its sibling is asserting a difference.
+        profile["by_id"][mid.lower()] = {
+            "supports_tools": "tools" in supported,
+            "context_length": ctx_raw,
+        }
         if score is not None:
             prev = profile["scores"].get("openrouter_aa")
             if prev is None or score > prev:
@@ -374,7 +416,8 @@ def fetch_profiles(sources: list[str] | None = None) -> dict[str, dict]:
         for key, profile in profiles.items():
             slot = merged.setdefault(key, {"scores": {}, "context_length": None,
                                            "supports_tools": False,
-                                           "capabilities": set(), "model_id": None})
+                                           "capabilities": set(), "model_id": None,
+                                           "by_id": {}})
             slot["scores"].update(profile.get("scores") or {})
             slot["capabilities"] |= set(profile.get("capabilities") or ())
             if not slot["model_id"]:
@@ -384,4 +427,19 @@ def fetch_profiles(sources: list[str] | None = None) -> dict[str, dict]:
                 slot["context_length"] = ctx
             if profile.get("supports_tools"):
                 slot["supports_tools"] = True
+            # Two sources describing the SAME exact id is the terse-listing
+            # case, not the variant case — one of them may simply publish less
+            # about a model both cover. So the module's monotone semantics
+            # apply within an id: tool support latches on, context takes the
+            # larger. Across DIFFERENT ids nothing is shared, which is the
+            # whole point of keeping this map beside the merged fields.
+            for exact_id, spec in (profile.get("by_id") or {}).items():
+                entry = slot["by_id"].setdefault(
+                    exact_id, {"supports_tools": False, "context_length": None}
+                )
+                if spec.get("supports_tools"):
+                    entry["supports_tools"] = True
+                ctx = spec.get("context_length")
+                if ctx and (entry["context_length"] or 0) < ctx:
+                    entry["context_length"] = ctx
     return merged
