@@ -4227,11 +4227,27 @@ docker run -it --rm \
 <a name="docker-user-group"></a>
 #### Pass `:0` as the group, not `$(id -g)`
 
-The group matters as much as the user. This image creates its unprivileged user
-in group 0 and makes every directory it writes group-root-writable, which is
-what lets it run under an arbitrary UID (OpenShift does the same thing). A host
-GID, normally 1000, is in neither group 0 nor the owner of those directories, so
-only the "other" permission bits apply and the container cannot write them.
+The group matters as much as the user. The image builds its unprivileged user
+into group 0 and hands that group every directory the process writes:
+
+```dockerfile
+RUN useradd --uid 1000 --gid 0 --create-home --home-dir "$HOME" llmproxy \
+    && mkdir -p /config /state "$HOME/.config/llmproxy" \
+    && chgrp -R 0 /config /state "$HOME" /app \
+    && chmod -R g+rwX /config /state "$HOME" /app
+USER 1000:0
+```
+
+Group ownership rather than user ownership is what lets the image run under an
+arbitrary UID, which is the same convention OpenShift requires: the UID may be
+anything, so nothing useful can be keyed to it, but the GID is fixed at 0 and
+the four directories above are group-writable. Those four are the whole set:
+`/config`, `/state`, `/home/llmproxy` and `/app`.
+
+`--user $(id -u):$(id -g)` breaks that. A host GID, normally 1000, is in neither
+group 0 nor the owner of those directories, so only the "other" permission bits
+apply, and `chmod g+rwX` never set a write bit for "other". The container can
+read everything and write nothing.
 
 `:0` confers no root privilege here, because the UID is still yours. It names
 the group those directories are shared with. The symptom of getting this wrong
@@ -4422,6 +4438,49 @@ beside `config.json` instead, pass `-e LLMPROXY_STATE_DIR=/config` and drop the
 state volume. Note that a read-only config mount also disables the admin UI's
 config editing and the startup config heal, both of which write `config.json`.
 
+#### The `/state` volume mount
+
+`/state` exists in the image as an ordinary directory, so a container that
+mounts nothing there still starts and still works. What it loses is
+persistence: the directory then lives in the container's writable layer, and
+`docker rm` takes it with the container. The proxy comes back up having
+forgotten its routing metadata, its flagship membership and every refresh
+timestamp, so all three background refreshes run again on the next boot.
+
+Mounting a named volume is what makes that state outlive the container:
+
+```bash
+-v llmproxy_state:/state
+```
+
+Docker creates the volume on first use; nothing needs to be set up in advance.
+It survives `docker stop`, `docker rm`, and re-creating the container against a
+newer image, which is what makes an upgrade cheap. `docker volume rm
+llmproxy_state` is the deliberate way to discard it, and costs only a relearn.
+
+A host path works too, if you would rather see the files directly. It has to be
+writable by the container UID, exactly like the config mount:
+
+```bash
+mkdir -p ~/.local/state/llmproxy
+docker run ... -v ~/.local/state/llmproxy:/state ...
+```
+
+To look inside a named volume, or to back it up:
+
+```bash
+# List what is in there
+docker run --rm -v llmproxy_state:/state alpine ls -la /state
+
+# Copy it out to the current directory
+docker run --rm -v llmproxy_state:/state -v "$PWD":/backup alpine \
+  tar czf /backup/llmproxy_state.tgz -C /state .
+```
+
+None of it is secret and none of it is irreplaceable: every file is something
+llmproxy worked out for itself and can work out again. Keeping it is about not
+re-scraping every provider on every restart, not about protecting data.
+
 One more file sits outside both directories: the bundled
 `llmproxy/providers.json`, which ships inside the image and is refreshed in
 place by the free-models sweep. On a read-only image layer that write fails,
@@ -4505,8 +4564,7 @@ docker run -it --rm \
   ghcr.io/billjr99/llmproxy:latest --setup
 
 # Start the server
-docker run -d \
-  -p 8080:8080 \
+docker run -d -p 8080:8080 --restart always \
   --user $(id -u):0 \
   -v ~/.config/llmproxy:/config \
   -v llmproxy_state:/state \
@@ -4514,6 +4572,12 @@ docker run -d \
   --name llmproxy \
   ghcr.io/billjr99/llmproxy:latest
 ```
+
+`--restart always` brings the proxy back after a daemon restart or a reboot,
+which is what you want for a long-lived deployment. Everything llmproxy has
+learned survives that restart because it is in the `llmproxy_state` volume
+rather than the container; see
+[where the machine-written state lives](#state-directory).
 
 ### Use in docker-compose
 
