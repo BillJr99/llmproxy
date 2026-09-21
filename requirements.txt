@@ -2,3 +2,11 @@ flask>=3.0.0
 requests>=2.31.0
 gunicorn>=21.2.0
 beautifulsoup4>=4.12.0
+# The IANA time-zone database, for server.usage_timezone. zoneinfo reads the
+# system database when there is one, and a slim container image often has none --
+# python:3.12-slim installs no tzdata and the Dockerfile sets no TZ, so local
+# time there is UTC and an IANA lookup may not resolve at all. Without this the
+# setting fails safely (it logs and falls back to local time) but silently does
+# nothing, which is worse than failing loudly. zoneinfo falls back to this
+# package automatically, so it needs no code.
+tzdata>=2024.1
