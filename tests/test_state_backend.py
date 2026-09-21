@@ -379,3 +379,57 @@ def test_the_cache_epoch_advances(backend):
     assert backend.cache_epoch() == start + 1
     backend.bump_cache_epoch()
     assert backend.cache_epoch() == start + 2
+
+
+# ── Responses conversation store ────────────────────────────────────────────
+
+def test_a_transcript_round_trips(backend):
+    msgs = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
+    backend.store_response("resp_1", msgs)
+    assert backend.load_response("resp_1") == msgs
+
+
+def test_an_unknown_id_is_none_not_an_error(backend):
+    """The caller turns this into a clear 400 rather than answering without
+    the referenced history, which would produce a confidently wrong reply."""
+    assert backend.load_response("resp_nope") is None
+
+
+def test_storing_the_same_id_replaces_it(backend):
+    backend.store_response("resp_1", [{"role": "user", "content": "first"}])
+    backend.store_response("resp_1", [{"role": "user", "content": "second"}])
+    assert backend.load_response("resp_1") == [{"role": "user", "content": "second"}]
+
+
+def test_an_empty_id_is_ignored(backend):
+    backend.store_response("", [{"role": "user", "content": "x"}])
+    assert backend.load_response("") is None
+
+
+def test_a_transcript_is_a_copy(backend):
+    """A caller mutating what it read must not corrupt the stored conversation."""
+    backend.store_response("resp_1", [{"role": "user", "content": "hi"}])
+    got = backend.load_response("resp_1")
+    got.append({"role": "user", "content": "injected"})
+    assert len(backend.load_response("resp_1")) == 1
+
+
+def test_the_response_store_is_bounded(backend):
+    from llmproxy.state import MAX_STORED_RESPONSES
+    for i in range(MAX_STORED_RESPONSES + 5):
+        backend.store_response(f"resp_{i}", [{"role": "user", "content": str(i)}])
+    assert backend.load_response("resp_0") is None
+    assert backend.load_response(f"resp_{MAX_STORED_RESPONSES + 4}") is not None
+
+
+def test_a_transcript_can_be_deleted(backend):
+    backend.store_response("resp_1", [{"role": "user", "content": "hi"}])
+    assert backend.delete_response("resp_1") is True
+    assert backend.delete_response("resp_1") is False
+    assert backend.load_response("resp_1") is None
+
+
+def test_clearing_empties_the_store(backend):
+    backend.store_response("resp_1", [{"role": "user", "content": "hi"}])
+    backend.clear_responses()
+    assert backend.load_response("resp_1") is None

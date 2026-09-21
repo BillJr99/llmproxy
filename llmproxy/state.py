@@ -96,6 +96,12 @@ class SharedState(Protocol):
     def affinity_count(self) -> int: ...
     def reset_affinity(self) -> None: ...
 
+    # — Responses conversation store (previous_response_id) —
+    def store_response(self, response_id: str, messages: list[dict]) -> None: ...
+    def load_response(self, response_id: str) -> list[dict] | None: ...
+    def delete_response(self, response_id: str) -> bool: ...
+    def clear_responses(self) -> None: ...
+
     # — derived-cache invalidation —
     def bump_cache_epoch(self) -> None: ...
     def cache_epoch(self) -> int: ...
@@ -125,6 +131,11 @@ MAX_SATURATION_COOLDOWN_S: float = 3600.0
 
 AFFINITY_PIN_MAX: int = 2048
 AFFINITY_PIN_TTL_S: float = 6 * 60 * 60
+# The Responses API keeps conversation state server-side, so a client may send
+# only its newest turn and reference the rest by id. This is the one place
+# llmproxy holds conversation data, and it stays modest about it.
+MAX_STORED_RESPONSES: int = 256
+
 FAILURE_LOG_MAX: int = 250
 FAILURE_LOG_TTL_S: float = 6 * 60 * 60
 
@@ -177,6 +188,10 @@ class InMemoryState:
 
         self._cache_epoch = 0
         self._cache_epoch_lock = threading.Lock()
+
+        from collections import OrderedDict
+        self._responses: OrderedDict[str, list[dict]] = OrderedDict()
+        self._response_lock = threading.Lock()
 
     # — usage —————————————————————————————————————————————————————————————
 
@@ -417,6 +432,32 @@ class InMemoryState:
         with self._affinity_lock:
             self._affinity.clear()
 
+    # — Responses conversation store ——————————————————————————————————————
+
+    def store_response(self, response_id: str, messages: list[dict]) -> None:
+        if not response_id:
+            return
+        with self._response_lock:
+            self._responses[response_id] = messages
+            self._responses.move_to_end(response_id)
+            while len(self._responses) > MAX_STORED_RESPONSES:
+                self._responses.popitem(last=False)
+
+    def load_response(self, response_id: str) -> list[dict] | None:
+        with self._response_lock:
+            found = self._responses.get(response_id)
+            if found is not None:
+                self._responses.move_to_end(response_id)
+            return list(found) if found is not None else None
+
+    def delete_response(self, response_id: str) -> bool:
+        with self._response_lock:
+            return self._responses.pop(response_id, None) is not None
+
+    def clear_responses(self) -> None:
+        with self._response_lock:
+            self._responses.clear()
+
     # — derived-cache invalidation ————————————————————————————————————————
 
     def bump_cache_epoch(self) -> None:
@@ -596,7 +637,7 @@ def reset_for_worker() -> None:
 # Cross-process implementation
 # ---------------------------------------------------------------------------
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 # The tables this backend owns so far. Everything not listed here still falls
 # through to the in-process storage inherited from InMemoryState, which is
@@ -633,6 +674,14 @@ CREATE TABLE IF NOT EXISTS affinity_pin (
 ) WITHOUT ROWID;
 
 CREATE INDEX IF NOT EXISTS ix_affinity_seen ON affinity_pin(seen_at);
+
+CREATE TABLE IF NOT EXISTS response (
+  response_id TEXT PRIMARY KEY,
+  messages    TEXT NOT NULL,
+  last_used   REAL NOT NULL
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS ix_response_used ON response(last_used);
 
 CREATE TABLE IF NOT EXISTS lease (
   job         TEXT PRIMARY KEY,
@@ -729,7 +778,7 @@ class SqliteState(InMemoryState):
                     "SELECT v FROM meta WHERE k='schema_version'").fetchone()
                 if row is None or int(row["v"]) != _SCHEMA_VERSION:
                     for table in ("capability_gap", "saturation", "oversize",
-                                  "affinity_pin", "lease", "meta"):
+                                  "affinity_pin", "lease", "response", "meta"):
                         conn.execute(f"DROP TABLE IF EXISTS {table}")
             # Statement by statement, not executescript(): that issues its own
             # COMMIT first, which would silently end the transaction this
@@ -764,7 +813,7 @@ class SqliteState(InMemoryState):
         conn.execute("BEGIN IMMEDIATE")
         try:
             for table in ("capability_gap", "saturation", "oversize",
-                          "affinity_pin", "lease"):
+                          "affinity_pin", "lease", "response"):
                 conn.execute(f"DELETE FROM {table}")
             conn.execute("COMMIT")
         except Exception:
@@ -996,3 +1045,66 @@ class SqliteState(InMemoryState):
             return int(row["v"]) if row else 0
         except (TypeError, ValueError):
             return 0
+
+    # — Responses conversation store ——————————————————————————————————————
+
+    def store_response(self, response_id: str, messages: list[dict]) -> None:
+        """Save a transcript where every worker can find it.
+
+        This is the one piece of state whose absence is a hard error rather than
+        a degradation: a client that sends previous_response_id and lands on a
+        worker without it gets a 400, roughly (N-1)/N of the time. Everything
+        else here merely routes worse when it is not shared.
+        """
+        if not response_id:
+            return
+        import json
+
+        self._write([
+            (
+                "INSERT INTO response(response_id, messages, last_used) "
+                "VALUES(?, ?, ?) "
+                "ON CONFLICT(response_id) DO UPDATE SET messages=excluded.messages, "
+                "last_used=excluded.last_used",
+                (response_id, json.dumps(messages), time.time()),
+            ),
+            (
+                "DELETE FROM response WHERE response_id IN ("
+                "  SELECT response_id FROM response ORDER BY last_used DESC "
+                "  LIMIT -1 OFFSET ?)",
+                (MAX_STORED_RESPONSES,),
+            ),
+        ])
+
+    def load_response(self, response_id: str) -> list[dict] | None:
+        import json
+
+        row = self._conn().execute(
+            "SELECT messages, last_used FROM response WHERE response_id = ?",
+            (response_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        # An LRU touch on every read would make every read a write transaction.
+        # Refreshing only once a minute keeps the eviction order accurate to far
+        # finer than a 256-entry cap needs.
+        if time.time() - row["last_used"] > 60:
+            try:
+                self._write([(
+                    "UPDATE response SET last_used = ? WHERE response_id = ?",
+                    (time.time(), response_id),
+                )])
+            except Exception:  # noqa: BLE001 — a stale LRU stamp is not worth failing a read
+                pass
+        try:
+            return json.loads(row["messages"])
+        except (TypeError, ValueError):
+            return None
+
+    def delete_response(self, response_id: str) -> bool:
+        return self._write([(
+            "DELETE FROM response WHERE response_id = ?", (response_id,),
+        )]) > 0
+
+    def clear_responses(self) -> None:
+        self._write([("DELETE FROM response", ())])

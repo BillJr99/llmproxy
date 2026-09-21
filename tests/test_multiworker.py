@@ -275,3 +275,35 @@ def test_the_cache_epoch_is_shared(db):
     stale from this counter rather than from nulling their own cache."""
     _run(_w_bump_epoch, db, 3)
     assert _run(_w_bump_epoch, db, 2) == 5
+
+
+# ── the hard error, not a degradation ───────────────────────────────────────
+
+def _w_store_response(db, rid, msgs, q):
+    from llmproxy.state import SqliteState
+    be = SqliteState(db)
+    be.store_response(rid, msgs)
+    q.put(True)
+    be.close()
+
+
+def _w_load_response(db, rid, q):
+    from llmproxy.state import SqliteState
+    be = SqliteState(db)
+    q.put(be.load_response(rid))
+    be.close()
+
+
+def test_a_conversation_saved_by_one_worker_is_found_by_another(db):
+    """The worst thing an unshared store did. Everything else routed worse
+    without sharing; this returned a 400 for roughly (N-1)/N of requests that
+    used previous_response_id, because the transcript was in another process.
+    """
+    msgs = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
+    _run(_w_store_response, db, "resp_abc", msgs)
+    assert _run(_w_load_response, db, "resp_abc") == msgs
+
+
+def test_an_id_no_worker_holds_is_still_unknown(db):
+    """Shared must not mean permissive: a genuinely unknown id is still a 400."""
+    assert _run(_w_load_response, db, "resp_never_stored") is None
