@@ -133,6 +133,43 @@ def _config_int_from(cfg: dict, key: str, default: int) -> int:
         return default
 
 
+def _gunicorn_options(server_cfg: dict, host: str, port: int, log_level: str,
+                      post_worker_init) -> dict:  # noqa: ANN001 — gunicorn hook
+    """Build the gunicorn settings dict.
+
+    Split out of ``main`` so the settings can be asserted on without starting a
+    server: the only other way to check that ``server.threads`` actually reaches
+    gunicorn is to boot one.
+
+    Threads are the concurrency knob; workers are the parallelism knob. This
+    proxy spends virtually all of its wall time blocked on an upstream, and a
+    streamed request holds its gthread thread for that whole duration
+    (``stream_with_context`` around a blocking ``iter_content``), so the thread
+    count is the ceiling on concurrent in-flight requests. Raising it is free:
+    threads share process memory, so every registry, counter and cooldown the
+    routing layer keeps is already correct across them — that is what the
+    ``threading.Lock`` on each one is for.
+
+    Workers are the opposite trade. All of that state lives in process memory
+    and is NOT shared between processes, so with two of them a 429 that cools a
+    candidate in one worker is invisible to the other, which hits the same
+    exhausted endpoint on the very next request, and ``free_limits`` quotas are
+    counted once per worker — the proxy believes it has roughly N times the
+    headroom it really has. Hence one worker by default, and raise threads first.
+    """
+    return {
+        "bind": f"{host}:{port}",
+        "workers": max(1, _config_int_from(server_cfg, "workers", 1)),
+        "worker_class": "gthread",
+        "threads": max(1, _config_int_from(server_cfg, "threads", 4)),
+        "timeout": max(server_cfg.get("stream_timeout", 300), 120),
+        "loglevel": log_level.lower(),
+        "accesslog": "-",
+        "worker_tmp_dir": _gunicorn_worker_tmp_dir(),
+        "post_worker_init": post_worker_init,
+    }
+
+
 def _gunicorn_worker_tmp_dir() -> str | None:
     """Pick a writable directory for gunicorn's per-worker heartbeat files.
 
@@ -433,37 +470,22 @@ def main() -> None:
             load_config(force_reload=True)
             _run_startup_tasks_once()
 
-        # One worker by default, deliberately. Every piece of state the routing
-        # layer depends on — the saturation registry, per-model health scores,
-        # free-tier request and token counters — lives in process memory and is
-        # not shared between workers. With two of them a 429 that cools a
-        # candidate in one worker is invisible to the other, which hits the same
-        # exhausted endpoint on the very next request, and free_limits quotas are
-        # counted twice over so the proxy believes it has roughly double the
-        # headroom it really has. gthread's four threads still provide
-        # concurrency. Operators who front several machines, or who genuinely
-        # want the CPU parallelism and accept the accounting drift, can raise it.
-        workers = max(1, _config_int_from(server_cfg, "workers", 1))
-        options = {
-            "bind": f"{host}:{port}",
-            "workers": workers,
-            "worker_class": "gthread",
-            "threads": 4,
-            "timeout": max(server_cfg.get("stream_timeout", 300), 120),
-            "loglevel": log_level.lower(),
-            "accesslog": "-",
-            "worker_tmp_dir": _gunicorn_worker_tmp_dir(),
-            "post_worker_init": _post_worker_init,
-        }
+        options = _gunicorn_options(server_cfg, host, port, log_level,
+                                    _post_worker_init)
+        workers = options["workers"]
+        threads = options["threads"]
         logging.getLogger("llmproxy").info(
-            "Starting with gunicorn — %s:%d (%d worker(s) x 4 threads)",
-            host, port, workers,
+            "Starting with gunicorn — %s:%d (%d worker(s) x %d thread(s))",
+            host, port, workers, threads,
         )
         if workers > 1:
             logging.getLogger("llmproxy").warning(
                 "server.workers=%d: quota, health and saturation state is per-process "
                 "and is NOT shared between workers, so free-tier limits are counted "
-                "per worker and cooldowns do not propagate.",
+                "per worker and cooldowns do not propagate. If you raised this to "
+                "serve more concurrent requests, raise server.threads instead — this "
+                "proxy waits on upstreams rather than on CPU, and threads share that "
+                "state correctly.",
                 workers,
             )
         _StandaloneApp(app, options).run()
