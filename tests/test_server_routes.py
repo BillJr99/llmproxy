@@ -168,7 +168,10 @@ def test_startup_sidecar_sync_no_longer_rewrites_the_user_config(
     p.write_text(json.dumps(cfg), encoding="utf-8")
 
     ran = server._sync_believed_free_from_sidecar(str(p))
-    assert ran is True
+    # False, not True: nothing was reconciled, so the caller must not invalidate
+    # the models cache. Reporting a change here logged "cache invalidated after
+    # update" on every boot for an update that never ran.
+    assert ran is False
     # The user's config is left exactly as written. The sidecar's believed_free
     # reaches routing through the defaults layer now, not by being copied here.
     assert json.loads(p.read_text()) == cfg
@@ -370,3 +373,38 @@ def test_bare_model_detail_is_not_a_404(client):
 def test_the_bare_alias_does_not_extend_to_admin(client):
     """The /admin surface stays unaliased, as the prefix shim already guarantees."""
     assert client.get("/api/admin").status_code == 404
+
+
+def test_no_providers_is_named_as_the_cause_not_as_an_empty_pool(
+        monkeypatch, tmp_path):
+    """A config with no providers empties every pool, so a pool-shaped hint
+    describes the symptom while the cause goes unnamed.
+
+    The common reason is that the server is reading a different file than the
+    operator is editing (a stale container bind mount, a stray LLMPROXY_CONFIG),
+    so the hint has to name the path actually loaded.
+    """
+    import json
+
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({"providers": {}, "server": {"log_level": "ERROR"}}))
+    mod = _load_server_with_config(monkeypatch, p)
+
+    hint = mod._virtual_model_hint("llmproxy__flagship/free")
+    assert "No providers are configured" in hint
+    assert str(p) in hint, "the hint must name the config path actually loaded"
+
+    # And it reaches the client, on the surface a chat client actually uses.
+    mod.app.config["TESTING"] = True
+    resp = mod.app.test_client().post("/v1/chat/completions", json={
+        "model": "llmproxy/flagship__free",
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    assert resp.status_code == 503
+    assert "No providers are configured" in resp.get_json()["error"]["message"]
+
+
+def test_provider_hint_is_unchanged_when_providers_exist(client, server):
+    """The no-providers short-circuit must not swallow the pool-shaped hints."""
+    hint = server._virtual_model_hint("llmproxy__vision")
+    assert "No providers are configured" not in hint
