@@ -2736,17 +2736,21 @@ def _warm_route_cache_if_empty() -> None:
 
 
 def _sync_believed_free_from_sidecar(config_path: str | None) -> bool:
-    """Reconcile the live config.json's free-tier sections from the bundled sidecar.
+    """Invoke the updater's config-sync entry point, which is now a no-op.
 
-    Unlike _run_free_models_update this does **no** network scraping and never
-    rewrites providers.json / config.example.json — it only reconciles
-    believed_free / free_limits / model_reasoning / model_capabilities into the
-    user config from the data that already ships in providers.json. Because it
-    never writes the sidecar, it works even when the sidecar is read-only (an
-    installed package or a container image layer), so the shipped/merged
-    free-tier data reaches the live config without the full updater.
+    It once copied providers.json's free-tier sections into config.json. That
+    copy is what froze them: it ran once and the data never moved again. The
+    runtime now reads providers.json directly as the defaults layer, with
+    routing_metadata.json above it and config.json overriding both, so there is
+    nothing left to reconcile.
 
-    Returns True if the sync ran (so the caller can refresh the models cache).
+    The call is kept because --sync-config-only and free_tier.sync_on_startup
+    are documented and still honoured, and because a future deployment may need
+    a real migration here again.
+
+    Returns False always: nothing changed, so the caller must not invalidate the
+    models cache. Reporting a change that did not happen logged a cache
+    invalidation "after update" on every boot, for an update that never ran.
     """
     import os
     import sys
@@ -2771,14 +2775,11 @@ def _sync_believed_free_from_sidecar(config_path: str | None) -> bool:
     if not path:
         logger.warning("[startup-sync] no config path resolved; skipping live sync")
         return False
-    logger.info("[startup-sync] reconciling %s from bundled providers.json", path)
     stream = _LineLoggingStream(lambda line: logger.info("[startup-sync] %s", line))
-    # Serialize against admin config edits: the reconcile is a read-modify-write
-    # of config.json, and the admin API guards its writes with the same lock, so
-    # a concurrent admin edit can't clobber it (and vice versa).
-    from .admin import _locked  # local import: admin is wired after routes
+    # No admin write lock: the call performs no read-modify-write of config.json,
+    # so serializing against concurrent admin edits would block them for nothing.
     try:
-        with _locked(), contextlib.redirect_stdout(stream):
+        with contextlib.redirect_stdout(stream):
             _update_main(["--sync-config-only", "--config", path])
     except SystemExit:
         pass
@@ -2787,7 +2788,7 @@ def _sync_believed_free_from_sidecar(config_path: str | None) -> bool:
         return False
     finally:
         stream.flush()
-    return True
+    return False
 
 
 def _run_free_models_update(config: dict, config_path: str | None) -> bool:
@@ -3967,10 +3968,33 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
 
         config = load_config()
 
+        # 1b. Say plainly, once, when there is nothing to route to. Without this
+        #     the only signal is a "_warning" on /v1/models, which a client that
+        #     only calls /v1/chat/completions never sees — so a server reading an
+        #     empty or wrong config looks healthy in the log while every request
+        #     503s. force_reload confirms on-disk truth before accusing the
+        #     config, matching the check in list_models.
+        if not _enabled_providers(config):
+            recheck = load_config(force_reload=True)
+            if not _enabled_providers(recheck):
+                try:
+                    from .config import get_config_path
+                    where = str(get_config_path(config_path))
+                except Exception:  # noqa: BLE001 — never fail startup over it
+                    where = "unknown"
+                logger.warning(
+                    "[startup] NO PROVIDERS CONFIGURED — every virtual model "
+                    "pool is empty and every request will 503. Config read from "
+                    "%s. Check that this is the file you edited (in Docker, that "
+                    "the bind mount still resolves), then run 'llmproxy --setup'.",
+                    where,
+                )
+
         # 2. Lightweight live-config sync from the bundled sidecar (no network,
-        #    safe on a read-only sidecar). On by default so the shipped/merged
-        #    believed_free data reaches the live config.json every boot; opt out
-        #    with sync_believed_free_on_startup: false.
+        #    safe on a read-only sidecar). The reconcile it once performed is now
+        #    a no-op — providers.json is read directly as the defaults layer — so
+        #    this always reports False and never invalidates the models cache.
+        #    The step is kept because the flag is documented and still honoured.
         synced = False
         if config.get("free_tier", {}).get("sync_on_startup", True) is not False:
             synced = _sync_believed_free_from_sidecar(config_path)
@@ -9906,7 +9930,26 @@ _WHERE_TAGS_LIVE = (
 
 
 def _virtual_model_hint(model_full: str) -> str:
-    """Return a one-sentence config hint for an unavailable virtual model."""
+    """Return a one-sentence config hint for an unavailable virtual model.
+
+    The no-providers case is tested first and names the resolved config path.
+    Every pool is empty when the config has no providers, so the pool-shaped
+    hints below would all describe a symptom while the cause went unnamed — and
+    the cause is frequently that the server is reading a different file than the
+    operator is editing (a stale container bind mount, a wrong LLMPROXY_CONFIG).
+    Printing the path llmproxy actually loaded turns that into a one-step check.
+    """
+    if not _enabled_providers(load_config()):
+        try:
+            from .config import get_config_path
+            where = str(get_config_path(None))
+        except Exception:  # noqa: BLE001 — the hint must never raise
+            where = "unknown"
+        return (
+            f"No providers are configured. llmproxy is reading its config from "
+            f"{where} — check that this is the file you edited (in Docker, that "
+            f"the bind mount still resolves), then run 'llmproxy --setup'."
+        )
     split = _split_per_provider_virtual(model_full)
     if split is not None:
         provider_name, dim = split
@@ -11396,3 +11439,13 @@ def run_server(config_path: str | None = None) -> None:
 from .admin import register_admin  # noqa: E402  (deferred to avoid import cycle)
 
 register_admin(app)
+
+
+# ---------------------------------------------------------------------------
+# Ollama-protocol endpoints (/api/show, /api/tags, ...)
+# ---------------------------------------------------------------------------
+# Registered at import time alongside the admin blueprint. The routes are bare
+# (/show, /tags); _StripApiPrefix maps the /api/* spellings onto them.
+from .ollama import register_ollama  # noqa: E402  (deferred to avoid import cycle)
+
+register_ollama(app)

@@ -84,6 +84,9 @@ WORKDIR /app
 # upstream connectivity (e.g. a provider domain failing to resolve) is awkward.
 # Add a minimal, well-known set: ping (iputils-ping), nslookup/dig (dnsutils),
 # curl, and ip/ss (iproute2). ca-certificates keeps HTTPS verification working.
+# jq is here because every diagnostic in the README pipes an endpoint through it,
+# and reaching for it inside the container is exactly when a deployment is
+# already broken — a missing jq turns a one-line check into a detour.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -91,6 +94,7 @@ RUN apt-get update \
         dnsutils \
         iproute2 \
         iputils-ping \
+        jq \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Install dependencies in a separate layer for cache efficiency ──────────

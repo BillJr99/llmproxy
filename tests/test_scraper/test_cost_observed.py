@@ -2,18 +2,17 @@
 
 When a believed_free model serves a request reporting a non-zero cost the proxy
 records its qualified id in config['cost_observed_free_tier']; the updater must
-then never re-add it to believed_free and must remove it if present — in both the
-sidecar aggregation and the user-config reconcile (the per-boot startup sync).
+then never re-add it to believed_free and must remove it if present.
+
+This once covered the user-config reconcile as well. That path is gone: the
+per-boot sync no longer copies anything into config.json, so the denylist is
+enforced where the data now lives, in the sidecar aggregation below.
 """
 
 from __future__ import annotations
 
 from scripts.sources.base import Evidence
-from scripts.update_free_models import (
-    aggregate,
-    cost_observed_denylist,
-    reconcile_user_config,
-)
+from scripts.update_free_models import aggregate, cost_observed_denylist
 
 
 def _free_evidence(model_id: str) -> Evidence:
@@ -58,27 +57,3 @@ def test_aggregate_denylist_is_case_insensitive():
     sidecar = {"providers": {"openrouter": {"believed_free": ["openrouter/Gemini"]}}}
     out = aggregate([], sidecar, set(), denylist={"openrouter/gemini"})
     assert out["openrouter"]["remove"] == ["openrouter/Gemini"]
-
-
-def test_reconcile_removes_denied_and_blocks_resync():
-    sidecar = {"providers": {"openrouter": {"believed_free": ["openrouter/gemini-2.5-flash"]}}}
-    user_cfg = {
-        "providers": {"openrouter": {"base_url": "x", "api_key": "k"}},
-        "believed_free": ["openrouter/gemini-2.5-flash"],
-        "cost_observed_free_tier": ["openrouter/gemini-2.5-flash"],
-    }
-    changes = reconcile_user_config(sidecar, user_cfg)
-    # Removed from the live config and not re-added from the sidecar.
-    assert "openrouter/gemini-2.5-flash" not in user_cfg["believed_free"]
-    assert "openrouter/gemini-2.5-flash" in changes["believed_free"]["remove"]
-    assert "openrouter/gemini-2.5-flash" not in changes["believed_free"]["add"]
-
-
-def test_reconcile_without_denylist_keeps_model():
-    sidecar = {"providers": {"openrouter": {"believed_free": ["openrouter/gemini-2.5-flash"]}}}
-    user_cfg = {
-        "providers": {"openrouter": {"base_url": "x", "api_key": "k"}},
-        "believed_free": ["openrouter/gemini-2.5-flash"],
-    }
-    reconcile_user_config(sidecar, user_cfg)
-    assert user_cfg["believed_free"] == ["openrouter/gemini-2.5-flash"]

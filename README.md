@@ -754,6 +754,55 @@ need no separate inbound surface — use the OpenAI or Anthropic endpoints for t
 > assume an OpenRouter-/Open WebUI-/Ollama-style base URL (`http://host/api` or
 > `http://host/api/v1`) work without hitting a 404 fallback. The bare `/v1` surface is
 > unchanged. The admin UI/API is **not** aliased — it stays at `/admin` only.
+>
+> Note that this aliases the *base URL*, not the protocol. A client that speaks the
+> Ollama REST API rather than OpenAI-over-`/api` needs the endpoints in
+> [Ollama-protocol endpoints](#ollama-protocol-endpoints) below.
+
+### Ollama-protocol endpoints
+
+Separate from the `/api` base-URL alias above: these answer the Ollama REST API
+itself, for clients that ask an Ollama server about its models rather than asking
+an OpenAI server.
+
+| Endpoint | Method | Returns |
+| --- | --- | --- |
+| `/api/show`, `/show` | POST (GET tolerated) | Metadata for one model or virtual pool: context window, capabilities, family |
+| `/api/tags`, `/tags` | GET | Every model this proxy can route to, in Ollama's `{"models": [...]}` envelope |
+| `/api/ps` | GET | Always `{"models": []}` — llmproxy forwards to upstreams and loads nothing locally |
+| `/api/pull`, `/push`, `/create`, `/copy`, `/delete`, `/blobs/<digest>` | any | `404` with a JSON `{"error": ...}` body |
+
+`/api/show` accepts `{"model": "..."}` and the older `{"name": "..."}`, in any id
+spelling the rest of the proxy accepts (`llmproxy/flagship__free`,
+`llmproxy__flagship/free`, `provider__model`, `provider/model`).
+
+**Why the model-management endpoints exist at all.** llmproxy has no local models
+to pull or delete, so these can only fail. Without a route they failed as Flask's
+*HTML* 404, which a JSON client reports as a parse error that says nothing about
+the cause. They now fail as JSON that names the reason.
+
+**What a virtual pool reports.** A pool has many members, and `/api/show` has room
+for one answer, so the two fields resolve differently and deliberately:
+
+- **Context window: the minimum across current members.** The router may dispatch
+  to any of them, and an ill-fitting candidate is only demoted, never dropped, so
+  advertising more than the smallest member's window invites a prompt an upstream
+  will reject.
+- **Capabilities: the union across members.** Capability gating actively steers
+  toward a capable candidate and drops known-incapable ones, so a capability any
+  member has is one the router can honour. Reporting the intersection would hide
+  tool support that works.
+
+**What is deliberately absent.** `details.quantization_level` is never emitted:
+llmproxy holds no quantization data for any model, and a placeholder would be a
+fabricated hardware claim. `context_length` is omitted when no member reports one,
+rather than defaulted — a missing key lets the client apply its own default
+knowingly, which is better than a confident wrong number. The singular
+`details.family` is omitted for a pool spanning several families, though `families`
+lists them all.
+
+`/version` is unchanged and already satisfies `/api/version`: it returns a
+`version` key, which is what an Ollama client reads.
 
 > **Bare `/models`.** The model listing is additionally served at `/models` and
 > `/models/<id>`, alongside `/v1/models`. Some clients treat their configured base URL as
@@ -1562,7 +1611,18 @@ The rule is narrow, so only the misleading case changes:
 | **Anything else, including any mixture** | **`502`** | No single upstream status can speak for the pool |
 
 So `503` keeps meaning *nothing to try* and `502` means *tried, and all of them
-failed* — the status line alone tells them apart. The upstream body is still
+failed* — the status line alone tells them apart. `GET /v1/failures` confirms
+which one you are on without reading the log: it is empty for a `503` (no
+candidate was ever contacted) and populated for a `502`.
+
+A `503` where *every* pool is empty usually means the proxy has no providers at
+all, and the most common reason is that it is reading a different file than you
+are editing — a container bind mount that no longer resolves, or a stray
+`LLMPROXY_CONFIG`. That case is called out specifically rather than described as
+an empty pool: the error body names the config path llmproxy actually loaded, and
+the same is logged once at startup as
+`[startup] NO PROVIDERS CONFIGURED — ... Config read from <path>`. Compare that
+path with the file you edited before looking at routing at all. The upstream body is still
 included as the diagnostic, alongside a roll-call of every candidate tried:
 
 ```json
@@ -2882,7 +2942,10 @@ the data in the first place.
 
 The flag is still read and the startup step still runs, logging a
 `[startup-sync]` line saying there is nothing to sync. Setting it to `false`
-skips that line and changes nothing else. The same is true of running the
+skips that line and changes nothing else. Because the step changes nothing, it
+no longer reports a change to its caller either, so it does not invalidate the
+`/v1/models` cache on boot — that invalidation used to be logged "after update"
+for an update that never ran. The same is true of running the
 reconcile by hand:
 
 ```bash
