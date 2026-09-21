@@ -34,7 +34,9 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import sys
+import tempfile
 import traceback
 from collections import defaultdict
 from collections.abc import Iterable
@@ -749,8 +751,8 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
         # flagship/free, flagship/local). This block is POLICY only: the
         # membership list itself is deployment-specific (it depends on which
         # providers you configure and what they serve), so it is computed
-        # locally and cached in flagship_models.json beside config.json, never
-        # committed and never hand-edited here.
+        # locally and cached in flagship_models.json in the state directory,
+        # never committed and never hand-edited here.
         #
         #   enabled                   master switch for the tier
         #   min_flagship_free_models  float the bar down until at least this
@@ -807,7 +809,7 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
 def write_config_example(out: Path = CONFIG_EXAMPLE_PATH) -> None:
     sidecar = load_data()
     cfg = regenerate_config_example(sidecar)
-    out.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_text(out, json.dumps(cfg, indent=2) + "\n")
 
 
 def sidecar_fallback_paths(config_path: str | None) -> tuple[Path, Path] | None:
@@ -822,6 +824,39 @@ def sidecar_fallback_paths(config_path: str | None) -> tuple[Path, Path] | None:
         return None
     cfg_dir = Path(config_path).parent
     return cfg_dir / "providers.json", cfg_dir / "config.example.json"
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write *text* to *path* via a temp file in the same directory, then rename.
+
+    providers.json is the defaults layer every routing decision reads, and
+    ``Path.write_text`` truncates before it writes: a failure partway through
+    (a full disk, a filesystem remounted read-only, a container killed
+    mid-write) leaves a truncated file that no longer parses. Because
+    ``providers._cached_data`` is an ``lru_cache``, which does not memoize
+    exceptions, that file raises on every single read from then on, and it
+    survives a restart. Renaming into place makes the swap all-or-nothing, and
+    matches what config.save_config and config._save_state_file already do for
+    the files beside config.json.
+
+    A permission error on the directory raises OSError exactly as the truncating
+    write did, so the caller's read-only-image handling is unchanged.
+    """
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _write_sidecar_fallback(sidecar: dict, config_path: str | None) -> None:
@@ -1276,7 +1311,7 @@ def main(argv: list[str] | None = None) -> int:
     changed = apply_updates(sidecar, updates) or pricing_changed
     if changed:
         try:
-            DATA_PATH.write_text(dump_sidecar(sidecar), encoding="utf-8")
+            _atomic_write_text(DATA_PATH, dump_sidecar(sidecar))
             print(_ok(f"\nUpdated {DATA_PATH}"))
             write_config_example()
             print(_ok(f"Regenerated {CONFIG_EXAMPLE_PATH}"))

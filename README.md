@@ -2566,8 +2566,8 @@ disabling the flagship tier does not also stop llmproxy learning what its models
 can do, and neither source costs anything extra: the provider listings are
 already fetched to build the route cache, and the catalog fetch is the one the
 flagship refresh already makes. The last-run timestamp lives in
-`routing_metadata.json` itself, which sits beside your `config.json` with the
-other machine-managed state files.
+`routing_metadata.json` itself, which sits in the
+[state directory](#state-directory) with the other machine-managed files.
 
 Which layers are machine-written, and on what schedule:
 
@@ -3004,6 +3004,13 @@ off leaves the others running: the sweep's periodic check needs
 `free_tier.sync_on_startup` or `free_tier.update_on_startup`, and the other two
 are gated by `routing_metadata.enabled` and `flagship_tier.enabled`.
 
+All three state files live in the [state directory](#state-directory), and each
+one carries the last-run timestamp that throttles its own job. A job whose
+timestamp cannot be recorded is due on every interval check, so a state
+directory that cannot be written turns all three weekly cadences into a
+continuous loop. llmproxy holds the timestamps in memory when the write fails,
+which keeps the cadences honest for that process, and warns once at startup.
+
 > **The interval keys are not spelled alike, and the nesting differs too.** The
 > routing-metadata refresh and the flagship recompute both use
 > `refresh_frequency_days`, one level down from the top of their block. The
@@ -3072,8 +3079,8 @@ fourth exclusive tier would have done.
 **Nothing about it is shipped or committed.** Which models qualify depends
 entirely on which providers *you* have configured and what each of them
 currently serves, so the list is different for every install. It is computed
-locally into `flagship_models.json` beside your `config.json`, alongside the
-other machine-managed state files. Your config holds only policy — the pin and
+locally into `flagship_models.json` in the [state directory](#state-directory),
+alongside the other machine-managed files. Your config holds only policy — the pin and
 exclude lists.
 
 A prompt's size never drifts into flagship, either. The request-fit heuristic
@@ -3483,7 +3490,9 @@ recompute on every boot.
 **If `flagship_models.json` does not exist yet**, the tier is treated as never
 refreshed, which is always due — so a fresh deployment populates it on first
 boot regardless of `refresh_frequency_days`. You do not need to set the
-frequency to `0` to get a first run.
+frequency to `0` to get a first run. The same rule is why the
+[state directory](#state-directory) has to be writable: a timestamp that can
+never be recorded would leave the tier permanently due.
 
 This is a **separate cadence** from the free-models sweep
 (`free_tier.update_frequency_days`), with its own setting and its own state
@@ -3530,12 +3539,14 @@ Before pushing, the server folds what this deployment learned into the
 facts down by provider and by provenance grade. See
 [what gets PR'd](#routing-metadata).
 
-This works **even when the bundled `providers.json` can't be saved locally** — e.g.
-on a read-only container image. In that case the updater mirrors the computed
-`providers.json` + `config.example.json` into the writable config directory (the
-container's `/config` bind mount) for review, and opens the PR from that computed
-content. (See also: the cost probe's `free_tier.probe.frequency_days` throttle so a startup
-that probes + PRs doesn't spend quota or churn a PR on every restart.)
+This works **even when the bundled `providers.json` can't be saved locally**, for
+example on a read-only container image. The computed `providers.json` and
+`config.example.json` are held in memory for the run and the PR is opened from
+that content; nothing is mirrored into the config directory, because a second
+copy of `providers.json` beside your `config.json` would shadow nothing, drift
+from the shipped file immediately, and invite hand-edits to a machine-written
+file. (See also: the cost probe's `free_tier.probe.frequency_days` throttle so a
+startup that probes + PRs doesn't spend quota or churn a PR on every restart.)
 
 Required / optional settings (all top-level):
 
@@ -3899,9 +3910,10 @@ curated section. See [where routing metadata lives](#routing-metadata).
 and cron entries do not break, and the run prints a line saying the sync is no
 longer needed. `--config PATH` is still worth passing for everything else it
 does: it is where the run reads your `free_tier` settings (whether the cost
-probe is enabled, whether autoremove is on, the shared probe timeout), which
-directory holds `cost_probe_state.json` and `update_state.json`, and which API
-keys the sources may use.
+probe is enabled, whether autoremove is on, the shared probe timeout), where it
+resolves the [state directory](#state-directory) from when `LLMPROXY_STATE_DIR`
+is unset (which is what holds `cost_probe_state.json` and `update_state.json`),
+and which API keys the sources may use.
 
 ### Safety properties
 
@@ -4198,19 +4210,56 @@ docker pull ghcr.io/billjr99/llmproxy:latest
 
 ### First-time setup
 
-Config is bind-mounted from `~/.config/llmproxy` on the host.  The image runs
-as a non-root user by default (no `--user` required); passing
-`--user $(id -u):$(id -g)` makes files created inside the container owned by
-you on the host.
+Config is bind-mounted from `~/.config/llmproxy` on the host. The image runs as
+a non-root user by default (no `--user` required); passing `--user $(id -u):0`
+makes files created inside the container owned by you on the host.
 
 ```bash
 mkdir -p ~/.config/llmproxy
 
 docker run -it --rm \
-  --user $(id -u):$(id -g) \
+  --user $(id -u):0 \
   -v ~/.config/llmproxy:/config \
   -e LLMPROXY_CONFIG=/config/config.json \
   llmproxy --setup
+```
+
+<a name="docker-user-group"></a>
+#### Pass `:0` as the group, not `$(id -g)`
+
+The group matters as much as the user. The image builds its unprivileged user
+into group 0 and hands that group every directory the process writes:
+
+```dockerfile
+RUN useradd --uid 1000 --gid 0 --create-home --home-dir "$HOME" llmproxy \
+    && mkdir -p /config /state "$HOME/.config/llmproxy" \
+    && chgrp -R 0 /config /state "$HOME" /app \
+    && chmod -R g+rwX /config /state "$HOME" /app
+USER 1000:0
+```
+
+Group ownership rather than user ownership is what lets the image run under an
+arbitrary UID, which is the same convention OpenShift requires: the UID may be
+anything, so nothing useful can be keyed to it, but the GID is fixed at 0 and
+the four directories above are group-writable. Those four are the whole set:
+`/config`, `/state`, `/home/llmproxy` and `/app`.
+
+`--user $(id -u):$(id -g)` breaks that. A host GID, normally 1000, is in neither
+group 0 nor the owner of those directories, so only the "other" permission bits
+apply, and `chmod g+rwX` never set a write bit for "other". The container can
+read everything and write nothing.
+
+`:0` confers no root privilege here, because the UID is still yours. It names
+the group those directories are shared with. The symptom of getting this wrong
+is a permission error against `/app` in the logs, from the free-models sweep
+trying to refresh the bundled `providers.json`.
+
+If the host directory was created by Docker rather than by `mkdir`, Docker made
+it root-owned and nothing in the container can write it. Fix the ownership
+rather than the `--user` flag:
+
+```bash
+sudo chown -R $(id -u):$(id -g) ~/.config/llmproxy
 ```
 
 ### Start the server
@@ -4218,12 +4267,19 @@ docker run -it --rm \
 ```bash
 docker run -d \
   -p 8080:8080 \
-  --user $(id -u):$(id -g) \
+  --user $(id -u):0 \
   -v ~/.config/llmproxy:/config \
+  -v llmproxy_state:/state \
   -e LLMPROXY_CONFIG=/config/config.json \
   --name llmproxy \
   llmproxy
 ```
+
+The `llmproxy_state` volume holds what this deployment learns; see
+[where the machine-written state lives](#state-directory) for what goes in it
+and why it is worth keeping. Omitting it is fine for a quick trial, in which
+case the state lives inside the container and is lost when the container is
+removed.
 
 The [web admin UI](#web-admin-ui) is available on the same published port at
 `http://localhost:8080/admin`. Because the container binds `0.0.0.0`, set an
@@ -4234,8 +4290,9 @@ rather than the bind-mounted file:
 ```bash
 docker run -d \
   -p 8080:8080 \
-  --user $(id -u):$(id -g) \
+  --user $(id -u):0 \
   -v ~/.config/llmproxy:/config \
+  -v llmproxy_state:/state \
   -e LLMPROXY_CONFIG=/config/config.json \
   -e LLMPROXY_ADMIN_TOKEN=choose-a-strong-token \
   -e OPENAI_API_KEY=sk-… \
@@ -4247,7 +4304,7 @@ docker run -d \
 
 ```bash
 docker run -it --rm \
-  --user $(id -u):$(id -g) \
+  --user $(id -u):0 \
   -v ~/.config/llmproxy:/config \
   -e LLMPROXY_CONFIG=/config/config.json \
   llmproxy --setup
@@ -4299,32 +4356,151 @@ Docker Desktop.
 If you prefer to keep the config entirely inside Docker (useful for CI or
 rootless environments where a host-path mount is inconvenient), mount the
 named volume over the default config location under the non-root user's home
-(`/home/llmproxy__.config/llmproxy`):
+(`/home/llmproxy/.config/llmproxy`):
 
 ```bash
 # Setup
 docker run -it --rm \
-  -v llmproxy_config:/home/llmproxy__.config/llmproxy \
+  -v llmproxy_config:/home/llmproxy/.config/llmproxy \
   llmproxy --setup
 
 # Server
 docker run -d \
   -p 8080:8080 \
-  -v llmproxy_config:/home/llmproxy__.config/llmproxy \
+  -v llmproxy_config:/home/llmproxy/.config/llmproxy \
+  -v llmproxy_state:/state \
   --name llmproxy \
   llmproxy
 ```
+
+No `--user` flag appears here because the image already runs as its own
+non-root user; the flag is only needed to match ownership with a host directory,
+and a named volume has no host-side ownership to match.
+
+<a name="state-directory"></a>
+### Where the machine-written state lives
+
+llmproxy keeps two kinds of file, and the distinction decides which directory
+each belongs in. `config.json` is yours: you write it, by hand or through the
+wizard or the admin UI, and llmproxy only rewrites it to heal a missing field or
+to drain the five routing keys out of it on first boot. Everything else is the
+proxy's own working memory, rewritten on its own cadence, and never meant to be
+edited by hand.
+
+| File | Directory | What it is |
+|---|---|---|
+| `config.json` | config | Your configuration, plus its `.lock` and the `config.json.backup-*` taken before a routing-key migration |
+| `routing_metadata.json` | state | The learned and curated routing layers, plus its `.lock` |
+| `flagship_models.json` | state | This deployment's computed [flagship tier](#flagship-tier) |
+| `update_state.json` | state | When the [free-models sweep](#the-three-cadences) last ran |
+| `cost_probe_state.json` | state | When the cost probe last ran |
+| `pr_state.json` | state | When a [providers PR](#pr-providers-list) was last opened |
+
+The state directory is `$LLMPROXY_STATE_DIR` when that is set, and otherwise the
+directory holding `config.json`, which is where every one of these files lived
+historically. Setting the variable on an existing deployment does not reset
+anything: each file is read forward from its old location on first use and
+written to the new one.
+
+**The state directory has to be writable.** Each of the last four files carries
+the last-run timestamp that throttles its own refresh, and a refresh with no
+recorded timestamp is due immediately. A directory that cannot be written used
+to mean no timestamp was ever recorded, so every background refresh was
+permanently due and the once-a-minute interval check re-ran a full provider
+scrape for as long as the process lived. llmproxy now keeps the timestamps in
+memory when it cannot persist them, which holds the cadences for that process,
+and says so once at startup:
+
+```
+WARNING  State directory /config is not writable by uid 1000:1000 …
+```
+
+That is a warning rather than a fatal error, because a proxy that routes is more
+useful than one that refuses to start. It is still worth fixing: a deployment in
+that state relearns everything on every restart. See
+[pass `:0` as the group](#docker-user-group) for the usual cause in Docker.
+
+Separating the two directories also lets the config mount be read-only:
+
+```bash
+docker run -d \
+  -p 8080:8080 \
+  --user $(id -u):0 \
+  -v ~/.config/llmproxy:/config:ro \
+  -v llmproxy_state:/state \
+  -e LLMPROXY_CONFIG=/config/config.json \
+  --name llmproxy \
+  llmproxy
+```
+
+The image sets `LLMPROXY_STATE_DIR=/state` by default. To put the state back
+beside `config.json` instead, pass `-e LLMPROXY_STATE_DIR=/config` and drop the
+state volume. Note that a read-only config mount also disables the admin UI's
+config editing and the startup config heal, both of which write `config.json`.
+
+#### The `/state` volume mount
+
+`/state` exists in the image as an ordinary directory, so a container that
+mounts nothing there still starts and still works. What it loses is
+persistence: the directory then lives in the container's writable layer, and
+`docker rm` takes it with the container. The proxy comes back up having
+forgotten its routing metadata, its flagship membership and every refresh
+timestamp, so all three background refreshes run again on the next boot.
+
+Mounting a named volume is what makes that state outlive the container:
+
+```bash
+-v llmproxy_state:/state
+```
+
+Docker creates the volume on first use; nothing needs to be set up in advance.
+It survives `docker stop`, `docker rm`, and re-creating the container against a
+newer image, which is what makes an upgrade cheap. `docker volume rm
+llmproxy_state` is the deliberate way to discard it, and costs only a relearn.
+
+A host path works too, if you would rather see the files directly. It has to be
+writable by the container UID, exactly like the config mount:
+
+```bash
+mkdir -p ~/.local/state/llmproxy
+docker run ... -v ~/.local/state/llmproxy:/state ...
+```
+
+To look inside a named volume, or to back it up:
+
+```bash
+# List what is in there
+docker run --rm -v llmproxy_state:/state alpine ls -la /state
+
+# Copy it out to the current directory
+docker run --rm -v llmproxy_state:/state -v "$PWD":/backup alpine \
+  tar czf /backup/llmproxy_state.tgz -C /state .
+```
+
+None of it is secret and none of it is irreplaceable: every file is something
+llmproxy worked out for itself and can work out again. Keeping it is about not
+re-scraping every provider on every restart, not about protecting data.
+
+One more file sits outside both directories: the bundled
+`llmproxy/providers.json`, which ships inside the image and is refreshed in
+place by the free-models sweep. On a read-only image layer that write fails,
+which is expected and harmless; the sweep computes its update in memory, routing
+uses it for that run, and a [providers PR](#pr-providers-list) can still be
+opened from it.
 
 ---
 
 ## docker-compose
 
-The `docker-compose.yml` uses a bind mount from `~/.config/llmproxy` on the
-host and runs containers as the current user.  Create a `.env` file first so
-Compose picks up your UID/GID:
+The `docker-compose.yml` at the repository root bind-mounts `~/.config/llmproxy`
+from the host, keeps the machine-written state in an `llmproxy_state` named
+volume, and runs containers as your UID in group 0 (see
+[pass `:0` as the group](#docker-user-group) for why the group is 0 rather than
+your own). Create a `.env` file so Compose picks up your UID, and create the
+config directory yourself so Docker does not create it as root:
 
 ```bash
-printf "UID=%s\nGID=%s\n" "$(id -u)" "$(id -g)" > .env
+printf "UID=%s\n" "$(id -u)" > .env
 mkdir -p ~/.config/llmproxy
 ```
 
@@ -4382,20 +4558,26 @@ mkdir -p ~/.config/llmproxy
 
 # First-time setup
 docker run -it --rm \
-  --user $(id -u):$(id -g) \
+  --user $(id -u):0 \
   -v ~/.config/llmproxy:/config \
   -e LLMPROXY_CONFIG=/config/config.json \
   ghcr.io/billjr99/llmproxy:latest --setup
 
 # Start the server
-docker run -d \
-  -p 8080:8080 \
-  --user $(id -u):$(id -g) \
+docker run -d -p 8080:8080 --restart always \
+  --user $(id -u):0 \
   -v ~/.config/llmproxy:/config \
+  -v llmproxy_state:/state \
   -e LLMPROXY_CONFIG=/config/config.json \
   --name llmproxy \
   ghcr.io/billjr99/llmproxy:latest
 ```
+
+`--restart always` brings the proxy back after a daemon restart or a reboot,
+which is what you want for a long-lived deployment. Everything llmproxy has
+learned survives that restart because it is in the `llmproxy_state` volume
+rather than the container; see
+[where the machine-written state lives](#state-directory).
 
 ### Use in docker-compose
 

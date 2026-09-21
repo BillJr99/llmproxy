@@ -2859,23 +2859,14 @@ def _run_free_models_update(config: dict, config_path: str | None) -> bool:
         if os.path.exists(example_file):
             with open(example_file, encoding="utf-8") as fh:
                 example_text = fh.read()
-    else:
-        # Bundled copy unchanged. On a read-only image the updater mirrors the
-        # computed artifacts to the (writable) user-config dir; use those so a
-        # PR can still be opened even though providers.json couldn't be persisted.
-        try:
-            from .config import get_config_path
-            fb_dir = get_config_path(config_path).parent
-            fb_providers = fb_dir / "providers.json"
-            if fb_providers.exists() and fb_providers.read_bytes() != before:
-                providers_text = fb_providers.read_text(encoding="utf-8")
-                fb_example = fb_dir / "config.example.json"
-                if fb_example.exists():
-                    example_text = fb_example.read_text(encoding="utf-8")
-                logger.info("[startup-update] providers.json changed "
-                            "(computed; bundled copy is read-only)")
-        except Exception as exc:  # noqa: BLE001 — fallback detection is best-effort
-            logger.warning("[startup-update] fallback sidecar check failed: %s", exc)
+    # There is no else-branch here on purpose. This used to look for a mirrored
+    # copy of providers.json beside config.json, written by the updater when the
+    # bundled file was read-only. The updater stopped mirroring
+    # (scripts.update_free_models._write_sidecar_fallback is a deliberate no-op:
+    # a second copy beside config.json would shadow nothing, drift immediately,
+    # and invite hand-edits to a machine-written file), so the branch could
+    # never fire. On a read-only image the sweep's changes now stay in memory
+    # and the comparison below simply reports the file as unchanged.
 
     if providers_text is not None:
         _maybe_open_providers_pr(config, providers_text, example_text)
@@ -3720,8 +3711,35 @@ def _maybe_fire_pr_if_due(config: dict, config_path: str | None) -> None:
     if providers_text is None:
         return
     logger.info("[providers-pr] frequency_days interval elapsed — checking for PR")
-    _maybe_open_providers_pr(config, providers_text)
 
+    global _providers_pr_inflight
+    with _providers_pr_lock:
+        if _providers_pr_inflight:
+            return
+        _providers_pr_inflight = True
+
+    def _run() -> None:
+        global _providers_pr_inflight
+        try:
+            _maybe_open_providers_pr(config, providers_text)
+        except Exception as exc:  # noqa: BLE001 — background best-effort
+            logger.warning("[providers-pr] failed: %s", exc)
+        finally:
+            with _providers_pr_lock:
+                _providers_pr_inflight = False
+
+    # On a background thread, like the three refreshes that share this interval
+    # check. _maybe_fire_interval_probes is called from before_request, and
+    # opening a PR is six to eight sequential GitHub round-trips at a 20-second
+    # read timeout each; run inline it holds a gthread worker thread for the
+    # duration and can outlast gunicorn's own request timeout.
+    threading.Thread(target=_run, daemon=True, name="providers-pr").start()
+
+
+# At most one providers PR round-trip at a time, matching the in-flight guards
+# on the three interval refreshes above.
+_providers_pr_lock = threading.Lock()
+_providers_pr_inflight = False
 
 _config_migration_done: bool = False
 _config_migration_lock = threading.Lock()
@@ -3734,8 +3752,18 @@ _config_migration_lock = threading.Lock()
 _routing_sidecar_write_lock = threading.Lock()
 
 
+class RoutingSidecarWriteError(RuntimeError):
+    """The sidecar could not be persisted during a ``require_persist`` txn.
+
+    Most writes to the sidecar are best-effort: a cost observation that cannot
+    be saved is worth a warning, not a failed request. A caller that is about to
+    DESTROY the only other copy of the data it just wrote, though, must know
+    whether the write landed, and that is what ``require_persist`` is for.
+    """
+
+
 @contextlib.contextmanager
-def _routing_sidecar_txn(config_path: str | None = None):
+def _routing_sidecar_txn(config_path: str | None = None, require_persist: bool = False):
     """Exclusive read-modify-write of the sidecar, yielding the state to mutate.
 
     Saves and invalidates the read cache on a clean exit; an exception leaves
@@ -3745,6 +3773,10 @@ def _routing_sidecar_txn(config_path: str | None = None):
     Mirrors ``admin._locked``: a thread lock for this process and an advisory
     file lock for the others, degrading to the thread lock alone where fcntl is
     unavailable rather than blocking every write.
+
+    ``require_persist`` raises RoutingSidecarWriteError when the save did not
+    reach disk. It is off by default because the save is best-effort for almost
+    every caller; turn it on when the next step is irreversible.
     """
     with _routing_sidecar_write_lock:
         handle = None
@@ -3763,8 +3795,12 @@ def _routing_sidecar_txn(config_path: str | None = None):
                         handle = None
             state = load_routing_metadata(config_path)
             yield state
-            save_routing_metadata(state, config_path)
+            persisted = save_routing_metadata(state, config_path)
             _reset_routing_sidecar_cache()
+            if require_persist and not persisted:
+                raise RoutingSidecarWriteError(
+                    f"could not persist {get_routing_metadata_path(config_path)}"
+                )
         finally:
             if handle is not None:
                 try:
@@ -3818,34 +3854,62 @@ def _migrate_config_routing_keys(config_path: str | None = None) -> dict | None:
         return None
 
     report: dict[str, int] = {}
-    with _routing_sidecar_txn(config_path) as state:
-        curated = _curated_facts(state)
-        for key, value in present.items():
-            if key in _ROUTING_LIST_KEYS and isinstance(value, list):
-                existing = curated.get(key)
-                existing = list(existing) if isinstance(existing, list) else []
-                seen = dict.fromkeys(e.lower() for e in existing if isinstance(e, str))
-                added = 0
-                for entry in value:
-                    if isinstance(entry, str) and entry.lower() not in seen:
-                        seen[entry.lower()] = None
-                        added += 1
-                curated[key] = list(seen)
-                report[key] = added
-            elif key in _ROUTING_DICT_KEYS and isinstance(value, dict):
-                existing = curated.get(key)
-                target = dict(existing) if isinstance(existing, dict) else {}
-                added = 0
-                for k, v in value.items():
-                    if isinstance(k, str) and k.lower() not in target:
-                        target[k.lower()] = v      # an existing curated fact wins
-                        added += 1
-                curated[key] = target
-                report[key] = added
+    # require_persist, because the next step deletes these keys from config.json.
+    # If the sidecar write does not reach disk, the drain below would destroy the
+    # only remaining copy of the operator's hand-set routing facts.
+    try:
+        with _routing_sidecar_txn(config_path, require_persist=True) as state:
+            curated = _curated_facts(state)
+            for key, value in present.items():
+                if key in _ROUTING_LIST_KEYS and isinstance(value, list):
+                    existing = curated.get(key)
+                    existing = list(existing) if isinstance(existing, list) else []
+                    seen = dict.fromkeys(e.lower() for e in existing if isinstance(e, str))
+                    added = 0
+                    for entry in value:
+                        if isinstance(entry, str) and entry.lower() not in seen:
+                            seen[entry.lower()] = None
+                            added += 1
+                    curated[key] = list(seen)
+                    report[key] = added
+                elif key in _ROUTING_DICT_KEYS and isinstance(value, dict):
+                    existing = curated.get(key)
+                    target = dict(existing) if isinstance(existing, dict) else {}
+                    added = 0
+                    for k, v in value.items():
+                        if isinstance(k, str) and k.lower() not in target:
+                            target[k.lower()] = v      # an existing curated fact wins
+                            added += 1
+                    curated[key] = target
+                    report[key] = added
+    except RoutingSidecarWriteError as e:
+        print(f"[server:_migrate_config_routing_keys] {e}")
+        traceback.print_exc()
+        logger.warning(
+            "[config-migration] could not persist the curated section to %s; "
+            "leaving the five routing keys in config.json rather than draining "
+            "them into a file that did not save. They are still read as the "
+            "curated layer, so routing is unaffected; the migration will retry "
+            "once the state directory is writable.",
+            get_routing_metadata_path(config_path),
+        )
+        return None
 
+    # Drain config.json only now that the sidecar is known to hold the data.
+    # Mutate a copy: load_config returns its module-level cache object itself,
+    # so popping keys off `config` would strip the snapshot every other reader in
+    # this process sees, whether or not the save below succeeds.
+    drained = dict(config)
     for key in present:
-        config.pop(key, None)
-    save_config(config, config_path)
+        drained.pop(key, None)
+    if not save_config(drained, config_path):
+        logger.warning(
+            "[config-migration] wrote the curated section but could not rewrite "
+            "%s; the five routing keys remain in config.json and will be "
+            "migrated again on the next start. Nothing was lost.",
+            get_config_path(config_path),
+        )
+        return report
 
     logger.info(
         "[config-migration] moved %s from config.json into the sidecar's curated "
@@ -9096,10 +9160,9 @@ def _get_flagship_models(config: dict | None = None,
 
     Membership is never hardcoded and never committed. It depends on which
     providers this deployment has configured and what each currently serves, so
-    it is computed locally and cached in ``flagship_models.json`` beside
-    config.json, alongside the other machine-managed state files. What lives in
-    the user's config is only the policy: ``flagship_tier.pin`` and
-    ``.exclude``.
+    it is computed locally and cached in ``flagship_models.json`` in the state
+    directory, alongside the other machine-managed files. What lives in the
+    user's config is only the policy: ``flagship_tier.pin`` and ``.exclude``.
 
     Pins are applied here rather than only at refresh time so that pinning a
     model takes effect immediately instead of on the next cadence tick, and

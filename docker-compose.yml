@@ -2,10 +2,19 @@
 # llmproxy — docker-compose.yml
 # ============================================================
 #
-# Prerequisites — create a .env file with your UID/GID so that
-# bind-mounted config files are owned by you on the host:
+# Prerequisites: create a .env file with your UID so that bind-mounted config
+# files are owned by you on the host, and create the config directory yourself
+# so Docker does not create it as root:
 #
-#   printf "UID=%s\nGID=%s\n" "$(id -u)" "$(id -g)" > .env
+#   printf "UID=%s\n" "$(id -u)" > .env
+#   mkdir -p ~/.config/llmproxy
+#
+# The group stays 0. The image's writable directories are group-root (see the
+# Dockerfile's useradd stanza), so a host GID of 1000 cannot write them; group 0
+# grants no root privilege here, because the UID is still yours. Machine-written
+# state (routing_metadata.json, flagship_models.json and the refresh timestamps)
+# goes to the llmproxy_state volume rather than onto the config mount, so the
+# config directory can be read-only if you want it to be.
 #
 # Quick start (runs the proxy server):
 #   docker-compose up -d
@@ -32,7 +41,7 @@ services:
     image: llmproxy:latest
     container_name: llmproxy
     restart: unless-stopped
-    user: "${UID:-1000}:${GID:-1000}"
+    user: "${UID:-1000}:${GID:-0}"
     ports:
       - "${LLMPROXY_PORT:-8080}:8080"
     # Public resolvers so upstream provider domains keep resolving even when the
@@ -45,6 +54,7 @@ services:
       - 8.8.8.8
     volumes:
       - "${HOME}/.config/llmproxy:/config"
+      - "llmproxy_state:/state"
     environment:
       - LLMPROXY_CONFIG=/config/config.json
     healthcheck:
@@ -64,12 +74,13 @@ services:
   setup:
     build: .
     image: llmproxy:latest
-    user: "${UID:-1000}:${GID:-1000}"
+    user: "${UID:-1000}:${GID:-0}"
     dns:
       - 1.1.1.1
       - 8.8.8.8
     volumes:
       - "${HOME}/.config/llmproxy:/config"
+      - "llmproxy_state:/state"
     environment:
       - LLMPROXY_CONFIG=/config/config.json
     entrypoint: ["python", "-m", "llmproxy", "--setup"]
@@ -77,3 +88,12 @@ services:
     tty: true          # -t
     profiles:
       - setup          # only started when explicitly requested
+
+# ── Volumes ──────────────────────────────────────────────
+# The state llmproxy accumulates, meaning routing metadata, flagship membership
+# and the last-run timestamps that throttle all three background refreshes, is
+# worth keeping across `docker-compose down`, but it is machine-written and does
+# not belong in the hand-edited config directory. A named volume keeps it out of
+# the way while still surviving the container.
+volumes:
+  llmproxy_state:
