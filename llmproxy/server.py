@@ -7918,7 +7918,12 @@ def _affinity_pinned_target(affinity_key: str | None) -> tuple[str, str] | None:
 
 
 def _reset_affinity_pins() -> None:
-    """Clear every pin. Used by tests and by an explicit usage reset."""
+    """Clear every pin. Used by tests.
+
+    Deliberately NOT part of a usage reset, despite what this docstring used to
+    claim: a pin is routing state, not accounting, and clearing the counters is
+    no reason to scatter every in-flight conversation across the pool.
+    """
     get_backend().reset_affinity()
 
 
@@ -11266,9 +11271,41 @@ def effective_config() -> Response:
     })
 
 
+@app.route("/v1/state", methods=["GET"])
+@app.route("/state", methods=["GET"])
+def state_report() -> Response:
+    """What the routing state is doing, and whether it is shared.
+
+    Admin-gated, unlike /v1/usage and /v1/failures: this names a filesystem
+    path and the worker identities, which is more than an unauthenticated
+    endpoint should hand out.
+
+    It exists for one question -- "is sharing actually on?" -- which has no
+    other symptom. A deployment that asked for four workers and fell back to
+    one because its state directory was unwritable behaves correctly, just
+    without the parallelism, and nothing else would say so. It also answers
+    "why did that scheduled job not run", by naming who holds its lease.
+    """
+    from .admin import enforce_admin_auth  # local import: admin is wired after routes
+    auth_err = enforce_admin_auth()
+    if auth_err is not None:
+        body, status = auth_err
+        return make_response(body, status)
+    try:
+        diagnostics = get_backend().diagnostics()
+    except Exception as exc:  # noqa: BLE001 — a diagnostic must never 500
+        return jsonify({"object": "llmproxy.state", "error": str(exc)})
+    return jsonify({"object": "llmproxy.state", **diagnostics})
+
+
 @app.route("/v1/failures/reset", methods=["POST"])
 def failure_reset() -> Response:
-    """Clear this worker's failure ring. Gated by the admin auth guard."""
+    """Clear the failure ring. Gated by the admin auth guard.
+
+    Deployment-wide when workers share state, which is the only thing that
+    makes it useful: on four workers an operator previously had a one-in-four
+    chance of clearing the ring they were looking at, and no way to tell.
+    """
     from .admin import enforce_admin_auth  # local import: admin is wired after routes
     auth_err = enforce_admin_auth()
     if auth_err is not None:
@@ -11280,7 +11317,12 @@ def failure_reset() -> Response:
 
 @app.route("/v1/usage/reset", methods=["POST"])
 def usage_reset() -> Response:
-    """Clear this worker's usage counters. Gated by the admin auth guard."""
+    """Clear the usage counters. Gated by the admin auth guard.
+
+    Deployment-wide when workers share state, including the ``since`` stamp --
+    otherwise worker B would go on reporting its own boot time after worker A
+    reset, and the numbers underneath it would be from a different window.
+    """
     from .admin import enforce_admin_auth  # local import: admin is wired after routes
     auth_err = enforce_admin_auth()
     if auth_err is not None:

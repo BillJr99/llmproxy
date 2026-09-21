@@ -391,3 +391,56 @@ def test_a_cost_observation_is_first_exactly_once(db):
     their own observation as the first would write it N times."""
     results = [_run(_w_flag_paid_free, db, "p/m") for _ in range(3)]
     assert results == [True, False, False]
+
+
+# ── reporting and reset, across workers ─────────────────────────────────────
+
+def _w_record_failure(db, model, ts, q):
+    from llmproxy.state import SqliteState
+    be = SqliteState(db)
+    be.record_failure({"ts": ts, "model": model, "status": 500})
+    q.put(True)
+    be.close()
+
+
+def _w_failures(db, q):
+    from llmproxy.state import SqliteState
+    be = SqliteState(db)
+    q.put([r["model"] for r in be.failure_records()])
+    be.close()
+
+
+def _w_reset_usage(db, q):
+    from llmproxy.state import SqliteState
+    be = SqliteState(db)
+    q.put(be.reset_usage())
+    be.close()
+
+
+def _w_usage_since(db, q):
+    from llmproxy.state import SqliteState
+    be = SqliteState(db)
+    q.put(be.usage_since)
+    be.close()
+
+
+def test_the_failure_report_covers_every_worker(db):
+    """Per worker, the report meant 'the last failures this worker happened to
+    serve', which was never the question anyone was asking."""
+    import time
+    now = time.time()
+    _run(_w_record_failure, db, "m-from-a", now)
+    _run(_w_record_failure, db, "m-from-b", now + 1)
+    assert _run(_w_failures, db) == ["m-from-b", "m-from-a"]
+
+
+def test_a_reset_in_one_worker_is_a_reset_everywhere(db):
+    """On four workers an operator had a one-in-four chance of resetting the
+    one they cared about, and no way to tell which."""
+    _run(_w_record_usage, db, "p/m", 5)
+    assert _run(_w_usage, db, "p/m")[1] == 5
+
+    stamp = _run(_w_reset_usage, db)
+    assert _run(_w_usage, db, "p/m") == (0, 0)
+    # Otherwise another worker reports its own boot time over reset numbers.
+    assert _run(_w_usage_since, db) == stamp

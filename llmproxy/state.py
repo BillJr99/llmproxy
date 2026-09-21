@@ -192,6 +192,9 @@ class SharedState(Protocol):
     def delete_response(self, response_id: str) -> bool: ...
     def clear_responses(self) -> None: ...
 
+    # — diagnostics —
+    def diagnostics(self) -> dict: ...
+
     # — derived-cache invalidation —
     def bump_cache_epoch(self) -> None: ...
     def cache_epoch(self) -> int: ...
@@ -562,6 +565,35 @@ class InMemoryState:
         with self._response_lock:
             self._responses.clear()
 
+    # — diagnostics ———————————————————————————————————————————————————————
+
+    def diagnostics(self) -> dict:
+        """What an operator needs to answer "is sharing actually on?".
+
+        The question is not rhetorical: a deployment that meant to run several
+        workers and quietly fell back to one has no other symptom, because
+        everything still works.
+        """
+        with self._usage_lock:
+            metered = len(self._usage)
+        with self._saturation_lock:
+            cooling = len(self._saturation)
+        with self._response_lock:
+            conversations = len(self._responses)
+        return {
+            "backend": self.kind,
+            "shared": False,
+            "metered_keys": metered,
+            "cooling_keys": cooling,
+            "stored_conversations": conversations,
+            "affinity_pins": self.affinity_count(),
+            "capability_gap_keys": len(self._capability_gaps),
+            "failures_held": len(self.failure_records()),
+            "leases": self.leases(),
+            "cache_epoch": self.cache_epoch(),
+            "usage_since": self.usage_since,
+        }
+
     # — derived-cache invalidation ————————————————————————————————————————
 
     def bump_cache_epoch(self) -> None:
@@ -741,7 +773,7 @@ def reset_for_worker() -> None:
 # Cross-process implementation
 # ---------------------------------------------------------------------------
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 # The tables this backend owns so far. Everything not listed here still falls
 # through to the in-process storage inherited from InMemoryState, which is
@@ -832,6 +864,14 @@ CREATE TABLE IF NOT EXISTS response (
 ) WITHOUT ROWID;
 
 CREATE INDEX IF NOT EXISTS ix_response_used ON response(last_used);
+
+CREATE TABLE IF NOT EXISTS failure (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts      REAL NOT NULL,
+  payload TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_failure_ts ON failure(ts);
 
 CREATE TABLE IF NOT EXISTS lease (
   job         TEXT PRIMARY KEY,
@@ -930,7 +970,7 @@ class SqliteState(InMemoryState):
                     for table in ("usage_second", "usage_day", "usage_model",
                                   "outcome", "paid_free", "capability_gap",
                                   "saturation", "oversize", "affinity_pin",
-                                  "lease", "response", "meta"):
+                                  "lease", "response", "failure", "meta"):
                         conn.execute(f"DROP TABLE IF EXISTS {table}")
             # Statement by statement, not executescript(): that issues its own
             # COMMIT first, which would silently end the transaction this
@@ -966,7 +1006,7 @@ class SqliteState(InMemoryState):
         try:
             for table in ("usage_second", "usage_day", "usage_model", "outcome",
                           "paid_free", "capability_gap", "saturation", "oversize",
-                          "affinity_pin", "lease", "response"):
+                          "affinity_pin", "lease", "response", "failure"):
                 conn.execute(f"DELETE FROM {table}")
             conn.execute("COMMIT")
         except Exception:
@@ -998,6 +1038,7 @@ class SqliteState(InMemoryState):
         # Two minutes of second-buckets, for a sixty-second window: enough slack
         # that a read straddling the boundary never sees a hole.
         conn.execute("DELETE FROM usage_second WHERE sec < ?", (int(now) - 120,))
+        conn.execute("DELETE FROM failure WHERE ts < ?", (now - FAILURE_LOG_TTL_S,))
         from .usage import day_key
         conn.execute("DELETE FROM usage_day WHERE day_key < ?", (day_key(),))
 
@@ -1562,3 +1603,90 @@ class SqliteState(InMemoryState):
             for r in self._conn().execute(
                 "SELECT key, cost, source, n FROM paid_free").fetchall()
         }
+
+    # — diagnostics ———————————————————————————————————————————————————————
+
+    def diagnostics(self) -> dict:
+        conn = self._conn()
+
+        def _count(table: str) -> int:
+            try:
+                return conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
+            except Exception:  # noqa: BLE001 — a diagnostic must not raise
+                return -1
+
+        try:
+            page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+            page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+            size_bytes = page_count * page_size
+            journal = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        except Exception:  # noqa: BLE001
+            size_bytes, journal = -1, "unknown"
+
+        from .usage import day_key
+
+        return {
+            "backend": self.kind,
+            "shared": True,
+            "path": str(self.path),
+            "journal_mode": journal,
+            "size_bytes": size_bytes,
+            "schema_version": _SCHEMA_VERSION,
+            "worker": self.worker,
+            "day_key": day_key(),
+            "metered_keys": _count("usage_model"),
+            "cooling_keys": _count("saturation"),
+            "stored_conversations": _count("response"),
+            "affinity_pins": _count("affinity_pin"),
+            "capability_gap_keys": _count("capability_gap"),
+            "failures_held": _count("failure"),
+            "outcome_rows": _count("outcome"),
+            "leases": self.leases(),
+            "cache_epoch": self.cache_epoch(),
+            "usage_since": self.usage_since,
+        }
+
+    # — failure ring ——————————————————————————————————————————————————————
+
+    def record_failure(self, record: dict) -> None:
+        """Append, then trim to the cap.
+
+        The cap becomes 250 for the whole deployment rather than 250 per
+        worker. That is a change, and on balance a fix: the report finally
+        means "the last 250 failures" rather than "the last 250 this worker
+        happened to serve", which was never the question anyone was asking.
+        """
+        import json
+
+        self._write([
+            (
+                "INSERT INTO failure(ts, payload) VALUES(?, ?)",
+                (record.get("ts", time.time()), json.dumps(record)),
+            ),
+            (
+                "DELETE FROM failure WHERE id <= "
+                "(SELECT MIN(id) FROM (SELECT id FROM failure ORDER BY id DESC "
+                "                      LIMIT ?)) - 1",
+                (FAILURE_LOG_MAX,),
+            ),
+        ])
+
+    def failure_records(self, since_ts: float | None = None) -> list[dict]:
+        import json
+
+        cutoff = time.time() - FAILURE_LOG_TTL_S
+        if since_ts is not None:
+            cutoff = max(cutoff, since_ts)
+        rows = self._conn().execute(
+            "SELECT payload FROM failure WHERE ts >= ? ORDER BY id DESC", (cutoff,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            try:
+                out.append(json.loads(r["payload"]))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def reset_failures(self) -> None:
+        self._write([("DELETE FROM failure", ())])
