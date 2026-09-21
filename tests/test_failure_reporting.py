@@ -72,7 +72,7 @@ def _cycle(S, monkeypatch, per_candidate, candidates):
     return S._proxy_cycling_non_streaming(
         "chat/completions", "flagship__free",
         [(pn, {}, um) for pn, um in candidates], {}, 5,
-        route_reason="flagship_rank", virtual_model="llmproxy__flagship/free",
+        route_reason="flagship_scored", virtual_model="llmproxy__flagship/free",
     )
 
 

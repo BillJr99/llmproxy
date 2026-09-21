@@ -557,7 +557,7 @@ def _dispatch(server, monkeypatch, model):
 def test_a_ranked_pick_names_the_ranking_that_produced_it(
         ranked_server, monkeypatch, model):
     got = _dispatch(ranked_server, monkeypatch, model)
-    assert got["route_reason"].startswith("flagship_rank=4/4")
+    assert got["route_reason"].startswith("flagship_scored=4/4")
     assert got["ordered"][0] == ("alpha", "small-ace")
 
 
@@ -565,7 +565,7 @@ def test_an_unranked_pool_reports_the_ordering_it_actually_used(server, monkeypa
     """No scores cached: claiming a ranking we do not have would be worse than
     the stale behaviour itself."""
     got = _dispatch(server, monkeypatch, "llmproxy__flagship")
-    assert "flagship_rank" not in got["route_reason"]
+    assert "flagship_scored" not in got["route_reason"]
     assert got["route_reason"].startswith(server.ROUTE_SOURCE_CYCLING)
 
 
@@ -580,7 +580,7 @@ def test_a_partly_scored_pool_says_how_much_of_it_was_ranked(
     monkeypatch.setattr(ranked_server, "_get_flagship_models",
                         lambda *a, **k: {"alpha/small-ace", "alpha/ghost"})
     got = _dispatch(ranked_server, monkeypatch, "llmproxy__flagship")
-    assert got["route_reason"].startswith("flagship_rank=1/2")
+    assert got["route_reason"].startswith("flagship_scored=1/2")
     assert got["ordered"] == [("alpha", "small-ace"), ("alpha", "ghost")]
 
 
@@ -820,3 +820,55 @@ def test_serving_unranked_says_so_once(ranked_server, monkeypatch, caplog):
     warnings = [r for r in caplog.records if "UNRANKED" in r.getMessage()]
     assert len(warnings) == 1
     assert "refresh_frequency_days" in warnings[0].getMessage()
+
+
+def test_scored_tag_is_a_count_and_says_nothing_about_the_winner(
+        ranked_server, monkeypatch):
+    """flagship_scored=N/M counts how much of the pool is ranked. It is NOT the
+    position of the chosen candidate.
+
+    Regression guard for a real misdiagnosis: the tag was called flagship_rank,
+    and two readers in a row took `9/9` for "ninth of nine" and concluded the
+    ordering was inverted. The value is constant for a fully-scored pool no
+    matter which candidate wins, which is exactly what this asserts.
+    """
+    got = _dispatch(ranked_server, monkeypatch, "llmproxy__flagship")
+    assert got["route_reason"].startswith("flagship_scored=4/4")
+    # The top-ranked candidate is first, so 4/4 cannot be its position.
+    assert got["ordered"][0] == ("alpha", "small-ace")
+    assert "flagship_rank=" not in got["route_reason"]
+
+
+def test_the_attempt_log_names_the_position_actually_tried(
+        ranked_server, monkeypatch, caplog):
+    """The position of the model chosen has to be readable somewhere, since the
+    scored tag deliberately does not carry it. For a flagship pool the walk
+    order is the benchmark order, so this <n> is the rank that served."""
+    import logging
+
+    from flask import Response
+
+    real_cycle = ranked_server._proxy_cycling_non_streaming
+
+    def _one_candidate(endpoint, model_full, ordered, payload, timeout, **kwargs):
+        # Keep the pool but make the first candidate answer, so exactly one
+        # "trying candidate" line is emitted.
+        return real_cycle(endpoint, model_full, ordered[:1], payload, timeout, **kwargs)
+
+    monkeypatch.setattr(ranked_server, "_sync_local_provider_models_once", lambda: None)
+    monkeypatch.setattr(
+        ranked_server, "_proxy_request",
+        lambda *a, **k: Response(b'{"ok": true}', status=200,
+                                 content_type="application/json"),
+    )
+    monkeypatch.setattr(ranked_server, "_proxy_cycling_non_streaming", _one_candidate)
+
+    with caplog.at_level(logging.INFO, logger="llmproxy.server"):
+        resp = ranked_server.app.test_client().post(
+            "/v1/chat/completions",
+            json={"model": "llmproxy__flagship",
+                  "messages": [{"role": "user", "content": "hi"}]},
+        )
+    assert resp.status_code == 200
+    lines = [r.getMessage() for r in caplog.records]
+    assert any("trying candidate 1/1:" in line for line in lines), lines

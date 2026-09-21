@@ -5942,7 +5942,7 @@ def _wants_thinking(payload: dict) -> bool:
 ROUTE_SOURCE_CAPACITY = "capacity"
 ROUTE_SOURCE_LOADBALANCED = "loadbalanced"
 ROUTE_SOURCE_CYCLING = "cycling"
-ROUTE_SOURCE_FLAGSHIP_RANK = "flagship_rank"
+ROUTE_SOURCE_FLAGSHIP_RANK = "flagship_scored"
 ROUTE_SOURCE_REQUEST_FIT = "request_fit"
 ROUTE_SOURCE_CAPABILITY = "capability"
 ROUTE_SOURCE_FAVORITE = "favorite"
@@ -7155,7 +7155,8 @@ def _proxy_cycling_non_streaming(
         )
         max_attempts = _candidate_max_attempts(idx, total)
         for attempt in range(max_attempts):
-            logger.info("  [%s] trying %s/%s", label, provider_name, upstream_model)
+            logger.info("  [%s] trying candidate %d/%d: %s/%s",
+                        label, idx + 1, total, provider_name, upstream_model)
             _started = time.monotonic()
             resp = _proxy_request(endpoint, provider_name, provider_cfg, upstream_payload, attempt_timeout)
             _elapsed_ms = (time.monotonic() - _started) * 1000.0
@@ -7388,7 +7389,8 @@ def _proxy_cycling_streaming(
         resp = None
         _open_started = time.monotonic()
         for attempt in range(max_attempts):
-            logger.info("  [%s] trying %s/%s  [streaming]", label, provider_name, upstream_model)
+            logger.info("  [%s] trying candidate %d/%d: %s/%s  [streaming]",
+                        label, idx + 1, total, provider_name, upstream_model)
             try:
                 resp = requests.post(url, headers=headers, json=body, stream=True,
                                      timeout=(attempt_timeout, read_timeout))
@@ -10591,6 +10593,14 @@ def _proxy_endpoint(
             if flagship_ranked:
                 ordered = _flagship_ordered_candidates(
                     candidates, flagship_scores, free_limits)
+                # A COUNT of how many pool members carry a benchmark score, over
+                # the pool size -- not a position. "9/9" means the ranking is
+                # fully available, which is the healthy state; it says nothing
+                # about which candidate won. It was named flagship_rank, and
+                # both a human reader and an agent independently read that as
+                # "ninth of nine" and concluded the ordering was inverted. The
+                # position that WAS chosen is reported per attempt, by the
+                # "trying <n>/<total>" line below and by failover#<n>.
                 decisions.append(
                     f"{ROUTE_SOURCE_FLAGSHIP_RANK}={ranked}/{len(candidates)}")
             else:
