@@ -303,3 +303,79 @@ def test_set_backend_installs_an_explicit_one():
         assert state.get_backend() is mine
     finally:
         state.set_backend(None)
+
+
+# ── single-flight leases ────────────────────────────────────────────────────
+
+def test_a_lease_is_held_by_one_claimant(backend):
+    token = backend.acquire_lease("job", 60)
+    assert token
+    assert backend.acquire_lease("job", 60) is None
+
+
+def test_releasing_lets_the_next_claimant_in(backend):
+    token = backend.acquire_lease("job", 60)
+    backend.release_lease("job", token)
+    assert backend.acquire_lease("job", 60) is not None
+
+
+def test_different_jobs_do_not_block_each_other(backend):
+    assert backend.acquire_lease("a", 60)
+    assert backend.acquire_lease("b", 60)
+
+
+def test_an_expired_lease_can_be_taken_over(backend):
+    """The reason this is a lease and not a flag: a worker that dies mid-job
+    leaves a flag set forever, so the job never runs again."""
+    backend.acquire_lease("job", 0.01)
+    time.sleep(0.05)
+    assert backend.acquire_lease("job", 60) is not None
+
+
+def test_an_overrun_holder_cannot_release_the_new_one(backend):
+    """Holder-scoped release. Otherwise a slow job, taken over after its TTL,
+    would free the lease its successor is relying on as it exits."""
+    stale = backend.acquire_lease("job", 0.01)
+    time.sleep(0.05)
+    fresh = backend.acquire_lease("job", 60)
+    backend.release_lease("job", stale)          # the overrun holder exiting
+    assert backend.acquire_lease("job", 60) is None, "the new holder lost its lease"
+    backend.release_lease("job", fresh)
+    assert backend.acquire_lease("job", 60) is not None
+
+
+def test_a_lease_can_be_renewed_by_its_holder(backend):
+    token = backend.acquire_lease("job", 0.05)
+    assert backend.renew_lease("job", token, 60) is True
+    time.sleep(0.1)
+    assert backend.acquire_lease("job", 60) is None, "renewal did not extend it"
+
+
+def test_renewing_someone_elses_lease_fails(backend):
+    backend.acquire_lease("job", 60)
+    assert backend.renew_lease("job", "not-the-holder", 60) is False
+
+
+def test_leases_are_listed_for_diagnostics(backend):
+    """An flock is invisible; the question being asked is 'why did this not run'."""
+    backend.acquire_lease("job", 60)
+    held = backend.leases()
+    assert [row["job"] for row in held] == ["job"]
+    assert held[0]["expires_in"] > 0
+
+
+def test_an_expired_lease_is_not_listed_as_held(backend):
+    backend.acquire_lease("job", 0.01)
+    time.sleep(0.05)
+    assert backend.leases() == []
+
+
+# ── derived-cache invalidation ──────────────────────────────────────────────
+
+def test_the_cache_epoch_advances(backend):
+    """Background jobs run on one worker now, so the others need telling."""
+    start = backend.cache_epoch()
+    backend.bump_cache_epoch()
+    assert backend.cache_epoch() == start + 1
+    backend.bump_cache_epoch()
+    assert backend.cache_epoch() == start + 2

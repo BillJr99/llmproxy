@@ -96,6 +96,16 @@ class SharedState(Protocol):
     def affinity_count(self) -> int: ...
     def reset_affinity(self) -> None: ...
 
+    # — derived-cache invalidation —
+    def bump_cache_epoch(self) -> None: ...
+    def cache_epoch(self) -> int: ...
+
+    # — cross-process single-flight —
+    def acquire_lease(self, job: str, ttl_s: float) -> str | None: ...
+    def renew_lease(self, job: str, token: str, ttl_s: float) -> bool: ...
+    def release_lease(self, job: str, token: str) -> None: ...
+    def leases(self) -> list[dict]: ...
+
     # — failure ring —
     def record_failure(self, record: dict) -> None: ...
     def failure_records(self, since_ts: float | None = None) -> list[dict]: ...
@@ -160,6 +170,13 @@ class InMemoryState:
 
         self._failures: deque = deque(maxlen=FAILURE_LOG_MAX)
         self._failure_lock = threading.Lock()
+
+        # job -> (holder token, monotonic expiry)
+        self._leases: dict[str, tuple[str, float]] = {}
+        self._lease_lock = threading.Lock()
+
+        self._cache_epoch = 0
+        self._cache_epoch_lock = threading.Lock()
 
     # — usage —————————————————————————————————————————————————————————————
 
@@ -400,6 +417,74 @@ class InMemoryState:
         with self._affinity_lock:
             self._affinity.clear()
 
+    # — derived-cache invalidation ————————————————————————————————————————
+
+    def bump_cache_epoch(self) -> None:
+        """Signal that caches derived from config or routing data are stale.
+
+        Needed because background jobs run on ONE worker now. Before leases,
+        every worker ran the refresh and invalidated its own copy; now the other
+        workers never see the invalidation and would serve a stale model list
+        until their TTL lapsed. A counter each worker reads costs a dict lookup
+        and an int compare.
+        """
+        with self._cache_epoch_lock:
+            self._cache_epoch += 1
+
+    def cache_epoch(self) -> int:
+        with self._cache_epoch_lock:
+            return self._cache_epoch
+
+    # — single-flight leases ——————————————————————————————————————————————
+
+    def acquire_lease(self, job: str, ttl_s: float) -> str | None:
+        """Claim *job*, or None if someone already holds it.
+
+        Replaces a plain "is it running" boolean, and is strictly better than
+        one even in a single process: a worker that dies without releasing
+        leaves a flag set forever, whereas a lease lapses. The job can then run
+        again instead of never running again.
+        """
+        import uuid
+
+        now = time.monotonic()
+        token = uuid.uuid4().hex
+        with self._lease_lock:
+            held = self._leases.get(job)
+            if held is not None and held[1] > now:
+                return None
+            self._leases[job] = (token, now + ttl_s)
+            return token
+
+    def renew_lease(self, job: str, token: str, ttl_s: float) -> bool:
+        """Extend a lease this holder still owns. For jobs that outrun their TTL."""
+        with self._lease_lock:
+            held = self._leases.get(job)
+            if held is None or held[0] != token:
+                return False
+            self._leases[job] = (token, time.monotonic() + ttl_s)
+            return True
+
+    def release_lease(self, job: str, token: str) -> None:
+        """Release, but only if still the holder.
+
+        Holder-scoped so a job that overran its TTL and was taken over cannot
+        release the new holder's lease on its way out.
+        """
+        with self._lease_lock:
+            held = self._leases.get(job)
+            if held is not None and held[0] == token:
+                del self._leases[job]
+
+    def leases(self) -> list[dict]:
+        now = time.monotonic()
+        with self._lease_lock:
+            return [
+                {"job": job, "holder": tok, "expires_in": round(exp - now, 1)}
+                for job, (tok, exp) in sorted(self._leases.items())
+                if exp > now
+            ]
+
     # — failure ring ——————————————————————————————————————————————————————
 
     def record_failure(self, record: dict) -> None:
@@ -511,7 +596,7 @@ def reset_for_worker() -> None:
 # Cross-process implementation
 # ---------------------------------------------------------------------------
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 # The tables this backend owns so far. Everything not listed here still falls
 # through to the in-process storage inherited from InMemoryState, which is
@@ -548,6 +633,13 @@ CREATE TABLE IF NOT EXISTS affinity_pin (
 ) WITHOUT ROWID;
 
 CREATE INDEX IF NOT EXISTS ix_affinity_seen ON affinity_pin(seen_at);
+
+CREATE TABLE IF NOT EXISTS lease (
+  job         TEXT PRIMARY KEY,
+  holder      TEXT NOT NULL,
+  acquired_at REAL NOT NULL,
+  expires_at  REAL NOT NULL
+) WITHOUT ROWID;
 """
 
 _DDL_STATEMENTS = [st.strip() for st in _DDL.split(";") if st.strip()]
@@ -637,7 +729,7 @@ class SqliteState(InMemoryState):
                     "SELECT v FROM meta WHERE k='schema_version'").fetchone()
                 if row is None or int(row["v"]) != _SCHEMA_VERSION:
                     for table in ("capability_gap", "saturation", "oversize",
-                                  "affinity_pin", "meta"):
+                                  "affinity_pin", "lease", "meta"):
                         conn.execute(f"DROP TABLE IF EXISTS {table}")
             # Statement by statement, not executescript(): that issues its own
             # COMMIT first, which would silently end the transaction this
@@ -671,7 +763,8 @@ class SqliteState(InMemoryState):
         conn = self._conn()
         conn.execute("BEGIN IMMEDIATE")
         try:
-            for table in ("capability_gap", "saturation", "oversize", "affinity_pin"):
+            for table in ("capability_gap", "saturation", "oversize",
+                          "affinity_pin", "lease"):
                 conn.execute(f"DELETE FROM {table}")
             conn.execute("COMMIT")
         except Exception:
@@ -696,6 +789,10 @@ class SqliteState(InMemoryState):
             "  SELECT akey FROM affinity_pin ORDER BY seen_at DESC LIMIT -1 OFFSET ?)",
             (AFFINITY_PIN_MAX,),
         )
+        # Long after expiry, so a lapsed lease stays visible on the diagnostics
+        # endpoint for a while: "who ran this last, and when" is the question
+        # being asked when a scheduled job did not happen.
+        conn.execute("DELETE FROM lease WHERE expires_at < ?", (now - 3600,))
 
     def _write(self, statements) -> int:
         """Run statements in one BEGIN IMMEDIATE; returns the last changes()."""
@@ -826,3 +923,76 @@ class SqliteState(InMemoryState):
 
     def reset_affinity(self) -> None:
         self._write([("DELETE FROM affinity_pin", ())])
+
+    # — single-flight leases ——————————————————————————————————————————————
+
+    def acquire_lease(self, job: str, ttl_s: float) -> str | None:
+        """Claim *job* across every worker on this host, atomically.
+
+        SQLite rather than an flock, for three reasons. An flock is released
+        when a process dies but NOT when it hangs, so a worker stuck in a
+        twenty-minute scrape would hold it forever and the job could never run
+        again; a lease expires. The bug being fixed is also not really a mutex
+        bug -- the due-check reads a timestamp written at the END of a job that
+        takes minutes, so the "due" window is minutes wide and every worker
+        passes its own in-process flag -- and making the check-and-claim atomic
+        is a compare-and-set, which this is. And a lease is visible to an
+        operator asking why a job did not run, where an flock is not.
+        """
+        import uuid
+
+        now = time.time()
+        token = uuid.uuid4().hex
+        claimed = self._write([(
+            "INSERT INTO lease(job, holder, acquired_at, expires_at) "
+            "VALUES(?, ?, ?, ?) "
+            "ON CONFLICT(job) DO UPDATE SET holder=excluded.holder, "
+            "acquired_at=excluded.acquired_at, expires_at=excluded.expires_at "
+            "WHERE lease.expires_at < excluded.acquired_at",
+            (job, token, now, now + ttl_s),
+        )])
+        return token if claimed else None
+
+    def renew_lease(self, job: str, token: str, ttl_s: float) -> bool:
+        return self._write([(
+            "UPDATE lease SET expires_at = ? WHERE job = ? AND holder = ?",
+            (time.time() + ttl_s, job, token),
+        )]) > 0
+
+    def release_lease(self, job: str, token: str) -> None:
+        self._write([(
+            "DELETE FROM lease WHERE job = ? AND holder = ?", (job, token),
+        )])
+
+    def leases(self) -> list[dict]:
+        now = time.time()
+        rows = self._conn().execute(
+            "SELECT job, holder, acquired_at, expires_at FROM lease "
+            "WHERE expires_at > ? ORDER BY job", (now,),
+        ).fetchall()
+        return [
+            {
+                "job": r["job"],
+                "holder": r["holder"],
+                "expires_in": round(r["expires_at"] - now, 1),
+                "held_for": round(now - r["acquired_at"], 1),
+            }
+            for r in rows
+        ]
+
+    # — derived-cache invalidation ————————————————————————————————————————
+
+    def bump_cache_epoch(self) -> None:
+        self._write([(
+            "INSERT INTO meta(k, v) VALUES('cache_epoch', '1') "
+            "ON CONFLICT(k) DO UPDATE SET v = CAST(CAST(meta.v AS INTEGER) + 1 AS TEXT)",
+            (),
+        )])
+
+    def cache_epoch(self) -> int:
+        row = self._conn().execute(
+            "SELECT v FROM meta WHERE k = 'cache_epoch'").fetchone()
+        try:
+            return int(row["v"]) if row else 0
+        except (TypeError, ValueError):
+            return 0

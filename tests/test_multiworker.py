@@ -223,3 +223,55 @@ def test_truncate_clears_what_a_restart_should_not_inherit(db):
 
     assert _run(_w_is_saturated, db, "p/m") is False
     assert _run(_w_is_oversize, db, "p/m", 5000) is False
+
+
+# ── single-flight across processes ──────────────────────────────────────────
+
+def _w_claim(db, job, ttl, barrier_name, q):
+    """Claim a job, synchronising first so the four processes really collide."""
+    from llmproxy.state import SqliteState
+    be = SqliteState(db)
+    q.put(bool(be.acquire_lease(job, ttl)))
+    be.close()
+
+
+def _w_bump_epoch(db, n, q):
+    from llmproxy.state import SqliteState
+    be = SqliteState(db)
+    for _ in range(n):
+        be.bump_cache_epoch()
+    q.put(be.cache_epoch())
+    be.close()
+
+
+def test_exactly_one_process_wins_a_lease(db):
+    """The bug: N workers each launching the same full provider scrape, each
+    spending cost-probe quota, each opening a GitHub pull request."""
+    procs, queues = [], []
+    for _ in range(4):
+        q = _CTX.Queue()
+        p = _CTX.Process(target=_w_claim, args=(db, "free-models-update", 300, "b", q))
+        p.start()
+        procs.append(p)
+        queues.append(q)
+    won = [q.get(timeout=60) for q in queues]
+    for p in procs:
+        p.join(timeout=60)
+        assert p.exitcode == 0
+    assert sum(won) == 1, f"expected one winner, got {won}"
+
+
+def test_a_lapsed_lease_is_reclaimable_by_another_process(db):
+    """A worker killed mid-scrape must not block the job forever. This is the
+    whole reason it is a lease with a TTL and not an flock."""
+    assert _run(_w_claim, db, "job", 0.01, "b") is True
+    import time
+    time.sleep(0.05)
+    assert _run(_w_claim, db, "job", 60, "b") is True
+
+
+def test_the_cache_epoch_is_shared(db):
+    """Only one worker runs a refresh now, so the others learn the model list is
+    stale from this counter rather than from nulling their own cache."""
+    _run(_w_bump_epoch, db, 3)
+    assert _run(_w_bump_epoch, db, 2) == 5

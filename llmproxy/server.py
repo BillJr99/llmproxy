@@ -383,8 +383,8 @@ _cost_observed_persist_lock = threading.Lock()
 # At most one background sidecar-update+PR reaction runs at a time; a run reads
 # the freshly-persisted config, so it covers every entry recorded before it
 # started. Concurrent observations skip rather than pile up duplicate scrapes.
-_cost_observed_reaction_lock = threading.Lock()
-_cost_observed_reaction_inflight = False
+# Held as a lease now (see _claim_job), so "at a time" means across every
+# worker rather than within one.
 COST_OBSERVED_KEY = "cost_observed_free_tier"
 
 
@@ -828,25 +828,22 @@ def _react_to_cost_observed_async() -> None:
     if not (pr_enabled or free_tier.get("update_on_startup") is True):
         return  # operator hasn't opted into sidecar updates / PRs
 
-    global _cost_observed_reaction_inflight
-    with _cost_observed_reaction_lock:
-        if _cost_observed_reaction_inflight:
-            return
-        _cost_observed_reaction_inflight = True
+    token = _claim_job("cost-observed-react")
+    if token is None:
+        return
 
     def _run() -> None:
-        global _cost_observed_reaction_inflight
         try:
             logger.info("[usage] propagating cost_observed change to sidecar / PR")
             _run_free_models_update(load_config(), None)
             with _models_list_cache_lock:
                 global _models_list_cache
                 _models_list_cache = None
+                get_backend().bump_cache_epoch()
         except Exception as exc:  # noqa: BLE001 — background best-effort
             logger.warning("[usage] cost_observed propagation failed: %s", exc)
         finally:
-            with _cost_observed_reaction_lock:
-                _cost_observed_reaction_inflight = False
+            _release_job("cost-observed-react", token)
 
     threading.Thread(target=_run, daemon=True, name="cost-observed-react").start()
 
@@ -1070,9 +1067,6 @@ _PROBE_INTERVAL_GATE_SEC = 60   # check state files at most once per minute
 _last_probe_interval_check: float = 0.0
 _probe_interval_check_lock = threading.Lock()
 
-_free_update_inflight: bool = False
-_free_update_lock = threading.Lock()
-_flagship_refresh_inflight: bool = False
 # Latched the first time a flagship pool is served without a ranking, so the
 # explanation is logged once rather than on every request. The route reason
 # already carries the fact, but nobody reads a header until something looks
@@ -1083,9 +1077,9 @@ _flagship_unranked_warned: bool = False
 # meet the guarantee it advertises; saying it every interval tick would bury
 # the log.
 _flagship_floor_warned: bool = False
-_flagship_refresh_lock = threading.Lock()
-_cost_probe_inflight: bool = False
-_cost_probe_lock = threading.Lock()
+# The interval refreshes themselves are single-flighted by lease (_claim_job),
+# not by a per-process flag: a flag only ever deduplicated within one worker,
+# so N workers each ran the whole scrape.
 
 # ---------------------------------------------------------------------------
 # Short-lived response cache (non-streaming only)
@@ -2798,6 +2792,51 @@ def _run_free_models_update(config: dict, config_path: str | None) -> bool:
     return True
 
 
+# Background jobs that must run once per deployment, not once per worker.
+#
+# Each was guarded by an in-process boolean, which only ever deduplicated within
+# one process. With several workers all N launched the same full provider
+# scrape, all N spent cost-probe quota, and all N opened a GitHub pull request.
+#
+# The TTL is a ceiling on how long one run may hold the job, not an estimate of
+# how long it takes: if the holder dies mid-run the job becomes claimable again
+# once it lapses, where a boolean would have stayed set until the process
+# restarted.
+_JOB_TTLS: dict[str, float] = {
+    "free-models-update": 30 * 60,
+    "flagship-refresh": 15 * 60,
+    "cost-probe": 30 * 60,
+    "routing-metadata": 15 * 60,
+    "providers-pr": 10 * 60,
+    "cost-observed-react": 10 * 60,
+    "config-routing-migration": 5 * 60,
+}
+
+
+def _claim_job(job: str) -> str | None:
+    """Claim *job* for this deployment, or None if someone else holds it.
+
+    Same shape as the ``if _x_inflight: return`` it replaces, so the call sites
+    barely change -- but the claim is atomic across processes rather than only
+    across the threads of one.
+    """
+    try:
+        return get_backend().acquire_lease(job, _JOB_TTLS.get(job, 900))
+    except Exception as e:  # noqa: BLE001 — a background job must never fail a request
+        print(f"[server:_claim_job] {e}")
+        traceback.print_exc()
+        return None
+
+
+def _release_job(job: str, token: str) -> None:
+    """Release a claim. Holder-scoped, so an overrun run cannot release a newer one."""
+    try:
+        get_backend().release_lease(job, token)
+    except Exception as e:  # noqa: BLE001
+        print(f"[server:_release_job] {e}")
+        traceback.print_exc()
+
+
 def _maybe_fire_interval_probes(config_path: str | None = None) -> None:
     """Check frequency intervals for the free-models refresh, the cost probe,
     and PR creation.
@@ -3454,9 +3493,6 @@ def _recompute_routing_metadata(config: dict, config_path: str | None) -> dict |
     return state
 
 
-_routing_metadata_inflight: bool = False
-_routing_metadata_lock = threading.Lock()
-
 
 def _maybe_fire_routing_metadata_refresh(
     config: dict, meta_cfg: dict, config_path: str | None
@@ -3464,22 +3500,18 @@ def _maybe_fire_routing_metadata_refresh(
     """Relearn routing metadata in the background when its cadence is due."""
     if not _routing_metadata_due(meta_cfg, config_path):
         return
-    global _routing_metadata_inflight
-    with _routing_metadata_lock:
-        if _routing_metadata_inflight:
-            return
-        _routing_metadata_inflight = True
+    token = _claim_job("routing-metadata")
+    if token is None:
+        return
 
     def _run() -> None:
-        global _routing_metadata_inflight
         try:
             logger.info("[routing-metadata] refresh interval due — relearning")
             _recompute_routing_metadata(load_config(), config_path)
         except Exception as exc:  # noqa: BLE001
             logger.warning("[routing-metadata] refresh failed: %s", exc)
         finally:
-            with _routing_metadata_lock:
-                _routing_metadata_inflight = False
+            _release_job("routing-metadata", token)
 
     threading.Thread(target=_run, daemon=True, name="routing-metadata-refresh").start()
 
@@ -3496,25 +3528,22 @@ def _maybe_fire_flagship_refresh(
     if not _flagship_refresh_due(tier_cfg, config_path, config):
         return
 
-    global _flagship_refresh_inflight
-    with _flagship_refresh_lock:
-        if _flagship_refresh_inflight:
-            return
-        _flagship_refresh_inflight = True
+    token = _claim_job("flagship-refresh")
+    if token is None:
+        return
 
     def _run() -> None:
-        global _flagship_refresh_inflight
         try:
             logger.info("[flagship] refresh interval due — recomputing membership")
             if _recompute_flagship_members(load_config(), config_path):
                 with _models_list_cache_lock:
                     global _models_list_cache
                     _models_list_cache = None
+                    get_backend().bump_cache_epoch()
         except Exception as exc:  # noqa: BLE001
             logger.warning("[flagship] refresh failed: %s", exc)
         finally:
-            with _flagship_refresh_lock:
-                _flagship_refresh_inflight = False
+            _release_job("flagship-refresh", token)
 
     threading.Thread(target=_run, daemon=True, name="flagship-refresh").start()
 
@@ -3536,25 +3565,22 @@ def _maybe_fire_free_models_update(
     if not _free_update_due(free_tier, config_path):
         return
 
-    global _free_update_inflight
-    with _free_update_lock:
-        if _free_update_inflight:
-            return
-        _free_update_inflight = True
+    token = _claim_job("free-models-update")
+    if token is None:
+        return
 
     def _run() -> None:
-        global _free_update_inflight
         try:
             logger.info("[free-update] refresh interval due — running free-models update")
             _run_free_models_update(load_config(), config_path)
             with _models_list_cache_lock:
                 global _models_list_cache
                 _models_list_cache = None
+                get_backend().bump_cache_epoch()
         except Exception as exc:  # noqa: BLE001
             logger.warning("[free-update] failed: %s", exc)
         finally:
-            with _free_update_lock:
-                _free_update_inflight = False
+            _release_job("free-models-update", token)
 
     threading.Thread(target=_run, daemon=True, name="free-models-update-interval").start()
 
@@ -3579,25 +3605,22 @@ def _maybe_fire_cost_probe(
     if not due:
         return
 
-    global _cost_probe_inflight
-    with _cost_probe_lock:
-        if _cost_probe_inflight:
-            return
-        _cost_probe_inflight = True
+    token = _claim_job("cost-probe")
+    if token is None:
+        return
 
     def _run() -> None:
-        global _cost_probe_inflight
         try:
             logger.info("[cost-probe] interval due — running cost probe")
             _run_free_models_update(load_config(), config_path)
             with _models_list_cache_lock:
                 global _models_list_cache
                 _models_list_cache = None
+                get_backend().bump_cache_epoch()
         except Exception as exc:  # noqa: BLE001
             logger.warning("[cost-probe] failed: %s", exc)
         finally:
-            with _cost_probe_lock:
-                _cost_probe_inflight = False
+            _release_job("cost-probe", token)
 
     threading.Thread(target=_run, daemon=True, name="cost-probe-interval").start()
 
@@ -3634,21 +3657,17 @@ def _maybe_fire_pr_if_due(config: dict, config_path: str | None) -> None:
         return
     logger.info("[providers-pr] frequency_days interval elapsed — checking for PR")
 
-    global _providers_pr_inflight
-    with _providers_pr_lock:
-        if _providers_pr_inflight:
-            return
-        _providers_pr_inflight = True
+    token = _claim_job("providers-pr")
+    if token is None:
+        return
 
     def _run() -> None:
-        global _providers_pr_inflight
         try:
             _maybe_open_providers_pr(config, providers_text)
         except Exception as exc:  # noqa: BLE001 — background best-effort
             logger.warning("[providers-pr] failed: %s", exc)
         finally:
-            with _providers_pr_lock:
-                _providers_pr_inflight = False
+            _release_job("providers-pr", token)
 
     # On a background thread, like the three refreshes that share this interval
     # check. _maybe_fire_interval_probes is called from before_request, and
@@ -3658,10 +3677,9 @@ def _maybe_fire_pr_if_due(config: dict, config_path: str | None) -> None:
     threading.Thread(target=_run, daemon=True, name="providers-pr").start()
 
 
-# At most one providers PR round-trip at a time, matching the in-flight guards
-# on the three interval refreshes above.
-_providers_pr_lock = threading.Lock()
-_providers_pr_inflight = False
+# At most one providers PR round-trip at a time, by lease, matching the three
+# interval refreshes above. N workers each opening a pull request was the most
+# visible thing a per-process flag failed to prevent.
 
 _config_migration_done: bool = False
 _config_migration_lock = threading.Lock()
@@ -3874,13 +3892,24 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
     # user's hand-set facts, and nothing reads it any more.
     global _config_migration_done
     with _config_migration_lock:
-        if not _config_migration_done:
-            _config_migration_done = True
+        run_migration = not _config_migration_done
+        _config_migration_done = True
+    if run_migration:
+        # Once per worker is not enough: the migration copies config.json to a
+        # timestamped backup BEFORE taking the file lock that guards the write,
+        # so N workers booting together produce N backups and race to rename
+        # them within the same second. The lease makes it once per deployment.
+        # A worker that does not get it simply skips: the holder is doing the
+        # work, and the sidecar transaction inside protects the write itself.
+        token = _claim_job("config-routing-migration")
+        if token is not None:
             try:
                 _migrate_config_routing_keys(config_path)
             except Exception as e:  # noqa: BLE001 — never fail startup over it
                 print(f"[server:_run_startup_tasks_once] {e}")
                 traceback.print_exc()
+            finally:
+                _release_job("config-routing-migration", token)
 
     def _run() -> None:
         # 1. Warm immediately so virtual models exist before the first request.
@@ -3941,6 +3970,7 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
             global _models_list_cache
             with _models_list_cache_lock:
                 _models_list_cache = None
+                get_backend().bump_cache_epoch()
             logger.info("[startup] virtual-model list cache invalidated after update")
 
         # 5. Pre-build the full /v1/models response so the first external request is
@@ -4429,9 +4459,14 @@ def list_models() -> Response:
         with _models_list_cache_lock:
             cached = _models_list_cache
         if cached is not None:
-            cached_data, cached_ts = cached
+            cached_data, cached_ts, cached_epoch = cached
             age = time.monotonic() - cached_ts
-            if age < models_ttl:
+            # A background refresh runs on ONE worker now, so the others never
+            # see it null their own copy. The epoch is how they find out.
+            if cached_epoch != get_backend().cache_epoch():
+                logger.info("  [models cache] STALE (another worker refreshed) — rebuilding")
+                _spawn_models_list_refresh()
+            elif age < models_ttl:
                 logger.info("  [models cache] HIT (%.0fs old)", age)
                 return jsonify({"object": "list", "data": cached_data})
             logger.info("  [models cache] STALE (%.0fs old) — serving stale, refreshing", age)
@@ -4733,7 +4768,8 @@ def _build_models_list(providers: dict, config: dict, timeout: int, models_ttl: 
             # if something already populated the cache — a concurrent request or a
             # cross-test daemon thread from a previous test beat us here.
             if not only_if_empty or _models_list_cache is None:
-                _models_list_cache = (full_list, time.monotonic())
+                _models_list_cache = (full_list, time.monotonic(),
+                                      get_backend().cache_epoch())
 
     return full_list
 
