@@ -1,0 +1,19 @@
+# Line endings.
+#
+# Everything in this repository is LF, in the index and in the working tree.
+# `llmproxy/server.py` was the lone CRLF file for a long time, which is the
+# kind of thing nobody notices until a tool rewrites the file and produces a
+# 22,000-line diff that buries the actual change. Declaring it here means git
+# normalizes on checkout and commit regardless of the editor or platform a
+# contributor uses, so the anomaly cannot come back.
+#
+# `text=auto` lets git detect binary files and leave them alone; `eol=lf` fixes
+# the working-tree ending for the files it does treat as text.
+* text=auto eol=lf
+
+# Windows-only script types would need CRLF to run. None exist today; these are
+# here so adding one later does not silently get normalized into something
+# cmd.exe mishandles.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf

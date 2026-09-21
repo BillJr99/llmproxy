@@ -1507,16 +1507,27 @@ adjusted by tool signals, the log line also records the evidence behind it —
 severity, turn depth, recent read/write/edit counts and the resulting score —
 rather than just the verdict.
 
-A [flagship](#flagship-tier) pool reports `flagship_rank=<ranked>/<total>`
+A [flagship](#flagship-tier) pool reports `flagship_scored=<scored>/<total>`
 instead of `capacity` or `cycling`, naming how much of the pool the benchmark
 ranking actually covered:
 
 ```
-X-LLMProxy-Route-Reason: flagship_rank=4/5,capability=tools
+X-LLMProxy-Route-Reason: flagship_scored=4/5,capability=tools
 ```
 
 `4/5` says four of the five candidates carried a score and one did not — an
-unscorable pin, sorted last. A flagship pool whose membership cache holds no
+unscorable pin, sorted last.
+
+**It is a count, not a position.** `flagship_scored=9/9` means the ranking is
+fully available, which is the healthy state; it does not mean the ninth of nine
+candidates was chosen, and it is the same on every request because it describes
+the pool rather than the pick. The field was called `flagship_rank` until two
+readers in a row took `9/9` for "last of nine" and concluded the ordering was
+inverted. To see which candidate actually served a request, read
+`X-LLMProxy-Selected-Model`, or the `trying candidate <n>/<total>` log line —
+for a flagship pool the walk order *is* the benchmark order, so that `<n>` is
+the rank of the model chosen. A `failover#<n>` suffix means the top-ranked pick
+failed and position `<n>` answered instead. A flagship pool whose membership cache holds no
 scores at all reports the ordering it genuinely used (`cycling` or `capacity`)
 rather than claiming a ranking, so the header never overstates what is known.
 
@@ -1955,7 +1966,7 @@ A record looks like this (`full` mode, a streamed reply):
   "status": 200, "duration_ms": 101.6, "streamed": true,
   "model": "llmproxy/flagship",
   "selected_model": "groq/llama-3.3-70b-versatile",
-  "route_reason": "flagship_rank=4/5,capability=tools",
+  "route_reason": "flagship_scored=4/5,capability=tools",
   "failed_over": false,
   "request_body": { "model": "llmproxy/flagship", "messages": [ ... ] },
   "response_body": "data: {\"choices\": ...}\n\ndata: [DONE]\n\n"
@@ -2058,7 +2069,7 @@ Four things worth knowing:
 When the pass moves anything, the route reason says so:
 
 ```
-X-LLMProxy-Route-Reason: flagship_rank=5/5,oversize=1
+X-LLMProxy-Route-Reason: flagship_scored=5/5,oversize=1
 ```
 
 Until some candidate has actually returned a `413`, the pass is an exact no-op
@@ -3272,8 +3283,9 @@ curl -sS -i localhost:8080/v1/chat/completions -H 'Content-Type: application/jso
   | grep -i 'x-llmproxy-\(route-reason\|selected-model\)'
 ```
 
-`flagship_rank=4/5` means the pool was walked in benchmark order, and that four
-of its five candidates carried a score. `cycling` or `capacity` means it was
+`flagship_scored=4/5` means the pool was walked in benchmark order, and that
+four of its five candidates carried a score (a count of coverage, not the
+position of the winner — see [route provenance](#route-provenance) above). `cycling` or `capacity` means it was
 not: no scores are cached yet, and the tier is serving in its pre-ranking order.
 The server also logs that once, naming the cause, the first time it happens.
 
