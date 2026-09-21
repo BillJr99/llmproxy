@@ -2992,9 +2992,27 @@ curl http://localhost:8080/v1/usage | jq
   allowance) and an hour early on a 25-hour day. It re-aligned afterwards, so
   the error was one boundary twice a year rather than a permanent skew, but a
   quota exhausted against a day the provider has already reset is a real failed
-  request. Set `server.usage_timezone` to an IANA name (`"America/New_York"`) to
-  pin which midnight; the default is the process's local zone. Changing it
-  mid-day orphans that day's counters.
+  request.
+
+  Which midnight is **inferred from the system** by default — Python's local
+  time, so `TZ` or `/etc/localtime`. **In the Docker image that means UTC**: the
+  image sets no `TZ` and installs no system tz database, so the daily windows
+  roll at UTC midnight rather than at midnight where you are. That is usually
+  what you want, because most providers reset their daily free-tier quotas at
+  UTC midnight too — set `server.usage_timezone` to an IANA name only if a
+  provider you rely on resets on a different clock:
+
+  ```json
+  "server": { "usage_timezone": "America/New_York" }
+  ```
+
+  An unusable name is logged and ignored rather than raised, so a typo cannot
+  stop the proxy from routing; it falls back to local time. Changing the zone
+  mid-day orphans that day's counters. To see what a running container thinks:
+
+  ```bash
+  docker exec llmproxy python -c "import datetime; print(datetime.datetime.now().astimezone())"
+  ```
 - **Token counts** come from the upstream `usage` block of each response
   (streaming included — the proxy asks for a final usage chunk via
   `stream_options.include_usage`; disable with `server.stream_include_usage:

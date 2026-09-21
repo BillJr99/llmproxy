@@ -267,3 +267,26 @@ def test_no_timezone_configured_leaves_local_time_alone():
     import llmproxy.server as S
     S._apply_usage_timezone({"server": {}})
     assert usage.day_key() == usage.day_key(None)
+
+
+def test_iana_zones_resolve_without_a_system_tz_database():
+    """server.usage_timezone must work in a slim container image.
+
+    zoneinfo reads the system database when there is one, and python:3.12-slim
+    installs no tzdata while the Dockerfile sets no TZ. Without the tzdata
+    package the setting would fail *safely* -- _apply_usage_timezone logs and
+    falls back to local time -- but silently do nothing, which is worse than
+    failing loudly because the daily windows would quietly stay on UTC.
+
+    Emptying TZPATH is how a slim image looks from Python's point of view.
+    """
+    import zoneinfo
+
+    original = zoneinfo.TZPATH
+    try:
+        zoneinfo.reset_tzpath([])
+        assert zoneinfo.TZPATH == ()
+        assert ZoneInfo("America/New_York") is not None
+        assert ZoneInfo("UTC") is not None
+    finally:
+        zoneinfo.reset_tzpath(list(original))
