@@ -68,7 +68,6 @@ import time
 import traceback
 import urllib.parse
 import uuid
-from collections import deque
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -130,8 +129,13 @@ try:
     import fcntl  # POSIX advisory file locking
 except ImportError:  # pragma: no cover - non-POSIX (e.g. Windows)
     fcntl = None
+from .state import (
+    FAILURE_LOG_MAX,
+    FAILURE_LOG_TTL_S,
+    MAX_SATURATION_COOLDOWN_S,
+    get_backend,
+)
 from .usage import (
-    ModelUsage,
     compute_cost,
     extract_usage,
     load_pricing_map,
@@ -364,21 +368,14 @@ _models_refresh_active = False
 # ---------------------------------------------------------------------------
 # Per-model usage tracking (free-tier capacity-aware load balancing + accounting)
 # ---------------------------------------------------------------------------
-# In-memory only; resets on server restart.  Each gunicorn worker process
-# maintains its own counters — usage tracking is per-worker, not cross-process.
-# For cross-process accuracy, configure a single worker or use a shared store.
-# The pure counter / cost primitives live in usage.py so the scraper probe can
-# reuse them; this section wires them to the live config + believed_free set.
-
-_usage_registry: dict[str, ModelUsage] = {}
-_usage_registry_lock = threading.Lock()
-_usage_since: str = datetime.datetime.now(datetime.UTC).isoformat()
-
-# believed_free models that served a request reporting a non-zero cost. Surfaced
-# via GET /v1/usage and persisted to config['cost_observed_free_tier'] so the
-# updater stops re-adding them to believed_free.
-_paid_free_flags: dict[str, dict] = {}
-_paid_free_lock = threading.Lock()
+# Resets on server restart. Shared between workers when there is more than one
+# (see state.py); per-process otherwise, which is the same thing when there is
+# only one process.
+#
+# The storage lives in state.py behind one interface. The functions below keep
+# their policy: they build the keys, read the config and write the log lines,
+# and hand the backend only what to store. The pure counter / cost primitives
+# stay in usage.py so the scraper probe can reuse them.
 
 # Serializes the best-effort config.json append in _persist_cost_observed so two
 # concurrent first-observations don't race the read-modify-write.
@@ -386,8 +383,8 @@ _cost_observed_persist_lock = threading.Lock()
 # At most one background sidecar-update+PR reaction runs at a time; a run reads
 # the freshly-persisted config, so it covers every entry recorded before it
 # started. Concurrent observations skip rather than pile up duplicate scrapes.
-_cost_observed_reaction_lock = threading.Lock()
-_cost_observed_reaction_inflight = False
+# Held as a lease now (see _claim_job), so "at a time" means across every
+# worker rather than within one.
 COST_OBSERVED_KEY = "cost_observed_free_tier"
 
 
@@ -403,10 +400,10 @@ COST_OBSERVED_KEY = "cost_observed_free_tier"
 # the usage counters. Keyed identically to the usage registry (per account when
 # a provider has several); a provider-wide sentinel model opens a circuit for a
 # whole provider/account when its shared allowance is depleted.
-_saturation_registry: dict[str, float] = {}  # key -> monotonic expiry (seconds)
-_saturation_lock = threading.Lock()
 _DEFAULT_SATURATION_COOLDOWN_S = 60.0
-_MAX_SATURATION_COOLDOWN_S = 3600.0
+# Single-sourced with the backend, which applies the same bound as a
+# read-side clamp against clock jumps.
+_MAX_SATURATION_COOLDOWN_S = MAX_SATURATION_COOLDOWN_S
 _PROVIDER_CIRCUIT_MODEL = "__provider__"  # sentinel model for a provider-wide circuit
 
 # --- oversized-request memory ---
@@ -427,8 +424,7 @@ _PROVIDER_CIRCUIT_MODEL = "__provider__"  # sentinel model for a provider-wide c
 # first oversized request after a restart rediscovers it, at the cost of one
 # failover — so persisting it would buy a schema and a staleness problem and
 # nothing else. The dict is bounded by the number of routing targets.
-_oversize_registry: dict[str, int] = {}  # provider/model -> smallest 413'd body, bytes
-_oversize_lock = threading.Lock()
+# Stored in state.py; the watermark keeps the minimum observed being refused.
 
 # provider/model -> capabilities the upstream has REFUSED to serve, learned from
 # rejections rather than from any listing. The proactive path (a provider's own
@@ -436,8 +432,7 @@ _oversize_lock = threading.Lock()
 # providers publish, and a gateway that advertises tool support it cannot route
 # to is exactly the case no amount of metadata-reading catches. See
 # _record_capability_gap.
-_capability_gap_registry: dict[str, set[str]] = {}
-_capability_gap_lock = threading.Lock()
+# Stored in state.py as a per-target set union; never cleared in normal running.
 
 
 def _oversize_key(provider_name: str, upstream_model: str) -> str:
@@ -483,22 +478,14 @@ def _record_oversize(provider_name: str, upstream_model: str, size_bytes: int) -
     a larger one never loosens it — the limit can only be bounded from above by
     what we have actually observed being refused.
     """
-    if size_bytes <= 0:
-        return
-    key = _oversize_key(provider_name, upstream_model)
-    with _oversize_lock:
-        prev = _oversize_registry.get(key)
-        if prev is None or size_bytes < prev:
-            _oversize_registry[key] = size_bytes
+    get_backend().record_oversize(
+        _oversize_key(provider_name, upstream_model), size_bytes)
 
 
 def _is_oversize_for(provider_name: str, upstream_model: str, size_bytes: int) -> bool:
     """True when this request is at least as large as one this target refused."""
-    if size_bytes <= 0:
-        return False
-    with _oversize_lock:
-        limit = _oversize_registry.get(_oversize_key(provider_name, upstream_model))
-    return limit is not None and size_bytes >= limit
+    return get_backend().is_oversize(
+        _oversize_key(provider_name, upstream_model), size_bytes)
 
 
 # OpenRouter names the filter that eliminated every endpoint; other gateways
@@ -553,14 +540,9 @@ def _record_capability_gap(provider_name: str, upstream_model: str, cap: str) ->
     warning because silently deciding a model is incapable would be invisible
     exactly when it is wrong.
     """
-    if not cap:
-        return
     key = _oversize_key(provider_name, upstream_model)
-    with _capability_gap_lock:
-        known = _capability_gap_registry.setdefault(key, set())
-        if cap in known:
-            return
-        known.add(cap)
+    if not get_backend().record_capability_gap(key, cap):
+        return
     logger.warning(
         "[capability] %s/%s rejected a request for lack of '%s'; it will not be "
         "selected for requests needing that capability",
@@ -570,8 +552,7 @@ def _record_capability_gap(provider_name: str, upstream_model: str, cap: str) ->
 
 def _learned_capability_gaps(provider_name: str, upstream_model: str) -> set[str]:
     """Capabilities this target has been observed refusing."""
-    with _capability_gap_lock:
-        return set(_capability_gap_registry.get(_oversize_key(provider_name, upstream_model), ()))
+    return get_backend().capability_gaps(_oversize_key(provider_name, upstream_model))
 
 
 def _note_capability_rejection(
@@ -596,17 +577,8 @@ def _note_accepted_size(provider_name: str, upstream_model: str, size_bytes: int
     Only a success at or above the watermark is evidence: a smaller request
     succeeding says nothing about the limit, so it leaves the watermark alone.
     """
-    if size_bytes <= 0:
-        return
     key = _oversize_key(provider_name, upstream_model)
-    with _oversize_lock:
-        limit = _oversize_registry.get(key)
-        if limit is not None and size_bytes >= limit:
-            del _oversize_registry[key]
-            cleared = True
-        else:
-            cleared = False
-    if cleared:
+    if get_backend().clear_oversize_at(key, size_bytes):
         logger.info(
             "  %s/%s accepted a %d-byte request after refusing one that size — "
             "forgetting its size limit",
@@ -616,8 +588,7 @@ def _note_accepted_size(provider_name: str, upstream_model: str, size_bytes: int
 
 def _reset_oversize() -> None:
     """Drop every watermark. For tests."""
-    with _oversize_lock:
-        _oversize_registry.clear()
+    get_backend().reset_oversize()
 
 
 # HTTP statuses that mean "out of quota / rate limited": 402 Payment Required
@@ -736,21 +707,13 @@ def _mark_saturated(key: str, retry_after=None) -> None:
     cooldown = _saturation_cooldown_seconds(retry_after)
     if cooldown <= 0:
         return
-    with _saturation_lock:
-        _saturation_registry[key] = time.monotonic() + cooldown
+    get_backend().mark_saturated(key, cooldown)
+    _invalidate_snapshot()
 
 
 def _is_saturated(key: str) -> bool:
-    """True while *key* is still cooling; lazily evicts expired entries."""
-    now = time.monotonic()
-    with _saturation_lock:
-        expiry = _saturation_registry.get(key)
-        if expiry is None:
-            return False
-        if expiry <= now:
-            del _saturation_registry[key]
-            return False
-        return True
+    """True while *key* is still cooling."""
+    return _snap().is_saturated(key)
 
 
 def _mark_provider_circuit(provider_name: str, account_id: str | None = None, retry_after=None) -> None:
@@ -780,15 +743,6 @@ def _usage_key(provider_name: str, upstream_model: str, account_id: str | None =
     return f"{provider_name}/{upstream_model}".lower()
 
 
-def _get_or_create_tracker(key: str) -> ModelUsage:
-    with _usage_registry_lock:
-        tracker = _usage_registry.get(key)
-        if tracker is None:
-            tracker = ModelUsage()
-            _usage_registry[key] = tracker
-    return tracker
-
-
 def _flag_paid_free(key: str, cost: float, source: str) -> bool:
     """Record (once-warned) that a believed-free model reported a cost.
 
@@ -796,23 +750,14 @@ def _flag_paid_free(key: str, cost: float, source: str) -> bool:
     persist it to ``cost_observed_free_tier`` exactly once rather than on every
     request.
     """
-    with _paid_free_lock:
-        entry = _paid_free_flags.get(key)
-        if entry is None:
-            _paid_free_flags[key] = {
-                "observed_cost": round(cost, 8),
-                "cost_source": source,
-                "samples": 1,
-            }
-            logger.warning(
-                "[usage] believed_free model %s reported a cost (%.8f, source=%s); "
-                "adding to %s so the updater stops re-adding it to believed_free.",
-                key, cost, source, COST_OBSERVED_KEY,
-            )
-            return True
-        entry["samples"] += 1
-        entry["observed_cost"] = round(max(entry["observed_cost"], cost), 8)
+    if not get_backend().flag_paid_free(key, cost, source):
         return False
+    logger.warning(
+        "[usage] believed_free model %s reported a cost (%.8f, source=%s); "
+        "adding to %s so the updater stops re-adding it to believed_free.",
+        key, cost, source, COST_OBSERVED_KEY,
+    )
+    return True
 
 
 def _persist_cost_observed(qualified_id: str) -> None:
@@ -884,25 +829,22 @@ def _react_to_cost_observed_async() -> None:
     if not (pr_enabled or free_tier.get("update_on_startup") is True):
         return  # operator hasn't opted into sidecar updates / PRs
 
-    global _cost_observed_reaction_inflight
-    with _cost_observed_reaction_lock:
-        if _cost_observed_reaction_inflight:
-            return
-        _cost_observed_reaction_inflight = True
+    token = _claim_job("cost-observed-react")
+    if token is None:
+        return
 
     def _run() -> None:
-        global _cost_observed_reaction_inflight
         try:
             logger.info("[usage] propagating cost_observed change to sidecar / PR")
             _run_free_models_update(load_config(), None)
             with _models_list_cache_lock:
                 global _models_list_cache
                 _models_list_cache = None
+                get_backend().bump_cache_epoch()
         except Exception as exc:  # noqa: BLE001 — background best-effort
             logger.warning("[usage] cost_observed propagation failed: %s", exc)
         finally:
-            with _cost_observed_reaction_lock:
-                _cost_observed_reaction_inflight = False
+            _release_job("cost-observed-react", token)
 
     threading.Thread(target=_run, daemon=True, name="cost-observed-react").start()
 
@@ -928,7 +870,6 @@ def _record_usage(
     historical per-model accounting untouched.
     """
     key = _usage_key(provider_name, upstream_model, account_id)
-    tracker = _get_or_create_tracker(key)
 
     prompt = completion = total = 0
     cost = 0.0
@@ -939,11 +880,13 @@ def _record_usage(
         total = usage.get("total_tokens", 0) or (prompt + completion)
         cost, source = compute_cost(provider_name, upstream_model, usage, load_pricing_map())
 
-    tracker.record(
+    get_backend().record_usage(
+        key,
         requests=1 if count_request else 0,
         prompt=prompt, completion=completion, total=total,
         cost=cost, cost_source=source,
     )
+    _invalidate_snapshot()
 
     if usage and cost > 0:
         cfg = config if config is not None else load_config()
@@ -972,25 +915,62 @@ def _record_stream_usage(
         )
 
 
+_SNAPSHOT_ATTR = "_llmproxy_state_snapshot"
+
+
+def _snap():
+    """This request's view of the routing state, taken once and reused.
+
+    The three ordering passes read the accessors once per candidate, which is
+    roughly a thousand reads on a large free pool against about four writes.
+    With in-process dicts those are lookups and this changes nothing; against a
+    shared database it is the difference between five queries and a thousand.
+
+    Invalidated by every write, so read-your-own-writes still holds: a candidate
+    cooled by a 429 during failover must be cooled for the very next ordering
+    pass in the same request, or the loop hands the request straight back to the
+    endpoint that just refused it.
+
+    Outside a request — the background refresh threads — there is no ``g`` to
+    memoize on, so each call takes its own view. Those paths read a handful of
+    keys, not a thousand.
+    """
+    try:
+        cached = getattr(g, _SNAPSHOT_ATTR, None)
+        if cached is not None:
+            return cached
+    except RuntimeError:                      # no application context
+        return get_backend().snapshot()
+    snap = get_backend().snapshot()
+    setattr(g, _SNAPSHOT_ATTR, snap)
+    return snap
+
+
+def _invalidate_snapshot() -> None:
+    """Drop this request's view after a write, so the next read sees it."""
+    try:
+        if has_request_context():
+            setattr(g, _SNAPSHOT_ATTR, None)
+    except RuntimeError:                      # pragma: no cover — no context
+        pass
+
+
 def _get_usage_snapshot(key: str) -> tuple[int, int]:
     """Return (requests_last_60s, requests_today) for the given provider/model key."""
-    with _usage_registry_lock:
-        tracker = _usage_registry.get(key)
-    return tracker.snapshot() if tracker else (0, 0)
+    row = _snap().row(key)
+    return row.req_min, row.req_day
 
 
 def _get_token_snapshot(key: str) -> tuple[int, int]:
     """Return (tokens_last_60s, tokens_today) for the given provider/model key."""
-    with _usage_registry_lock:
-        tracker = _usage_registry.get(key)
-    return tracker.token_snapshot() if tracker else (0, 0)
+    row = _snap().row(key)
+    return row.tok_min, row.tok_day
 
 
 def _get_health_snapshot(key: str) -> tuple[float, float, int]:
     """Return (success_rate, avg_latency_ms, samples) for a provider/model key."""
-    with _usage_registry_lock:
-        tracker = _usage_registry.get(key)
-    return tracker.health_snapshot() if tracker else (1.0, 0.0, 0)
+    row = _snap().row(key)
+    return row.success_rate, row.avg_latency_ms, row.health_samples
 
 
 def _record_outcome(
@@ -1002,8 +982,9 @@ def _record_outcome(
     account_id: str | None = None,
 ) -> None:
     """Record whether one upstream attempt worked, for health-aware ordering."""
-    tracker = _get_or_create_tracker(_usage_key(provider_name, upstream_model, account_id))
-    tracker.record_outcome(ok, latency_ms)
+    get_backend().record_outcome(
+        _usage_key(provider_name, upstream_model, account_id), ok, latency_ms)
+    _invalidate_snapshot()
 
 
 # Exception types and message fragments that mean *the client went away* or that
@@ -1104,15 +1085,8 @@ def _health_score(provider_name: str, upstream_model: str, account_id: str | Non
 
 
 def _reset_usage() -> None:
-    """Clear all in-memory usage counters, paid-free flags, and saturation state."""
-    global _usage_since
-    with _usage_registry_lock:
-        _usage_registry.clear()
-    with _paid_free_lock:
-        _paid_free_flags.clear()
-    with _saturation_lock:
-        _saturation_registry.clear()
-    _usage_since = datetime.datetime.now(datetime.UTC).isoformat()
+    """Clear all usage counters, paid-free flags, and saturation state."""
+    get_backend().reset_usage()
 
 
 # ---------------------------------------------------------------------------
@@ -1139,9 +1113,6 @@ _PROBE_INTERVAL_GATE_SEC = 60   # check state files at most once per minute
 _last_probe_interval_check: float = 0.0
 _probe_interval_check_lock = threading.Lock()
 
-_free_update_inflight: bool = False
-_free_update_lock = threading.Lock()
-_flagship_refresh_inflight: bool = False
 # Latched the first time a flagship pool is served without a ranking, so the
 # explanation is logged once rather than on every request. The route reason
 # already carries the fact, but nobody reads a header until something looks
@@ -1152,9 +1123,9 @@ _flagship_unranked_warned: bool = False
 # meet the guarantee it advertises; saying it every interval tick would bury
 # the log.
 _flagship_floor_warned: bool = False
-_flagship_refresh_lock = threading.Lock()
-_cost_probe_inflight: bool = False
-_cost_probe_lock = threading.Lock()
+# The interval refreshes themselves are single-flighted by lease (_claim_job),
+# not by a per-process flag: a flag only ever deduplicated within one worker,
+# so N workers each ran the whole scrape.
 
 # ---------------------------------------------------------------------------
 # Short-lived response cache (non-streaming only)
@@ -1219,16 +1190,17 @@ def _response_cache_put(
 # and with what — and the answer should not require turning on the request log
 # and grepping it, not least because the log is off by default.
 #
-# So failures are recorded structurally, in a bounded in-process ring: newest
-# first, capped, and pruned by age. Per worker, exactly like /v1/usage, which is
-# one more reason server.workers defaults to 1.
+# So failures are recorded structurally, in a bounded ring: newest first,
+# capped, and pruned by age. Shared between workers when there is more than one,
+# so the cap means "the last 250 failures" rather than "the last 250 this worker
+# happened to serve" -- which was never the question anyone was asking.
 
-_FAILURE_LOG_MAX: int = 250
-_FAILURE_LOG_TTL_S: float = 6 * 60 * 60
+# The ring and its bounds live in state.py, with the storage they bound: two
+# copies of a cap is one copy too many, and the endpoint below reports these
+# numbers as fact.
+_FAILURE_LOG_MAX: int = FAILURE_LOG_MAX
+_FAILURE_LOG_TTL_S: float = FAILURE_LOG_TTL_S
 _FAILURE_DETAIL_MAX_CHARS: int = 300
-
-_failure_log: deque = deque(maxlen=_FAILURE_LOG_MAX)
-_failure_log_lock = threading.Lock()
 
 # Credential shapes that must never reach the failure report. Request headers
 # are never recorded at all (see the audit-record note below, and _log_request),
@@ -1379,8 +1351,7 @@ def _record_failure(
             "detail": detail_text,
             "duration_ms": round(duration_ms, 1) if duration_ms is not None else None,
         }
-        with _failure_log_lock:
-            _failure_log.append(record)
+        get_backend().record_failure(record)
     except Exception as e:  # noqa: BLE001 — never fail a request over a diagnostic
         print(f"[server:_record_failure] {e}")
         traceback.print_exc()
@@ -1526,15 +1497,7 @@ def _exception_failure_kind(exc: BaseException) -> str:
 
 def _failure_records(since_ts: float | None = None) -> list[dict]:
     """Recent failures, newest first, pruned of anything past the TTL."""
-    cutoff = time.time() - _FAILURE_LOG_TTL_S
-    with _failure_log_lock:
-        rows = [r for r in _failure_log if r.get("ts", 0) >= cutoff]
-        if len(rows) != len(_failure_log):
-            _failure_log.clear()
-            _failure_log.extend(rows)
-    if since_ts is not None:
-        rows = [r for r in rows if r.get("ts", 0) >= since_ts]
-    return list(reversed(rows))
+    return get_backend().failure_records(since_ts)
 
 
 _SINCE_UNITS: dict[str, int] = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -1563,8 +1526,7 @@ def _parse_since(raw: str | None) -> float | None:
 
 def _reset_failures() -> None:
     """Clear the failure ring."""
-    with _failure_log_lock:
-        _failure_log.clear()
+    get_backend().reset_failures()
 
 
 # ---------------------------------------------------------------------------
@@ -2877,6 +2839,51 @@ def _run_free_models_update(config: dict, config_path: str | None) -> bool:
     return True
 
 
+# Background jobs that must run once per deployment, not once per worker.
+#
+# Each was guarded by an in-process boolean, which only ever deduplicated within
+# one process. With several workers all N launched the same full provider
+# scrape, all N spent cost-probe quota, and all N opened a GitHub pull request.
+#
+# The TTL is a ceiling on how long one run may hold the job, not an estimate of
+# how long it takes: if the holder dies mid-run the job becomes claimable again
+# once it lapses, where a boolean would have stayed set until the process
+# restarted.
+_JOB_TTLS: dict[str, float] = {
+    "free-models-update": 30 * 60,
+    "flagship-refresh": 15 * 60,
+    "cost-probe": 30 * 60,
+    "routing-metadata": 15 * 60,
+    "providers-pr": 10 * 60,
+    "cost-observed-react": 10 * 60,
+    "config-routing-migration": 5 * 60,
+}
+
+
+def _claim_job(job: str) -> str | None:
+    """Claim *job* for this deployment, or None if someone else holds it.
+
+    Same shape as the ``if _x_inflight: return`` it replaces, so the call sites
+    barely change -- but the claim is atomic across processes rather than only
+    across the threads of one.
+    """
+    try:
+        return get_backend().acquire_lease(job, _JOB_TTLS.get(job, 900))
+    except Exception as e:  # noqa: BLE001 — a background job must never fail a request
+        print(f"[server:_claim_job] {e}")
+        traceback.print_exc()
+        return None
+
+
+def _release_job(job: str, token: str) -> None:
+    """Release a claim. Holder-scoped, so an overrun run cannot release a newer one."""
+    try:
+        get_backend().release_lease(job, token)
+    except Exception as e:  # noqa: BLE001
+        print(f"[server:_release_job] {e}")
+        traceback.print_exc()
+
+
 def _maybe_fire_interval_probes(config_path: str | None = None) -> None:
     """Check frequency intervals for the free-models refresh, the cost probe,
     and PR creation.
@@ -3533,9 +3540,6 @@ def _recompute_routing_metadata(config: dict, config_path: str | None) -> dict |
     return state
 
 
-_routing_metadata_inflight: bool = False
-_routing_metadata_lock = threading.Lock()
-
 
 def _maybe_fire_routing_metadata_refresh(
     config: dict, meta_cfg: dict, config_path: str | None
@@ -3543,22 +3547,18 @@ def _maybe_fire_routing_metadata_refresh(
     """Relearn routing metadata in the background when its cadence is due."""
     if not _routing_metadata_due(meta_cfg, config_path):
         return
-    global _routing_metadata_inflight
-    with _routing_metadata_lock:
-        if _routing_metadata_inflight:
-            return
-        _routing_metadata_inflight = True
+    token = _claim_job("routing-metadata")
+    if token is None:
+        return
 
     def _run() -> None:
-        global _routing_metadata_inflight
         try:
             logger.info("[routing-metadata] refresh interval due — relearning")
             _recompute_routing_metadata(load_config(), config_path)
         except Exception as exc:  # noqa: BLE001
             logger.warning("[routing-metadata] refresh failed: %s", exc)
         finally:
-            with _routing_metadata_lock:
-                _routing_metadata_inflight = False
+            _release_job("routing-metadata", token)
 
     threading.Thread(target=_run, daemon=True, name="routing-metadata-refresh").start()
 
@@ -3575,25 +3575,22 @@ def _maybe_fire_flagship_refresh(
     if not _flagship_refresh_due(tier_cfg, config_path, config):
         return
 
-    global _flagship_refresh_inflight
-    with _flagship_refresh_lock:
-        if _flagship_refresh_inflight:
-            return
-        _flagship_refresh_inflight = True
+    token = _claim_job("flagship-refresh")
+    if token is None:
+        return
 
     def _run() -> None:
-        global _flagship_refresh_inflight
         try:
             logger.info("[flagship] refresh interval due — recomputing membership")
             if _recompute_flagship_members(load_config(), config_path):
                 with _models_list_cache_lock:
                     global _models_list_cache
                     _models_list_cache = None
+                    get_backend().bump_cache_epoch()
         except Exception as exc:  # noqa: BLE001
             logger.warning("[flagship] refresh failed: %s", exc)
         finally:
-            with _flagship_refresh_lock:
-                _flagship_refresh_inflight = False
+            _release_job("flagship-refresh", token)
 
     threading.Thread(target=_run, daemon=True, name="flagship-refresh").start()
 
@@ -3615,25 +3612,22 @@ def _maybe_fire_free_models_update(
     if not _free_update_due(free_tier, config_path):
         return
 
-    global _free_update_inflight
-    with _free_update_lock:
-        if _free_update_inflight:
-            return
-        _free_update_inflight = True
+    token = _claim_job("free-models-update")
+    if token is None:
+        return
 
     def _run() -> None:
-        global _free_update_inflight
         try:
             logger.info("[free-update] refresh interval due — running free-models update")
             _run_free_models_update(load_config(), config_path)
             with _models_list_cache_lock:
                 global _models_list_cache
                 _models_list_cache = None
+                get_backend().bump_cache_epoch()
         except Exception as exc:  # noqa: BLE001
             logger.warning("[free-update] failed: %s", exc)
         finally:
-            with _free_update_lock:
-                _free_update_inflight = False
+            _release_job("free-models-update", token)
 
     threading.Thread(target=_run, daemon=True, name="free-models-update-interval").start()
 
@@ -3658,25 +3652,22 @@ def _maybe_fire_cost_probe(
     if not due:
         return
 
-    global _cost_probe_inflight
-    with _cost_probe_lock:
-        if _cost_probe_inflight:
-            return
-        _cost_probe_inflight = True
+    token = _claim_job("cost-probe")
+    if token is None:
+        return
 
     def _run() -> None:
-        global _cost_probe_inflight
         try:
             logger.info("[cost-probe] interval due — running cost probe")
             _run_free_models_update(load_config(), config_path)
             with _models_list_cache_lock:
                 global _models_list_cache
                 _models_list_cache = None
+                get_backend().bump_cache_epoch()
         except Exception as exc:  # noqa: BLE001
             logger.warning("[cost-probe] failed: %s", exc)
         finally:
-            with _cost_probe_lock:
-                _cost_probe_inflight = False
+            _release_job("cost-probe", token)
 
     threading.Thread(target=_run, daemon=True, name="cost-probe-interval").start()
 
@@ -3713,21 +3704,17 @@ def _maybe_fire_pr_if_due(config: dict, config_path: str | None) -> None:
         return
     logger.info("[providers-pr] frequency_days interval elapsed — checking for PR")
 
-    global _providers_pr_inflight
-    with _providers_pr_lock:
-        if _providers_pr_inflight:
-            return
-        _providers_pr_inflight = True
+    token = _claim_job("providers-pr")
+    if token is None:
+        return
 
     def _run() -> None:
-        global _providers_pr_inflight
         try:
             _maybe_open_providers_pr(config, providers_text)
         except Exception as exc:  # noqa: BLE001 — background best-effort
             logger.warning("[providers-pr] failed: %s", exc)
         finally:
-            with _providers_pr_lock:
-                _providers_pr_inflight = False
+            _release_job("providers-pr", token)
 
     # On a background thread, like the three refreshes that share this interval
     # check. _maybe_fire_interval_probes is called from before_request, and
@@ -3737,10 +3724,9 @@ def _maybe_fire_pr_if_due(config: dict, config_path: str | None) -> None:
     threading.Thread(target=_run, daemon=True, name="providers-pr").start()
 
 
-# At most one providers PR round-trip at a time, matching the in-flight guards
-# on the three interval refreshes above.
-_providers_pr_lock = threading.Lock()
-_providers_pr_inflight = False
+# At most one providers PR round-trip at a time, by lease, matching the three
+# interval refreshes above. N workers each opening a pull request was the most
+# visible thing a per-process flag failed to prevent.
 
 _config_migration_done: bool = False
 _config_migration_lock = threading.Lock()
@@ -3921,6 +3907,35 @@ def _migrate_config_routing_keys(config_path: str | None = None) -> dict | None:
     return report
 
 
+def _apply_usage_timezone(config: dict) -> None:
+    """Pin which midnight the daily usage windows roll at.
+
+    ``server.usage_timezone`` takes an IANA name; unset means the process's
+    local zone, which is what this has always used. It exists because two
+    components resolving "today" independently can straddle a boundary and split
+    a day's counter in half, which reads as a quota reset that never happened —
+    and because a container's local zone is usually UTC while the provider's
+    quota resets somewhere else.
+
+    A bad name is logged and ignored rather than raised: a typo in an optional
+    field must not stop the proxy from routing.
+    """
+    raw = (config.get("server") or {}).get("usage_timezone")
+    if not raw:
+        return
+    try:
+        from zoneinfo import ZoneInfo
+
+        from .usage import set_default_timezone
+        set_default_timezone(ZoneInfo(str(raw)))
+        logger.info("[usage] daily windows roll at midnight in %s", raw)
+    except Exception as exc:  # noqa: BLE001 — never fail startup over a tz name
+        logger.warning(
+            "server.usage_timezone=%r is not a usable IANA zone (%s); "
+            "falling back to this process's local time.", raw, exc,
+        )
+
+
 def _run_startup_tasks_once(config_path: str | None = None) -> None:
     """Run the one-time per-worker startup tasks in a background daemon thread.
 
@@ -3953,13 +3968,24 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
     # user's hand-set facts, and nothing reads it any more.
     global _config_migration_done
     with _config_migration_lock:
-        if not _config_migration_done:
-            _config_migration_done = True
+        run_migration = not _config_migration_done
+        _config_migration_done = True
+    if run_migration:
+        # Once per worker is not enough: the migration copies config.json to a
+        # timestamped backup BEFORE taking the file lock that guards the write,
+        # so N workers booting together produce N backups and race to rename
+        # them within the same second. The lease makes it once per deployment.
+        # A worker that does not get it simply skips: the holder is doing the
+        # work, and the sidecar transaction inside protects the write itself.
+        token = _claim_job("config-routing-migration")
+        if token is not None:
             try:
                 _migrate_config_routing_keys(config_path)
             except Exception as e:  # noqa: BLE001 — never fail startup over it
                 print(f"[server:_run_startup_tasks_once] {e}")
                 traceback.print_exc()
+            finally:
+                _release_job("config-routing-migration", token)
 
     def _run() -> None:
         # 1. Warm immediately so virtual models exist before the first request.
@@ -3967,6 +3993,7 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
         _warm_route_cache_if_empty()
 
         config = load_config()
+        _apply_usage_timezone(config)
 
         # 1b. Say plainly, once, when there is nothing to route to. Without this
         #     the only signal is a "_warning" on /v1/models, which a client that
@@ -4020,6 +4047,7 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
             global _models_list_cache
             with _models_list_cache_lock:
                 _models_list_cache = None
+                get_backend().bump_cache_epoch()
             logger.info("[startup] virtual-model list cache invalidated after update")
 
         # 5. Pre-build the full /v1/models response so the first external request is
@@ -4508,9 +4536,14 @@ def list_models() -> Response:
         with _models_list_cache_lock:
             cached = _models_list_cache
         if cached is not None:
-            cached_data, cached_ts = cached
+            cached_data, cached_ts, cached_epoch = cached
             age = time.monotonic() - cached_ts
-            if age < models_ttl:
+            # A background refresh runs on ONE worker now, so the others never
+            # see it null their own copy. The epoch is how they find out.
+            if cached_epoch != get_backend().cache_epoch():
+                logger.info("  [models cache] STALE (another worker refreshed) — rebuilding")
+                _spawn_models_list_refresh()
+            elif age < models_ttl:
                 logger.info("  [models cache] HIT (%.0fs old)", age)
                 return jsonify({"object": "list", "data": cached_data})
             logger.info("  [models cache] STALE (%.0fs old) — serving stale, refreshing", age)
@@ -4812,7 +4845,8 @@ def _build_models_list(providers: dict, config: dict, timeout: int, models_ttl: 
             # if something already populated the cache — a concurrent request or a
             # cross-test daemon thread from a previous test beat us here.
             if not only_if_empty or _models_list_cache is None:
-                _models_list_cache = (full_list, time.monotonic())
+                _models_list_cache = (full_list, time.monotonic(),
+                                      get_backend().cache_epoch())
 
     return full_list
 
@@ -6323,9 +6357,8 @@ def _demote_oversize_candidates(
     """
     if not candidates:
         return candidates, 0
-    with _oversize_lock:
-        if not _oversize_registry:
-            return candidates, 0
+    if not get_backend().has_oversize():
+        return candidates, 0
     size = _payload_size_bytes(payload)
     if size <= 0:
         return candidates, 0
@@ -7896,29 +7929,6 @@ def _rendezvous_rank(key: str, identity: str) -> int:
 # pin records what actually WORKED, and later turns keep it until it stops
 # working. Best-first and stickiness stop being in tension, because the pin is
 # set by the ordering rather than competing with it.
-_AFFINITY_PIN_MAX: int = 2048
-_AFFINITY_PIN_TTL_S: float = 6 * 60 * 60
-_affinity_pins: dict[str, tuple[tuple[str, str], float]] = {}
-_affinity_pin_lock = threading.Lock()
-
-
-def _prune_affinity_pins_locked() -> None:
-    """Drop expired pins, then the oldest, until the map is back inside its cap.
-
-    Caller holds ``_affinity_pin_lock``. The cap matters more than the TTL: an
-    unbounded map keyed by conversation is a slow leak on a long-lived process.
-    """
-    cutoff = time.monotonic() - _AFFINITY_PIN_TTL_S
-    for key in [k for k, (_t, seen) in _affinity_pins.items() if seen < cutoff]:
-        _affinity_pins.pop(key, None)
-    if len(_affinity_pins) <= _AFFINITY_PIN_MAX:
-        return
-    for key, _ in sorted(_affinity_pins.items(), key=lambda kv: kv[1][1])[
-        : len(_affinity_pins) - _AFFINITY_PIN_MAX
-    ]:
-        _affinity_pins.pop(key, None)
-
-
 def _record_affinity_success(affinity_key: str | None, provider_name: str, upstream_model: str) -> None:
     """Pin this conversation to the target that just served it successfully.
 
@@ -7928,30 +7938,24 @@ def _record_affinity_success(affinity_key: str | None, provider_name: str, upstr
     """
     if not affinity_key:
         return
-    with _affinity_pin_lock:
-        _affinity_pins[affinity_key] = ((provider_name, upstream_model), time.monotonic())
-        _prune_affinity_pins_locked()
+    get_backend().record_affinity(affinity_key, provider_name, upstream_model)
 
 
 def _affinity_pinned_target(affinity_key: str | None) -> tuple[str, str] | None:
     """The target this conversation is pinned to, if the pin is still live."""
     if not affinity_key:
         return None
-    with _affinity_pin_lock:
-        entry = _affinity_pins.get(affinity_key)
-        if not entry:
-            return None
-        target, seen = entry
-        if seen < time.monotonic() - _AFFINITY_PIN_TTL_S:
-            _affinity_pins.pop(affinity_key, None)
-            return None
-        return target
+    return get_backend().affinity_target(affinity_key)
 
 
 def _reset_affinity_pins() -> None:
-    """Clear every pin. Used by tests and by an explicit usage reset."""
-    with _affinity_pin_lock:
-        _affinity_pins.clear()
+    """Clear every pin. Used by tests.
+
+    Deliberately NOT part of a usage reset, despite what this docstring used to
+    claim: a pin is routing state, not accounting, and clearing the counters is
+    no reason to scatter every in-flight conversation across the pool.
+    """
+    get_backend().reset_affinity()
 
 
 def _order_by_sticky_affinity(
@@ -11003,18 +11007,20 @@ def _build_usage_report() -> dict:
     exactly as before. Account labels are surfaced, never the key material.
     """
     config = load_config()
-    with _usage_registry_lock:
-        items = list(_usage_registry.items())
+    backend = get_backend()
+    rows = backend.usage_rows()
 
     models: list[dict] = []
     totals = {
         "requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
         "total_tokens": 0, "cost": 0.0,
     }
-    for key, tracker in items:
-        snap = tracker.cost_snapshot()
-        tok_min, tok_day = tracker.token_snapshot()
-        success_rate, avg_latency_ms, health_samples = tracker.health_snapshot()
+    for key, snap in rows:
+        tok_min = snap["tokens_last_60s"]
+        tok_day = snap["tokens_today"]
+        success_rate = snap["success_rate"]
+        avg_latency_ms = snap["avg_latency_ms"]
+        health_samples = snap["health_samples"]
         provider_name, account_id, upstream_model = _split_usage_key(key)
         believed_free = bool(upstream_model) and _is_model_free(provider_name, upstream_model, config)
         entry = {
@@ -11046,14 +11052,13 @@ def _build_usage_report() -> dict:
     totals["cost"] = round(totals["cost"], 8)
     models.sort(key=lambda m: (m["model"], m.get("account") or ""))
 
-    with _paid_free_lock:
-        flagged = [
-            {"model": k, **v} for k, v in sorted(_paid_free_flags.items())
-        ]
+    flagged = [
+        {"model": k, **v} for k, v in sorted(backend.paid_free_flags().items())
+    ]
 
     return {
         "object": "usage.report",
-        "since": _usage_since,
+        "since": backend.usage_since,
         "models": models,
         "totals": totals,
         "flagged_paid_free_models": flagged,
@@ -11297,9 +11302,41 @@ def effective_config() -> Response:
     })
 
 
+@app.route("/v1/state", methods=["GET"])
+@app.route("/state", methods=["GET"])
+def state_report() -> Response:
+    """What the routing state is doing, and whether it is shared.
+
+    Admin-gated, unlike /v1/usage and /v1/failures: this names a filesystem
+    path and the worker identities, which is more than an unauthenticated
+    endpoint should hand out.
+
+    It exists for one question -- "is sharing actually on?" -- which has no
+    other symptom. A deployment that asked for four workers and fell back to
+    one because its state directory was unwritable behaves correctly, just
+    without the parallelism, and nothing else would say so. It also answers
+    "why did that scheduled job not run", by naming who holds its lease.
+    """
+    from .admin import enforce_admin_auth  # local import: admin is wired after routes
+    auth_err = enforce_admin_auth()
+    if auth_err is not None:
+        body, status = auth_err
+        return make_response(body, status)
+    try:
+        diagnostics = get_backend().diagnostics()
+    except Exception as exc:  # noqa: BLE001 — a diagnostic must never 500
+        return jsonify({"object": "llmproxy.state", "error": str(exc)})
+    return jsonify({"object": "llmproxy.state", **diagnostics})
+
+
 @app.route("/v1/failures/reset", methods=["POST"])
 def failure_reset() -> Response:
-    """Clear this worker's failure ring. Gated by the admin auth guard."""
+    """Clear the failure ring. Gated by the admin auth guard.
+
+    Deployment-wide when workers share state, which is the only thing that
+    makes it useful: on four workers an operator previously had a one-in-four
+    chance of clearing the ring they were looking at, and no way to tell.
+    """
     from .admin import enforce_admin_auth  # local import: admin is wired after routes
     auth_err = enforce_admin_auth()
     if auth_err is not None:
@@ -11311,14 +11348,20 @@ def failure_reset() -> Response:
 
 @app.route("/v1/usage/reset", methods=["POST"])
 def usage_reset() -> Response:
-    """Clear this worker's usage counters. Gated by the admin auth guard."""
+    """Clear the usage counters. Gated by the admin auth guard.
+
+    Deployment-wide when workers share state, including the ``since`` stamp --
+    otherwise worker B would go on reporting its own boot time after worker A
+    reset, and the numbers underneath it would be from a different window.
+    """
     from .admin import enforce_admin_auth  # local import: admin is wired after routes
     auth_err = enforce_admin_auth()
     if auth_err is not None:
         body, status = auth_err
         return make_response(body, status)
     _reset_usage()
-    return jsonify({"object": "usage.reset", "ok": True, "since": _usage_since})
+    return jsonify({"object": "usage.reset", "ok": True,
+                    "since": get_backend().usage_since})
 
 
 # ---------------------------------------------------------------------------

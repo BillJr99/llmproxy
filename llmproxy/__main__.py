@@ -27,6 +27,7 @@ Options
 import argparse
 import logging
 import os
+import pathlib
 import tempfile
 import traceback
 
@@ -131,6 +132,96 @@ def _config_int_from(cfg: dict, key: str, default: int) -> int:
         return int(raw)
     except (TypeError, ValueError):
         return default
+
+
+def _prepare_shared_state(workers: int, server_cfg: dict) -> int:
+    """Decide whether state is shared, and return the worker count to actually use.
+
+    With one worker there is nothing to share, so this is a no-op and the proxy
+    pays nothing for a feature it is not using.
+
+    With more than one, the routing state has to be shared or the second worker
+    silently double-counts every free-tier quota and never sees the first one's
+    cooldowns. So the store is opened for real here, in the master, before any
+    worker exists: an unwritable state directory, a filesystem that cannot
+    support WAL, and a full disk all fail differently and all need saying.
+
+    If it cannot be opened, **the worker count drops to 1** rather than the
+    proxy running N workers on unshared state. That trade is deliberate. Falling
+    back quietly to per-worker state would reinstate exactly the bug this
+    exists to prevent, while looking healthy; refusing to boot would turn a
+    recoverable misconfiguration into an outage, and an unwritable state
+    directory must not wedge the server. Losing CPU parallelism is the only one
+    of the three that costs nothing but speed.
+
+    The store is truncated on the way through. Counters and cooldowns have never
+    survived a restart, and a file-backed store would silently make them --
+    leaving a six-hour-old cooldown on a candidate that recovered while the
+    proxy was down.
+    """
+    from . import state
+
+    if workers <= 1:
+        state.configure(None)
+        return workers
+
+    db_path = pathlib.Path(get_state_dir()) / "shared_state.db"
+    reason = state.probe_shared_store(db_path)
+    if reason is None:
+        state.configure(db_path)
+        logging.getLogger("llmproxy").info(
+            "server.workers=%d: sharing routing state through %s", workers, db_path,
+        )
+        return workers
+
+    state.configure(None)
+    logging.getLogger("llmproxy").error(
+        "server.workers=%d, but the shared routing store at %s could not be "
+        "opened: %s. Falling back to ONE worker, because %d workers on unshared "
+        "state would count every free-tier quota %d times over and never see "
+        "each other's cooldowns. Make that directory writable by %s (or set "
+        "LLMPROXY_STATE_DIR somewhere that is, on a local filesystem) to use "
+        "more than one.",
+        workers, db_path, reason, workers, workers, _describe_process_identity(),
+    )
+    return 1
+
+
+def _gunicorn_options(server_cfg: dict, host: str, port: int, log_level: str,
+                      post_worker_init) -> dict:  # noqa: ANN001 — gunicorn hook
+    """Build the gunicorn settings dict.
+
+    Split out of ``main`` so the settings can be asserted on without starting a
+    server: the only other way to check that ``server.threads`` actually reaches
+    gunicorn is to boot one.
+
+    Threads are the concurrency knob; workers are the parallelism knob. This
+    proxy spends virtually all of its wall time blocked on an upstream, and a
+    streamed request holds its gthread thread for that whole duration
+    (``stream_with_context`` around a blocking ``iter_content``), so the thread
+    count is the ceiling on concurrent in-flight requests. Raising it is free:
+    threads share process memory, so every registry, counter and cooldown the
+    routing layer keeps is already correct across them — that is what the
+    ``threading.Lock`` on each one is for.
+
+    Workers are the opposite trade. All of that state lives in process memory
+    and is NOT shared between processes, so with two of them a 429 that cools a
+    candidate in one worker is invisible to the other, which hits the same
+    exhausted endpoint on the very next request, and ``free_limits`` quotas are
+    counted once per worker — the proxy believes it has roughly N times the
+    headroom it really has. Hence one worker by default, and raise threads first.
+    """
+    return {
+        "bind": f"{host}:{port}",
+        "workers": max(1, _config_int_from(server_cfg, "workers", 1)),
+        "worker_class": "gthread",
+        "threads": max(1, _config_int_from(server_cfg, "threads", 4)),
+        "timeout": max(server_cfg.get("stream_timeout", 300), 120),
+        "loglevel": log_level.lower(),
+        "accesslog": "-",
+        "worker_tmp_dir": _gunicorn_worker_tmp_dir(),
+        "post_worker_init": post_worker_init,
+    }
 
 
 def _gunicorn_worker_tmp_dir() -> str | None:
@@ -426,45 +517,43 @@ def main() -> None:
         # call would not propagate to forked workers; post_worker_init runs in the
         # worker. The task spawns its own daemon thread, so it never blocks boot.
         def _post_worker_init(worker):  # noqa: ANN001 — gunicorn hook signature
+            from . import state
             from .server import _run_startup_tasks_once
             # Drop any config cache state inherited from the pre-fork master so
             # this worker reads providers fresh from disk rather than serving a
             # snapshot the master happened to cache before forking.
             load_config(force_reload=True)
+            # Same for the routing-state backend. Nothing it holds today
+            # survives a fork badly, so this is currently a formality — but it
+            # is the hook that makes it structurally impossible for a
+            # connection-backed backend to be inherited across one, which is
+            # the classic way to corrupt a shared store.
+            state.reset_for_worker()
             _run_startup_tasks_once()
 
-        # One worker by default, deliberately. Every piece of state the routing
-        # layer depends on — the saturation registry, per-model health scores,
-        # free-tier request and token counters — lives in process memory and is
-        # not shared between workers. With two of them a 429 that cools a
-        # candidate in one worker is invisible to the other, which hits the same
-        # exhausted endpoint on the very next request, and free_limits quotas are
-        # counted twice over so the proxy believes it has roughly double the
-        # headroom it really has. gthread's four threads still provide
-        # concurrency. Operators who front several machines, or who genuinely
-        # want the CPU parallelism and accept the accounting drift, can raise it.
-        workers = max(1, _config_int_from(server_cfg, "workers", 1))
-        options = {
-            "bind": f"{host}:{port}",
-            "workers": workers,
-            "worker_class": "gthread",
-            "threads": 4,
-            "timeout": max(server_cfg.get("stream_timeout", 300), 120),
-            "loglevel": log_level.lower(),
-            "accesslog": "-",
-            "worker_tmp_dir": _gunicorn_worker_tmp_dir(),
-            "post_worker_init": _post_worker_init,
-        }
+        options = _gunicorn_options(server_cfg, host, port, log_level,
+                                    _post_worker_init)
+        workers = _prepare_shared_state(options["workers"], server_cfg)
+        options["workers"] = workers
+        threads = options["threads"]
         logging.getLogger("llmproxy").info(
-            "Starting with gunicorn — %s:%d (%d worker(s) x 4 threads)",
-            host, port, workers,
+            "Starting with gunicorn — %s:%d (%d worker(s) x %d thread(s))",
+            host, port, workers, threads,
         )
         if workers > 1:
-            logging.getLogger("llmproxy").warning(
-                "server.workers=%d: quota, health and saturation state is per-process "
-                "and is NOT shared between workers, so free-tier limits are counted "
-                "per worker and cooldowns do not propagate.",
-                workers,
+            # Quota, health, cooldowns, capability gaps, affinity pins, the
+            # conversation store and the failure ring are all shared by now --
+            # _prepare_shared_state dropped to one worker if they could not be --
+            # so the old "none of this is shared" warning would be actively
+            # wrong here. What is still per-worker is the derived caches, which
+            # are rebuildable and only cost duplicated fetches.
+            logging.getLogger("llmproxy").info(
+                "server.workers=%d: routing state is shared; the model-listing and "
+                "response caches stay per-worker, so expect up to %d× the provider "
+                "/models fetches and a lower response-cache hit rate. Threads, not "
+                "workers, are the lever for serving more concurrent requests — this "
+                "proxy waits on upstreams rather than on CPU.",
+                workers, workers,
             )
         _StandaloneApp(app, options).run()
 

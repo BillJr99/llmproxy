@@ -12,9 +12,14 @@
 # The group stays 0. The image's writable directories are group-root (see the
 # Dockerfile's useradd stanza), so a host GID of 1000 cannot write them; group 0
 # grants no root privilege here, because the UID is still yours. Machine-written
-# state (routing_metadata.json, flagship_models.json and the refresh timestamps)
-# goes to the llmproxy_state volume rather than onto the config mount, so the
-# config directory can be read-only if you want it to be.
+# state (routing_metadata.json, flagship_models.json, the refresh timestamps,
+# and shared_state.db when server.workers > 1) goes to the llmproxy_state volume
+# rather than onto the config mount, so the config directory can be read-only if
+# you want it to be.
+#
+# That volume must be a LOCAL filesystem. shared_state.db is SQLite in WAL mode,
+# which needs an mmap'd -shm region that NFS and SMB cannot provide; a network
+# bind mount there is reported at startup and the worker count drops to 1.
 #
 # Quick start (runs the proxy server):
 #   docker-compose up -d

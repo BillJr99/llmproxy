@@ -54,7 +54,7 @@ def S(tmp_path, monkeypatch):
     path.write_text(json.dumps(cfg), encoding="utf-8")
     server = _load_server(monkeypatch, path)
     server._reset_failures()
-    server._capability_gap_registry.clear()
+    server.get_backend().reset_capability_gaps()
     return server
 
 

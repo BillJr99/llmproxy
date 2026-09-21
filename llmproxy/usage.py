@@ -37,9 +37,42 @@ from . import providers as _providers
 HEALTH_WINDOW = 20
 
 
-def today_start_ts() -> float:
-    """Unix timestamp for the start of today (local midnight)."""
-    return time.mktime(datetime.date.today().timetuple())
+_default_tz: datetime.tzinfo | None = None
+
+
+def set_default_timezone(tz: datetime.tzinfo | None) -> None:
+    """Pin the zone the daily windows roll in. None means the process's local zone.
+
+    Set once at startup from ``server.usage_timezone``. It exists so every
+    accounting path agrees on where the day boundary is: two components
+    resolving "today" independently can straddle a boundary and split a day's
+    counter in half, which reads as a quota reset that never happened.
+    """
+    global _default_tz
+    _default_tz = tz
+
+
+def day_key(tz: datetime.tzinfo | None = None) -> str:
+    """The calendar date an observation belongs to, e.g. ``'2026-09-21'``.
+
+    A date rather than a timestamp, deliberately. The daily windows used to
+    track a float ``_day_start`` (local midnight) and roll when
+    ``now >= _day_start + 86400`` — which is not next local midnight on a day
+    that gains or loses an hour to DST. A 23-hour day rolled an hour late, so
+    the first hour of the new day was metered against the old one; a 25-hour day
+    rolled an hour early. The window then re-aligned, because ``_day_start`` was
+    re-derived from the calendar at the moment of rollover — so the error was
+    bounded to one boundary, twice a year, rather than accumulating.
+
+    Bounded is not harmless: an hour of a new day charged against yesterday's
+    ``free_limits`` allowance can exhaust a quota that the provider has in fact
+    already reset, and it does so at a boundary nobody is watching.
+
+    Comparing calendar dates has no such failure mode. A day rolls when the date
+    changes, whatever the offset did in between, and it needs no arithmetic that
+    assumes every day is 86400 seconds long.
+    """
+    return datetime.datetime.now(tz if tz is not None else _default_tz).date().isoformat()
 
 
 class ModelUsage:
@@ -54,7 +87,7 @@ class ModelUsage:
 
     __slots__ = (
         "_lock",
-        "_minute_ts", "_day_count", "_day_start",          # request windows
+        "_minute_ts", "_day_count", "_day_key",            # request windows
         "_minute_tokens", "_day_tokens",                    # token windows
         "_lifetime_requests", "_lifetime_prompt",
         "_lifetime_completion", "_lifetime_total",
@@ -66,7 +99,7 @@ class ModelUsage:
         self._lock = threading.Lock()
         self._minute_ts: collections.deque = collections.deque()
         self._day_count: int = 0
-        self._day_start: float = today_start_ts()
+        self._day_key: str = day_key()
         self._minute_tokens: collections.deque = collections.deque()  # (mono_ts, tokens)
         self._day_tokens: int = 0
         self._lifetime_requests: int = 0
@@ -99,10 +132,10 @@ class ModelUsage:
         later, once the final SSE chunk has been parsed.
         """
         now_mono = time.monotonic()
-        now_wall = time.time()
         with self._lock:
-            if now_wall >= self._day_start + 86400:
-                self._day_start = today_start_ts()
+            today = day_key()
+            if today != self._day_key:
+                self._day_key = today
                 self._day_count = 0
                 self._day_tokens = 0
             if requests:
@@ -158,9 +191,8 @@ class ModelUsage:
     def snapshot(self) -> tuple[int, int]:
         """Return (requests_last_60s, requests_today), pruning stale entries."""
         now_mono = time.monotonic()
-        now_wall = time.time()
         with self._lock:
-            if now_wall >= self._day_start + 86400:
+            if day_key() != self._day_key:
                 return 0, 0
             cutoff = now_mono - 60.0
             while self._minute_ts and self._minute_ts[0] < cutoff:
@@ -170,9 +202,8 @@ class ModelUsage:
     def token_snapshot(self) -> tuple[int, int]:
         """Return (tokens_last_60s, tokens_today), pruning stale entries."""
         now_mono = time.monotonic()
-        now_wall = time.time()
         with self._lock:
-            if now_wall >= self._day_start + 86400:
+            if day_key() != self._day_key:
                 return 0, 0
             cutoff = now_mono - 60.0
             while self._minute_tokens and self._minute_tokens[0][0] < cutoff:

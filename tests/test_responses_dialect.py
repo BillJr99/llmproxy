@@ -288,11 +288,20 @@ def test_store_false_opts_out():
 
 
 def test_store_is_bounded():
-    store = R._ResponseStore(limit=3)
-    for i in range(5):
+    """A long-running proxy must not grow without limit.
+
+    The cap is a property of the storage now rather than of this wrapper, so it
+    is asserted at its real value: constructing a store with a small private
+    limit would no longer be testing what actually runs.
+    """
+    from llmproxy.state import MAX_STORED_RESPONSES
+
+    store = R._ResponseStore()
+    for i in range(MAX_STORED_RESPONSES + 3):
         store.save(f"r{i}", [{"role": "user", "content": str(i)}])
-    assert store.get("r0") is None and store.get("r1") is None
-    assert store.get("r4") is not None
+    assert store.get("r0") is None, "the oldest should have been evicted"
+    assert store.get("r2") is None
+    assert store.get(f"r{MAX_STORED_RESPONSES + 2}") is not None
 
 
 def test_store_delete():

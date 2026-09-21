@@ -180,6 +180,13 @@ DEFAULT_SERVER_CONFIG = {
     "log_level": "INFO",
     "request_timeout": 120,
     "stream_timeout": 300,
+    # The ceiling on concurrent in-flight requests. Listed at its default
+    # because it is the knob to reach for when the proxy feels slow under load:
+    # a streamed request holds its thread for the whole upstream call, and
+    # threads share process memory so raising this costs nothing in
+    # correctness. "workers" is deliberately NOT listed -- it buys CPU
+    # parallelism this proxy barely needs, and one is almost always right.
+    "threads": 4,
 }
 
 # Web admin UI defaults. The UI is enabled by default but, with no token set, is

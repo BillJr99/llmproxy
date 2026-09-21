@@ -340,6 +340,7 @@
     "port": 8080,
     "log_level": "INFO",
     "request_timeout": 120,
-    "stream_timeout": 300
+    "stream_timeout": 300,
+    "threads": 4
   }
 }

@@ -191,7 +191,7 @@ def test_free_capacity_exhausted_is_deprioritized(server, monkeypatch):
     }}
     cfg_path.write_text(json.dumps(cfg))
 
-    server._get_or_create_tracker("freecloud/free-1").record(requests=2)
+    server.get_backend().record_usage("freecloud/free-1", requests=2)
     pairs = _order(server, {"messages": [{"role": "user", "content": "hi"}]})
     free = [(pn, um) for pn, um in pairs if pn == "freecloud"]
     assert free.index(("freecloud", "free-2")) < free.index(("freecloud", "free-1"))
@@ -214,7 +214,7 @@ def test_provider_free_allowance_headroom(server):
     assert server._cost_tier("allowance", "m", prov_cfg, config) == server._TIER_FREE
 
     # Burn the allowance -> falls back to PAID.
-    server._get_or_create_tracker("allowance/m").record(requests=3)
+    server.get_backend().record_usage("allowance/m", requests=3)
     assert server._provider_free_headroom("allowance", prov_cfg) is False
     assert server._cost_tier("allowance", "m", prov_cfg, config) == server._TIER_PAID
 
@@ -281,7 +281,7 @@ def test_free_tier_exhausted_strong_model_falls_after_viable_weak(server):
         "tokens_per_minute": None, "tokens_per_day": None,
     }}
     cfg_path.write_text(json.dumps(cfg))
-    server._get_or_create_tracker("freecloud/free-1").record(requests=2)
+    server.get_backend().record_usage("freecloud/free-1", requests=2)
 
     pairs = _order(server, {"messages": [{"role": "user", "content": "hi"}]})
     free = [(pn, um) for pn, um in pairs if pn == "freecloud"]

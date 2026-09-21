@@ -186,8 +186,17 @@ def test_a_smaller_success_proves_nothing_and_leaves_it_alone(server):
 
 def test_nothing_is_persisted_across_a_restart(server, monkeypatch, tmp_path):
     """Deliberately in memory: a body limit is cheap to relearn, and persisting
-    it would buy a schema and a staleness problem and nothing else."""
+    it would buy a schema and a staleness problem and nothing else.
+
+    A restart is a new process, so the routing state goes with it. Reloading the
+    module alone does not model that -- the state backend is process-scoped and
+    deliberately outlives a reload -- so this drops it the way a fork or a fresh
+    boot does.
+    """
+    from llmproxy import state
+
     server._record_oversize("p1", "m1", 5000)
+    state.reset_for_worker()
     fresh = _make_server(monkeypatch, tmp_path)
     assert fresh._is_oversize_for("p1", "m1", 5000) is False
 

@@ -35,15 +35,17 @@ import json
 import threading
 import time
 import uuid
-from collections import OrderedDict
 from collections.abc import Iterator
 
 from .base import InboundAdapter, register_inbound, sse_event
 
-# Default ceiling when a Responses request does not set ``max_output_tokens``.
-# Chat treats a missing ``max_tokens`` as "the model's maximum", and so does
-# this: the key is simply omitted rather than invented.
-_MAX_STORED_RESPONSES = 256
+# How many conversations the store keeps is a property of the storage now, and
+# lives with it in state.py as MAX_STORED_RESPONSES, so the cap and the thing it
+# bounds cannot drift apart.
+#
+# (The comment that used to sit here described a max_output_tokens default that
+# no longer exists as a constant -- to_canonical_request passes the value
+# straight through -- and had come to sit above an unrelated number.)
 
 
 def _new_id(prefix: str) -> str:
@@ -56,55 +58,52 @@ def _new_id(prefix: str) -> str:
 # ---------------------------------------------------------------------------
 
 class _ResponseStore:
-    """Bounded, in-process store backing ``previous_response_id``.
+    """Bounded store backing ``previous_response_id``.
 
     The real Responses API keeps conversation state server-side, so an agent may
     send only its newest turn and reference the previous response by id. llmproxy
     is otherwise entirely stateless, so this is the one place that holds
     conversation data, and it is deliberately modest about it:
 
-    * **In-process and in-memory.** Nothing is written to disk, so a restart
-      drops every stored conversation, and a second gunicorn worker has its own
-      store. A client that gets ``previous_response_id`` wrong is told so with a
-      clear 400 rather than being silently answered without its own history,
-      which would produce a confidently wrong reply.
-    * **Bounded.** At most ``_MAX_STORED_RESPONSES`` conversations, evicted
+    * **Shared between workers when they share state at all.** The storage lives
+      in ``llmproxy.state``; with one worker it is a dict in this process, and
+      with several it is the shared store they all read. It used to be per
+      process unconditionally, which made this the worst-behaved thing in the
+      proxy under ``server.workers > 1``: a transcript saved by one worker drew
+      a **400** from another, for roughly (N-1)/N of requests. Everything else
+      merely routed worse when it was not shared; this was a hard error.
+    * **Not durable.** Nothing survives a restart, by design — the shared store
+      is truncated at boot, so it matches the single-worker behaviour rather
+      than quietly outliving a deploy.
+    * **Bounded.** At most ``MAX_STORED_RESPONSES`` conversations, evicted
       oldest-first, so a long-running proxy cannot grow without limit.
     * **Opt-out honored.** ``store: false`` on the request skips saving.
 
-    This is enough for an agent loop that stays inside one process for the life
-    of a task, which is the case that matters here. It is not a durable
-    conversation service and is documented as such in the README.
+    A client that gets ``previous_response_id`` wrong is still told so with a
+    clear 400, rather than being answered without its own history — which would
+    produce a confidently wrong reply. The difference is that being wrong now
+    means the id really is unknown, not that the request reached the wrong
+    worker.
     """
 
-    def __init__(self, limit: int = _MAX_STORED_RESPONSES) -> None:
-        self._data: OrderedDict[str, list[dict]] = OrderedDict()
-        self._lock = threading.Lock()
-        self._limit = limit
+    def _backend(self):
+        # Imported per call rather than at module scope: the dialect layer is
+        # imported while server.py is still being defined, and state.py must not
+        # become part of that cycle.
+        from ..state import get_backend
+        return get_backend()
 
     def save(self, response_id: str, messages: list[dict]) -> None:
-        if not response_id:
-            return
-        with self._lock:
-            self._data[response_id] = messages
-            self._data.move_to_end(response_id)
-            while len(self._data) > self._limit:
-                self._data.popitem(last=False)
+        self._backend().store_response(response_id, messages)
 
     def get(self, response_id: str) -> list[dict] | None:
-        with self._lock:
-            found = self._data.get(response_id)
-            if found is not None:
-                self._data.move_to_end(response_id)
-            return list(found) if found is not None else None
+        return self._backend().load_response(response_id)
 
     def delete(self, response_id: str) -> bool:
-        with self._lock:
-            return self._data.pop(response_id, None) is not None
+        return self._backend().delete_response(response_id)
 
     def clear(self) -> None:
-        with self._lock:
-            self._data.clear()
+        self._backend().clear_responses()
 
 
 STORE = _ResponseStore()
