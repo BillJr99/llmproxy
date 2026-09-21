@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import time
+import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -59,10 +60,110 @@ def test_lifetime_and_cost_snapshot():
 def test_day_rollover_resets_requests_and_tokens(monkeypatch):
     u = ModelUsage()
     u.record(requests=1, total=50)
-    # Force the day window to look stale.
-    u._day_start = time.time() - 86401
+    # Force the day window to look stale by moving the calendar date on.
+    monkeypatch.setattr(usage, "day_key", lambda tz=None: "1999-12-31")
     assert u.snapshot() == (0, 0)
     assert u.token_snapshot() == (0, 0)
+
+
+def test_a_new_day_zeroes_the_counters_on_the_next_record(monkeypatch):
+    """snapshot() reports zero for a rolled day; record() does the actual reset."""
+    u = ModelUsage()
+    u.record(requests=3, total=90)
+    assert u.snapshot() == (3, 3)
+
+    monkeypatch.setattr(usage, "day_key", lambda tz=None: "2100-01-01")
+    u.record(requests=1, total=10)
+    assert u.snapshot()[1] == 1          # today, not 4
+    assert u.token_snapshot()[1] == 10
+
+
+# ── the day boundary, across DST ────────────────────────────────────────────
+#
+# The daily windows used to track a float `_day_start` and roll at
+# `_day_start + 86400`, which is not next local midnight on a day that gains or
+# loses an hour. A 23-hour day rolled an hour late, charging the first hour of
+# the new day against yesterday's free_limits allowance; a 25-hour day rolled an
+# hour early. It re-aligned afterwards, so the error was one boundary twice a
+# year rather than a permanent skew -- but a quota exhausted against a day the
+# provider has already reset is a real failed request, at a boundary nobody
+# watches. Without these tests the regression is invisible for six months.
+
+_NY = "America/New_York"
+
+
+def _at(iso: str, zone: str) -> datetime.datetime:
+    """A tzinfo-aware datetime in *zone*, for freezing day_key()."""
+    return datetime.datetime.fromisoformat(iso).replace(tzinfo=ZoneInfo(zone))
+
+
+@pytest.mark.parametrize("zone", [_NY, "UTC", "Australia/Lord_Howe"])
+def test_day_key_is_the_local_calendar_date(zone):
+    tz = ZoneInfo(zone)
+    assert usage.day_key(tz) == datetime.datetime.now(tz).date().isoformat()
+
+
+@pytest.mark.parametrize("iso,expected", [
+    # US spring forward: 2026-03-08 02:00 EST -> 03:00 EDT. The day is 23h long.
+    ("2026-03-08T00:30", "2026-03-08"),
+    ("2026-03-08T23:30", "2026-03-08"),
+    ("2026-03-09T00:30", "2026-03-09"),
+    # US fall back: 2026-11-01 02:00 EDT -> 01:00 EST. The day is 25h long.
+    ("2026-11-01T00:30", "2026-11-01"),
+    ("2026-11-01T23:30", "2026-11-01"),
+    ("2026-11-02T00:30", "2026-11-02"),
+])
+def test_the_date_is_right_either_side_of_a_transition(monkeypatch, iso, expected):
+    """A 23- or 25-hour day still rolls exactly once, at local midnight.
+
+    `_day_start + 86400` could not express this: on the 23-hour day it rolled an
+    hour into the next day, and on the 25-hour day an hour early.
+    """
+    frozen = _at(iso, _NY)
+
+    class _FrozenDatetime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen.astimezone(tz) if tz else frozen
+
+    monkeypatch.setattr(usage.datetime, "datetime", _FrozenDatetime)
+    assert usage.day_key(ZoneInfo(_NY)) == expected
+
+
+def test_the_boundary_does_not_drift_after_a_transition(monkeypatch):
+    """The day after a transition must be correct too, not just the day of.
+
+    Walking three consecutive local noons across the spring transition must
+    yield three consecutive dates. This is the property that would catch a fix
+    which special-cased the transition day but left the following one skewed.
+    """
+    tz = ZoneInfo(_NY)
+    seen = []
+    for iso in ("2026-03-07T12:00", "2026-03-08T12:00", "2026-03-09T12:00"):
+        frozen = _at(iso, _NY)
+
+        class _FrozenDatetime(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None, _f=frozen):
+                return _f.astimezone(tz) if tz else _f
+
+        monkeypatch.setattr(usage.datetime, "datetime", _FrozenDatetime)
+        seen.append(usage.day_key(tz))
+    assert seen == ["2026-03-07", "2026-03-08", "2026-03-09"]
+
+
+def test_set_default_timezone_pins_the_boundary(monkeypatch):
+    """Two components resolving 'today' independently could split a day's
+    counter in half, which reads as a quota reset that never happened."""
+    try:
+        usage.set_default_timezone(ZoneInfo("Pacific/Kiritimati"))   # UTC+14
+        east = usage.day_key()
+        usage.set_default_timezone(ZoneInfo("Pacific/Midway"))       # UTC-11
+        west = usage.day_key()
+    finally:
+        usage.set_default_timezone(None)
+    assert east >= west                    # 25 hours apart: same date or one ahead
+    assert usage.day_key() == usage.day_key(None)
 
 
 # ── extract_usage ───────────────────────────────────────────────────────────
