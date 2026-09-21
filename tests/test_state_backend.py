@@ -433,3 +433,77 @@ def test_clearing_empties_the_store(backend):
     backend.store_response("resp_1", [{"role": "user", "content": "hi"}])
     backend.clear_responses()
     assert backend.load_response("resp_1") is None
+
+
+# ── the health window, which must mean the same thing everywhere ────────────
+
+def test_the_health_window_is_bounded_by_attempts(backend):
+    """Last N *attempts*, not last N minutes.
+
+    Time-bucketed counters would be cheaper to share, but at a low request rate
+    a broken provider would never accumulate enough samples inside the window to
+    be demoted at all -- which is exactly when demotion matters.
+    """
+    from llmproxy.usage import HEALTH_WINDOW
+    for _ in range(HEALTH_WINDOW * 3):
+        backend.record_outcome("p/m", True, latency_ms=10.0)
+    assert backend.health_snapshot("p/m")[2] == HEALTH_WINDOW
+
+
+def test_recovery_evicts_old_failures(backend):
+    """A provider that has recovered must stop being punished promptly."""
+    from llmproxy.usage import HEALTH_WINDOW
+    for _ in range(HEALTH_WINDOW):
+        backend.record_outcome("p/m", False, latency_ms=10.0)
+    assert backend.health_snapshot("p/m")[0] == 0.0
+    for _ in range(HEALTH_WINDOW):
+        backend.record_outcome("p/m", True, latency_ms=10.0)
+    assert backend.health_snapshot("p/m")[0] == 1.0
+
+
+def test_the_window_matches_a_single_process_deque_exactly(backend):
+    """The claim the whole shared-health design rests on.
+
+    Writers are serialised, so the surviving rows are the same ones a
+    ``deque(maxlen=N)`` would have held over the same sequence -- not an
+    approximation of them.
+    """
+    import collections
+    import random
+
+    from llmproxy.usage import HEALTH_WINDOW
+
+    random.seed(7)
+    seq = [random.random() > 0.35 for _ in range(HEALTH_WINDOW * 3)]
+    for ok in seq:
+        backend.record_outcome("p/m", ok, latency_ms=10.0)
+
+    ref = collections.deque(seq, maxlen=HEALTH_WINDOW)
+    expected = sum(1 for x in ref if x) / len(ref)
+    rate, _latency, samples = backend.health_snapshot("p/m")
+    assert samples == len(ref)
+    assert rate == pytest.approx(expected)
+
+
+# ── the bulk snapshot ───────────────────────────────────────────────────────
+
+def test_the_snapshot_agrees_with_the_per_key_accessors(backend):
+    """The snapshot is an optimisation, so it must not be a second opinion."""
+    backend.record_usage("p/m", requests=2, total=30)
+    backend.record_outcome("p/m", False, latency_ms=50.0)
+    backend.mark_saturated("q/n", 60)
+
+    snap = backend.snapshot()
+    row = snap.row("p/m")
+    assert (row.req_min, row.req_day) == backend.usage_snapshot("p/m")
+    assert (row.tok_min, row.tok_day) == backend.token_snapshot("p/m")
+    assert (row.success_rate, row.avg_latency_ms, row.health_samples) == \
+        backend.health_snapshot("p/m")
+    assert snap.is_saturated("q/n") is True
+    assert snap.is_saturated("p/m") is False
+
+
+def test_an_unseen_key_reads_empty_from_the_snapshot(backend):
+    row = backend.snapshot().row("never/seen")
+    assert (row.req_min, row.req_day, row.health_samples) == (0, 0, 0)
+    assert row.success_rate == 1.0

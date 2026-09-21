@@ -36,13 +36,101 @@ import datetime
 import threading
 import time
 from collections import deque
-from typing import Protocol, runtime_checkable
+from typing import NamedTuple, Protocol, runtime_checkable
 
 from .usage import ModelUsage
 
 # ---------------------------------------------------------------------------
 # Interface
 # ---------------------------------------------------------------------------
+
+class UsageRow(NamedTuple):
+    """Everything the ordering passes need about one metered credential.
+
+    A NamedTuple rather than a frozen dataclass, for a measured reason: the
+    ordering passes build one of these per candidate, and a frozen dataclass
+    constructs through object.__setattr__ per field where a tuple subclass is
+    built in C. On a thousand-candidate pool that difference was enough to make
+    the single-worker path slower than the direct dict access it replaced --
+    which is exactly what this interface promised not to do. See
+    scripts/bench_state.py.
+    """
+
+    req_min: int = 0
+    req_day: int = 0
+    tok_min: int = 0
+    tok_day: int = 0
+    success_rate: float = 1.0
+    avg_latency_ms: float = 0.0
+    health_samples: int = 0
+
+
+# An untried candidate: healthy-looking but unsampled, which is what callers
+# gate on. A success_rate of 1.0 over zero samples means "no evidence", not
+# "proven good".
+EMPTY_ROW = UsageRow()
+
+
+class StateSnapshot(Protocol):
+    """One request's view of the state the ordering passes read.
+
+    This exists for one reason. The three ordering passes call the accessors
+    once per candidate -- roughly a thousand reads on a large free pool, against
+    about four writes -- and with in-process dicts those are lookups. Against a
+    database they would be a thousand queries, so the reads are taken in bulk,
+    once, and every accessor reads from the result.
+
+    The in-process backend returns a live view rather than a copy, so it keeps
+    paying exactly what it paid before: a dict lookup and one attribute hop.
+    """
+
+    def row(self, key: str) -> UsageRow: ...
+    def is_saturated(self, key: str) -> bool: ...
+
+
+class _LiveSnapshot:
+    """A view straight onto the in-process dicts. No copying, no extra locking.
+
+    Rows are memoized for the life of the snapshot, which is one request. The
+    ordering passes ask for requests, tokens and health for the same candidate
+    in succession, so without this each of those built its own row and the
+    default single-worker path would pay MORE than it did before the interface
+    existed -- measurably so on a large pool (see scripts/bench_state.py). Any
+    write drops the whole snapshot, so a memo cannot go stale within a request.
+    """
+
+    __slots__ = ("_backend", "_rows")
+
+    def __init__(self, backend) -> None:
+        self._backend = backend
+        self._rows: dict[str, UsageRow] = {}
+
+    def row(self, key: str) -> UsageRow:
+        row = self._rows.get(key)
+        if row is None:
+            row = self._backend.usage_row(key)
+            self._rows[key] = row
+        return row
+
+    def is_saturated(self, key: str) -> bool:
+        return self._backend.is_saturated(key)
+
+
+class _MaterializedSnapshot:
+    """A point-in-time copy, for a backend where each read costs a query."""
+
+    __slots__ = ("_rows", "_saturated")
+
+    def __init__(self, rows: dict, saturated: frozenset) -> None:
+        self._rows = rows
+        self._saturated = saturated
+
+    def row(self, key: str) -> UsageRow:
+        return self._rows.get(key, EMPTY_ROW)
+
+    def is_saturated(self, key: str) -> bool:
+        return key in self._saturated
+
 
 @runtime_checkable
 class SharedState(Protocol):
@@ -64,6 +152,8 @@ class SharedState(Protocol):
     def usage_snapshot(self, key: str) -> tuple[int, int]: ...
     def token_snapshot(self, key: str) -> tuple[int, int]: ...
     def health_snapshot(self, key: str) -> tuple[float, float, int]: ...
+    def usage_row(self, key: str) -> UsageRow: ...
+    def snapshot(self) -> StateSnapshot: ...
     def usage_rows(self) -> list[tuple[str, dict]]: ...
     def reset_usage(self) -> str: ...
     @property
@@ -234,6 +324,20 @@ class InMemoryState:
         with self._usage_lock:
             tracker = self._usage.get(key)
         return tracker.health_snapshot() if tracker else (1.0, 0.0, 0)
+
+    def usage_row(self, key: str) -> UsageRow:
+        """One candidate's counters and health, in the shape ordering wants."""
+        with self._usage_lock:
+            tracker = self._usage.get(key)
+        if tracker is None:
+            return EMPTY_ROW
+        req_min, req_day = tracker.snapshot()
+        tok_min, tok_day = tracker.token_snapshot()
+        rate, latency, samples = tracker.health_snapshot()
+        return UsageRow(req_min, req_day, tok_min, tok_day, rate, latency, samples)
+
+    def snapshot(self) -> StateSnapshot:
+        return _LiveSnapshot(self)
 
     def usage_rows(self) -> list[tuple[str, dict]]:
         """One flattened row per metered key, for the usage report.
@@ -637,7 +741,7 @@ def reset_for_worker() -> None:
 # Cross-process implementation
 # ---------------------------------------------------------------------------
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 # The tables this backend owns so far. Everything not listed here still falls
 # through to the in-process storage inherited from InMemoryState, which is
@@ -646,6 +750,52 @@ _DDL = """
 CREATE TABLE IF NOT EXISTS meta (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS usage_second (
+  key      TEXT    NOT NULL,
+  sec      INTEGER NOT NULL,
+  requests INTEGER NOT NULL DEFAULT 0,
+  tokens   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (key, sec)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS ix_usage_second_sec ON usage_second(sec);
+
+CREATE TABLE IF NOT EXISTS usage_day (
+  key      TEXT NOT NULL,
+  day_key  TEXT NOT NULL,
+  requests INTEGER NOT NULL DEFAULT 0,
+  tokens   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (key, day_key)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS usage_model (
+  key                 TEXT PRIMARY KEY,
+  lifetime_requests   INTEGER NOT NULL DEFAULT 0,
+  lifetime_prompt     INTEGER NOT NULL DEFAULT 0,
+  lifetime_completion INTEGER NOT NULL DEFAULT 0,
+  lifetime_total      INTEGER NOT NULL DEFAULT 0,
+  lifetime_cost       REAL    NOT NULL DEFAULT 0.0,
+  cost_sources        TEXT    NOT NULL DEFAULT '{}'
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS outcome (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  key        TEXT NOT NULL,
+  ok         INTEGER NOT NULL,
+  latency_ms REAL,
+  worker     TEXT NOT NULL,
+  ts         REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_outcome_key ON outcome(key, id DESC);
+
+CREATE TABLE IF NOT EXISTS paid_free (
+  key    TEXT PRIMARY KEY,
+  cost   REAL NOT NULL,
+  source TEXT NOT NULL,
+  n      INTEGER NOT NULL DEFAULT 1
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS capability_gap (
@@ -777,8 +927,10 @@ class SqliteState(InMemoryState):
                 row = conn.execute(
                     "SELECT v FROM meta WHERE k='schema_version'").fetchone()
                 if row is None or int(row["v"]) != _SCHEMA_VERSION:
-                    for table in ("capability_gap", "saturation", "oversize",
-                                  "affinity_pin", "lease", "response", "meta"):
+                    for table in ("usage_second", "usage_day", "usage_model",
+                                  "outcome", "paid_free", "capability_gap",
+                                  "saturation", "oversize", "affinity_pin",
+                                  "lease", "response", "meta"):
                         conn.execute(f"DROP TABLE IF EXISTS {table}")
             # Statement by statement, not executescript(): that issues its own
             # COMMIT first, which would silently end the transaction this
@@ -812,7 +964,8 @@ class SqliteState(InMemoryState):
         conn = self._conn()
         conn.execute("BEGIN IMMEDIATE")
         try:
-            for table in ("capability_gap", "saturation", "oversize",
+            for table in ("usage_second", "usage_day", "usage_model", "outcome",
+                          "paid_free", "capability_gap", "saturation", "oversize",
                           "affinity_pin", "lease", "response"):
                 conn.execute(f"DELETE FROM {table}")
             conn.execute("COMMIT")
@@ -842,6 +995,11 @@ class SqliteState(InMemoryState):
         # endpoint for a while: "who ran this last, and when" is the question
         # being asked when a scheduled job did not happen.
         conn.execute("DELETE FROM lease WHERE expires_at < ?", (now - 3600,))
+        # Two minutes of second-buckets, for a sixty-second window: enough slack
+        # that a read straddling the boundary never sees a hole.
+        conn.execute("DELETE FROM usage_second WHERE sec < ?", (int(now) - 120,))
+        from .usage import day_key
+        conn.execute("DELETE FROM usage_day WHERE day_key < ?", (day_key(),))
 
     def _write(self, statements) -> int:
         """Run statements in one BEGIN IMMEDIATE; returns the last changes()."""
@@ -1108,3 +1266,299 @@ class SqliteState(InMemoryState):
 
     def clear_responses(self) -> None:
         self._write([("DELETE FROM response", ())])
+
+    # — usage, tokens and health ——————————————————————————————————————————
+
+    def record_usage(self, key: str, *, requests: int = 0, prompt: int = 0,
+                     completion: int = 0, total: int = 0, cost: float = 0.0,
+                     cost_source: str | None = None) -> None:
+        import json
+
+        from .usage import day_key
+
+        now = time.time()
+        stmts = []
+        if requests or total:
+            # Second-granularity buckets rather than one row per request: the
+            # minute window is a SUM over the last sixty, so bucketing keeps the
+            # row count bounded by rate rather than by volume. The cost is that
+            # the window is accurate to a second, not a microsecond.
+            stmts.append((
+                "INSERT INTO usage_second(key, sec, requests, tokens) VALUES(?,?,?,?) "
+                "ON CONFLICT(key, sec) DO UPDATE SET "
+                "requests=requests+excluded.requests, tokens=tokens+excluded.tokens",
+                (key, int(now), requests, total),
+            ))
+            stmts.append((
+                "INSERT INTO usage_day(key, day_key, requests, tokens) VALUES(?,?,?,?) "
+                "ON CONFLICT(key, day_key) DO UPDATE SET "
+                "requests=requests+excluded.requests, tokens=tokens+excluded.tokens",
+                (key, day_key(), requests, total),
+            ))
+        stmts.append((
+            "INSERT INTO usage_model(key, lifetime_requests, lifetime_prompt, "
+            "  lifetime_completion, lifetime_total, lifetime_cost, cost_sources) "
+            "VALUES(?,?,?,?,?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "  lifetime_requests=lifetime_requests+excluded.lifetime_requests, "
+            "  lifetime_prompt=lifetime_prompt+excluded.lifetime_prompt, "
+            "  lifetime_completion=lifetime_completion+excluded.lifetime_completion, "
+            "  lifetime_total=lifetime_total+excluded.lifetime_total, "
+            "  lifetime_cost=lifetime_cost+excluded.lifetime_cost",
+            (key, requests, prompt, completion, total, cost, json.dumps({})),
+        ))
+        if cost_source:
+            # Kept as JSON because it is a small open-ended map read only by the
+            # report; a table would buy a join for something never queried.
+            stmts.append((
+                "UPDATE usage_model SET cost_sources = json_set("
+                "  CASE WHEN json_valid(cost_sources) THEN cost_sources ELSE '{}' END, "
+                "  '$.' || ?, "
+                "  COALESCE(json_extract(cost_sources, '$.' || ?), 0) + 1) "
+                "WHERE key = ?",
+                (cost_source, cost_source, key),
+            ))
+        self._write(stmts)
+
+    def record_outcome(self, key: str, ok: bool,
+                       latency_ms: float | None = None) -> None:
+        """Append to this key's ring of recent attempts, then trim it to size.
+
+        A ring of rows rather than a counter, so the window stays what it has
+        always been: the last HEALTH_WINDOW *attempts*, not the last N minutes.
+        Time-bucketed counters would be cheaper but would change what health
+        means -- at low request rates a broken provider would never accumulate
+        enough samples inside the window to be demoted at all.
+
+        Because SQLite serialises writers, the autoincrement id IS the true
+        global attempt order, so the surviving rows are exactly the deque a
+        single process would have held. Each row carries the worker that wrote
+        it, which costs nothing here and lets the report break health down by
+        worker.
+        """
+        from .usage import HEALTH_WINDOW
+
+        self._write([
+            (
+                "INSERT INTO outcome(key, ok, latency_ms, worker, ts) VALUES(?,?,?,?,?)",
+                (key, 1 if ok else 0, latency_ms, self.worker, time.time()),
+            ),
+            (
+                "DELETE FROM outcome WHERE key = ? AND id <= ("
+                "  SELECT MIN(id) FROM (SELECT id FROM outcome WHERE key = ? "
+                "                       ORDER BY id DESC LIMIT ?)) - 1",
+                (key, key, HEALTH_WINDOW),
+            ),
+        ])
+
+    def _usage_row_from(self, key: str) -> UsageRow:
+        from .usage import day_key
+
+        conn = self._conn()
+        now = time.time()
+        minute = conn.execute(
+            "SELECT COALESCE(SUM(requests),0) AS r, COALESCE(SUM(tokens),0) AS t "
+            "FROM usage_second WHERE key = ? AND sec > ?",
+            (key, int(now) - 60),
+        ).fetchone()
+        day = conn.execute(
+            "SELECT requests, tokens FROM usage_day WHERE key = ? AND day_key = ?",
+            (key, day_key()),
+        ).fetchone()
+        health = conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(ok),0) AS ok, "
+            "       AVG(latency_ms) AS lat FROM outcome WHERE key = ?",
+            (key,),
+        ).fetchone()
+        samples = health["n"] or 0
+        return UsageRow(
+            req_min=minute["r"] or 0,
+            req_day=(day["requests"] if day else 0),
+            tok_min=minute["t"] or 0,
+            tok_day=(day["tokens"] if day else 0),
+            success_rate=(health["ok"] / samples) if samples else 1.0,
+            avg_latency_ms=(health["lat"] or 0.0),
+            health_samples=samples,
+        )
+
+    def usage_row(self, key: str) -> UsageRow:
+        return self._usage_row_from(key)
+
+    def usage_snapshot(self, key: str) -> tuple[int, int]:
+        row = self._usage_row_from(key)
+        return row.req_min, row.req_day
+
+    def token_snapshot(self, key: str) -> tuple[int, int]:
+        row = self._usage_row_from(key)
+        return row.tok_min, row.tok_day
+
+    def health_snapshot(self, key: str) -> tuple[float, float, int]:
+        row = self._usage_row_from(key)
+        return row.success_rate, row.avg_latency_ms, row.health_samples
+
+    def snapshot(self) -> StateSnapshot:
+        """Take the whole read set in a handful of queries.
+
+        This is the method the ordering passes exist to make cheap. Per-key
+        queries would be a thousand round trips on a large pool; this is five,
+        reused by every accessor for the life of one request.
+        """
+        from .usage import day_key
+
+        conn = self._conn()
+        now = time.time()
+        rows: dict[str, dict] = {}
+
+        def _slot(key):
+            return rows.setdefault(key, {
+                "req_min": 0, "req_day": 0, "tok_min": 0, "tok_day": 0,
+                "ok": 0, "n": 0, "lat_sum": 0.0, "lat_n": 0,
+            })
+
+        for r in conn.execute(
+            "SELECT key, SUM(requests) AS r, SUM(tokens) AS t FROM usage_second "
+            "WHERE sec > ? GROUP BY key", (int(now) - 60,),
+        ):
+            slot = _slot(r["key"])
+            slot["req_min"] = r["r"] or 0
+            slot["tok_min"] = r["t"] or 0
+
+        for r in conn.execute(
+            "SELECT key, requests, tokens FROM usage_day WHERE day_key = ?",
+            (day_key(),),
+        ):
+            slot = _slot(r["key"])
+            slot["req_day"] = r["requests"]
+            slot["tok_day"] = r["tokens"]
+
+        for r in conn.execute(
+            "SELECT key, COUNT(*) AS n, SUM(ok) AS ok, "
+            "       SUM(COALESCE(latency_ms, 0)) AS lat_sum, "
+            "       SUM(CASE WHEN latency_ms IS NULL THEN 0 ELSE 1 END) AS lat_n "
+            "FROM outcome GROUP BY key",
+        ):
+            slot = _slot(r["key"])
+            slot["n"] = r["n"] or 0
+            slot["ok"] = r["ok"] or 0
+            slot["lat_sum"] = r["lat_sum"] or 0.0
+            slot["lat_n"] = r["lat_n"] or 0
+
+        materialized = {
+            key: UsageRow(
+                req_min=v["req_min"], req_day=v["req_day"],
+                tok_min=v["tok_min"], tok_day=v["tok_day"],
+                success_rate=(v["ok"] / v["n"]) if v["n"] else 1.0,
+                avg_latency_ms=(v["lat_sum"] / v["lat_n"]) if v["lat_n"] else 0.0,
+                health_samples=v["n"],
+            )
+            for key, v in rows.items()
+        }
+        saturated = frozenset(
+            r["key"] for r in conn.execute(
+                "SELECT key FROM saturation WHERE expires_at > ? AND expires_at <= ?",
+                (now, now + MAX_SATURATION_COOLDOWN_S),
+            )
+        )
+        return _MaterializedSnapshot(materialized, saturated)
+
+    def usage_rows(self) -> list[tuple[str, dict]]:
+        import json
+
+        conn = self._conn()
+        out: list[tuple[str, dict]] = []
+        for r in conn.execute(
+            "SELECT key, lifetime_requests, lifetime_prompt, lifetime_completion, "
+            "       lifetime_total, lifetime_cost, cost_sources FROM usage_model",
+        ).fetchall():
+            row = self._usage_row_from(r["key"])
+            try:
+                sources = json.loads(r["cost_sources"])
+            except (TypeError, ValueError):
+                sources = {}
+            out.append((r["key"], {
+                "requests": r["lifetime_requests"],
+                "prompt_tokens": r["lifetime_prompt"],
+                "completion_tokens": r["lifetime_completion"],
+                "total_tokens": r["lifetime_total"],
+                "cost": round(r["lifetime_cost"], 8),
+                "cost_sources": sources,
+                "tokens_last_60s": row.tok_min,
+                "tokens_today": row.tok_day,
+                "success_rate": row.success_rate,
+                "avg_latency_ms": row.avg_latency_ms,
+                "health_samples": row.health_samples,
+            }))
+        return out
+
+    def health_by_worker(self, key: str) -> list[dict]:
+        """Which worker saw what, over the same ring routing reads.
+
+        Routing needs one merged number; an operator asking why a model looks
+        unhealthy often wants to know whether it is one worker or all of them —
+        an uneven account binding and a genuinely failing upstream look the same
+        from the merged rate.
+        """
+        rows = self._conn().execute(
+            "SELECT worker, COUNT(*) AS n, SUM(ok) AS ok, AVG(latency_ms) AS lat "
+            "FROM outcome WHERE key = ? GROUP BY worker ORDER BY worker", (key,),
+        ).fetchall()
+        return [
+            {
+                "worker": r["worker"],
+                "samples": r["n"],
+                "success_rate": (r["ok"] or 0) / r["n"] if r["n"] else 1.0,
+                "avg_latency_ms": round(r["lat"] or 0.0, 1),
+            }
+            for r in rows
+        ]
+
+    def reset_usage(self) -> str:
+        import datetime
+
+        self._write([
+            ("DELETE FROM usage_second", ()),
+            ("DELETE FROM usage_day", ()),
+            ("DELETE FROM usage_model", ()),
+            ("DELETE FROM outcome", ()),
+            ("DELETE FROM paid_free", ()),
+            ("DELETE FROM saturation", ()),
+        ])
+        stamp = datetime.datetime.now(datetime.UTC).isoformat()
+        self._write([(
+            "INSERT INTO meta(k, v) VALUES('usage_since', ?) "
+            "ON CONFLICT(k) DO UPDATE SET v=excluded.v", (stamp,),
+        )])
+        return stamp
+
+    @property
+    def usage_since(self) -> str:
+        """Shared, so worker B does not report its own boot time after A reset."""
+        row = self._conn().execute(
+            "SELECT v FROM meta WHERE k = 'usage_since'").fetchone()
+        return row["v"] if row else self._usage_since
+
+    def flag_paid_free(self, key: str, cost: float, source: str) -> bool:
+        claimed = self._write([(
+            "INSERT INTO paid_free(key, cost, source, n) VALUES(?, ?, ?, 1) "
+            "ON CONFLICT(key) DO UPDATE SET n = n + 1, "
+            "cost = MAX(cost, excluded.cost)",
+            (key, round(cost, 8), source),
+        )])
+        if not claimed:
+            return False
+        row = self._conn().execute(
+            "SELECT n FROM paid_free WHERE key = ?", (key,)).fetchone()
+        # True only for the FIRST observation, so the caller persists it once
+        # across the whole deployment rather than once per worker.
+        return bool(row and row["n"] == 1)
+
+    def paid_free_flags(self) -> dict[str, dict]:
+        return {
+            r["key"]: {
+                "observed_cost": r["cost"],
+                "cost_source": r["source"],
+                "samples": r["n"],
+            }
+            for r in self._conn().execute(
+                "SELECT key, cost, source, n FROM paid_free").fetchall()
+        }

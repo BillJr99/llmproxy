@@ -307,3 +307,87 @@ def test_a_conversation_saved_by_one_worker_is_found_by_another(db):
 def test_an_id_no_worker_holds_is_still_unknown(db):
     """Shared must not mean permissive: a genuinely unknown id is still a 400."""
     assert _run(_w_load_response, db, "resp_never_stored") is None
+
+
+# ── accounting: the original complaint ──────────────────────────────────────
+
+def _w_record_usage(db, key, n, q):
+    from llmproxy.state import SqliteState
+    be = SqliteState(db)
+    for _ in range(n):
+        be.record_usage(key, requests=1, total=10)
+    q.put(True)
+    be.close()
+
+
+def _w_usage(db, key, q):
+    from llmproxy.state import SqliteState
+    be = SqliteState(db)
+    q.put(be.usage_snapshot(key))
+    be.close()
+
+
+def _w_record_outcomes(db, key, seq, q):
+    from llmproxy.state import SqliteState
+    be = SqliteState(db)
+    for ok in seq:
+        be.record_outcome(key, ok, latency_ms=10.0)
+    q.put(True)
+    be.close()
+
+
+def _w_health(db, key, q):
+    from llmproxy.state import SqliteState
+    be = SqliteState(db)
+    q.put(be.health_snapshot(key))
+    be.close()
+
+
+def _w_flag_paid_free(db, key, q):
+    from llmproxy.state import SqliteState
+    be = SqliteState(db)
+    q.put(be.flag_paid_free(key, 0.01, "provider"))
+    be.close()
+
+
+def test_quota_is_counted_once_across_workers_not_once_each(db):
+    """The complaint that started all of this: with N workers every free-tier
+    quota was counted N times over, so the proxy believed it had N times the
+    headroom it had and overran the provider's limits."""
+    procs, queues = [], []
+    for _ in range(4):
+        q = _CTX.Queue()
+        p = _CTX.Process(target=_w_record_usage, args=(db, "p/m", 25, q))
+        p.start()
+        procs.append(p)
+        queues.append(q)
+    for q in queues:
+        q.get(timeout=60)
+    for p in procs:
+        p.join(timeout=60)
+        assert p.exitcode == 0
+
+    req_min, req_day = _run(_w_usage, db, "p/m")
+    assert req_day == 100, f"expected 100 requests counted once, got {req_day}"
+    assert req_min == 100
+
+
+def test_health_is_one_window_across_workers(db):
+    """Two workers' observations are one ring, not two -- and the window is
+    still the last N attempts against that upstream, whoever made them."""
+    from llmproxy.usage import HEALTH_WINDOW
+
+    _run(_w_record_outcomes, db, "p/m", [False] * HEALTH_WINDOW)
+    rate, _lat, samples = _run(_w_health, db, "p/m")
+    assert (rate, samples) == (0.0, HEALTH_WINDOW)
+
+    _run(_w_record_outcomes, db, "p/m", [True] * HEALTH_WINDOW)
+    rate, _lat, samples = _run(_w_health, db, "p/m")
+    assert (rate, samples) == (1.0, HEALTH_WINDOW), "a recovery in another worker must count"
+
+
+def test_a_cost_observation_is_first_exactly_once(db):
+    """The return value persists the fact to config. N workers each treating
+    their own observation as the first would write it N times."""
+    results = [_run(_w_flag_paid_free, db, "p/m") for _ in range(3)]
+    assert results == [True, False, False]

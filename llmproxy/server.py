@@ -708,11 +708,12 @@ def _mark_saturated(key: str, retry_after=None) -> None:
     if cooldown <= 0:
         return
     get_backend().mark_saturated(key, cooldown)
+    _invalidate_snapshot()
 
 
 def _is_saturated(key: str) -> bool:
     """True while *key* is still cooling."""
-    return get_backend().is_saturated(key)
+    return _snap().is_saturated(key)
 
 
 def _mark_provider_circuit(provider_name: str, account_id: str | None = None, retry_after=None) -> None:
@@ -885,6 +886,7 @@ def _record_usage(
         prompt=prompt, completion=completion, total=total,
         cost=cost, cost_source=source,
     )
+    _invalidate_snapshot()
 
     if usage and cost > 0:
         cfg = config if config is not None else load_config()
@@ -913,19 +915,62 @@ def _record_stream_usage(
         )
 
 
+_SNAPSHOT_ATTR = "_llmproxy_state_snapshot"
+
+
+def _snap():
+    """This request's view of the routing state, taken once and reused.
+
+    The three ordering passes read the accessors once per candidate, which is
+    roughly a thousand reads on a large free pool against about four writes.
+    With in-process dicts those are lookups and this changes nothing; against a
+    shared database it is the difference between five queries and a thousand.
+
+    Invalidated by every write, so read-your-own-writes still holds: a candidate
+    cooled by a 429 during failover must be cooled for the very next ordering
+    pass in the same request, or the loop hands the request straight back to the
+    endpoint that just refused it.
+
+    Outside a request — the background refresh threads — there is no ``g`` to
+    memoize on, so each call takes its own view. Those paths read a handful of
+    keys, not a thousand.
+    """
+    try:
+        cached = getattr(g, _SNAPSHOT_ATTR, None)
+        if cached is not None:
+            return cached
+    except RuntimeError:                      # no application context
+        return get_backend().snapshot()
+    snap = get_backend().snapshot()
+    setattr(g, _SNAPSHOT_ATTR, snap)
+    return snap
+
+
+def _invalidate_snapshot() -> None:
+    """Drop this request's view after a write, so the next read sees it."""
+    try:
+        if has_request_context():
+            setattr(g, _SNAPSHOT_ATTR, None)
+    except RuntimeError:                      # pragma: no cover — no context
+        pass
+
+
 def _get_usage_snapshot(key: str) -> tuple[int, int]:
     """Return (requests_last_60s, requests_today) for the given provider/model key."""
-    return get_backend().usage_snapshot(key)
+    row = _snap().row(key)
+    return row.req_min, row.req_day
 
 
 def _get_token_snapshot(key: str) -> tuple[int, int]:
     """Return (tokens_last_60s, tokens_today) for the given provider/model key."""
-    return get_backend().token_snapshot(key)
+    row = _snap().row(key)
+    return row.tok_min, row.tok_day
 
 
 def _get_health_snapshot(key: str) -> tuple[float, float, int]:
     """Return (success_rate, avg_latency_ms, samples) for a provider/model key."""
-    return get_backend().health_snapshot(key)
+    row = _snap().row(key)
+    return row.success_rate, row.avg_latency_ms, row.health_samples
 
 
 def _record_outcome(
@@ -939,6 +984,7 @@ def _record_outcome(
     """Record whether one upstream attempt worked, for health-aware ordering."""
     get_backend().record_outcome(
         _usage_key(provider_name, upstream_model, account_id), ok, latency_ms)
+    _invalidate_snapshot()
 
 
 # Exception types and message fragments that mean *the client went away* or that
