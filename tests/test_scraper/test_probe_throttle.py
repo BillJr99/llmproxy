@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from llmproxy.config import (
     get_cost_probe_state_path,
@@ -88,7 +89,20 @@ def test_probe_state_corrupt_returns_empty(tmp_path):
 
 
 class _ReadOnlyPath:
-    """Stand-in for a sidecar on a read-only image layer."""
+    """Stand-in for a sidecar on a read-only image layer.
+
+    providers.json is now written through a temp file in its own directory and
+    renamed into place, so that it can never be left truncated by a write that
+    fails partway. A read-only layer therefore fails when the temp file is
+    created, not on write_text, and the double has to present a directory that
+    cannot be written: `parent` names one that does not exist, so mkstemp raises
+    FileNotFoundError, an OSError exactly like the PermissionError a real
+    read-only layer raises. write_text is kept raising as well, so the double
+    refuses both routes to disk.
+    """
+
+    name = "providers.json"
+    parent = Path("/nonexistent-read-only-image-layer")
 
     def write_text(self, *a, **k):
         raise PermissionError("read-only image layer")

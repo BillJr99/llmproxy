@@ -594,6 +594,65 @@ def test_the_migration_is_a_no_op_the_second_time(monkeypatch, tmp_path):
     assert len(list(tmp_path.glob("config.json.backup-*"))) == 1
 
 
+def test_the_migration_refuses_to_drain_config_when_the_sidecar_cannot_be_saved(
+        monkeypatch, tmp_path):
+    """If this fails, an unwritable state directory DESTROYS the operator's
+    hand-set routing facts.
+
+    The migration's whole job is to move five keys out of config.json and into
+    the sidecar. Deleting them from config.json before knowing the sidecar write
+    reached disk leaves no copy of them anywhere, and the loss survives a
+    restart because config.json on disk no longer carries them. That is exactly
+    the state a container hits when /config or the state directory is owned by
+    the wrong uid.
+    """
+    s = _make_server(monkeypatch, tmp_path, config={
+        "model_reasoning": {"alpha/m1": "deep"},
+        "believed_free": ["alpha/m1"],
+    })
+    cfg_path = str(tmp_path / "config.json")
+
+    from llmproxy import config as config_mod
+    monkeypatch.setattr(config_mod, "_save_state_file",
+                        lambda *a, **k: False)   # every sidecar write fails
+
+    assert s._migrate_config_routing_keys(cfg_path) is None
+
+    on_disk = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
+    assert on_disk["model_reasoning"] == {"alpha/m1": "deep"}
+    assert on_disk["believed_free"] == ["alpha/m1"]
+
+
+def test_a_failed_config_rewrite_does_not_strip_the_shared_config_cache(
+        monkeypatch, tmp_path):
+    """load_config hands back its cache object itself, not a copy.
+
+    Popping the five keys off that object would strip the snapshot every other
+    reader in the process sees, and config.json is still read as the curated
+    layer. With the rewrite failing, the keys have to survive in memory as well
+    as on disk.
+    """
+    s = _make_server(monkeypatch, tmp_path, config={
+        "model_reasoning": {"alpha/m1": "deep"},
+    })
+    cfg_path = str(tmp_path / "config.json")
+
+    from llmproxy import config as config_mod
+    monkeypatch.setattr(config_mod, "save_config", lambda *a, **k: False)
+    monkeypatch.setattr(s, "save_config", lambda *a, **k: False)
+
+    s._migrate_config_routing_keys(cfg_path)
+
+    # Deliberately NOT force_reload: the bug was that the cached dict itself had
+    # been stripped while its fingerprint still matched the untouched file, so
+    # every cache-satisfied read returned the stripped config for the life of
+    # the process. A forced re-read would have hidden exactly that.
+    cached = s.load_config(cfg_path)
+    assert cached["model_reasoning"] == {"alpha/m1": "deep"}
+    on_disk = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
+    assert on_disk["model_reasoning"] == {"alpha/m1": "deep"}
+
+
 def test_an_existing_curated_fact_beats_the_incoming_config_value(
         monkeypatch, tmp_path):
     """If this fails, a correction made in the admin UI is resurrected back to

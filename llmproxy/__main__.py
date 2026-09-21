@@ -28,10 +28,12 @@ import argparse
 import logging
 import os
 import tempfile
+import traceback
 
 from . import __version__
 from .config import (
     get_config_path,
+    get_state_dir,
     heal_config,
     load_config,
     resolve_env_refs,
@@ -150,6 +152,100 @@ def _gunicorn_worker_tmp_dir() -> str | None:
 
 
 
+def _describe_process_identity() -> str:
+    """``uid:gid`` for the running process, for a remedy the operator can act on.
+
+    Both calls are POSIX-only, so a non-POSIX platform reports what it can
+    rather than failing a startup check over a diagnostic string.
+    """
+    try:
+        return f"{os.getuid()}:{os.getgid()}"
+    except AttributeError:  # pragma: no cover — non-POSIX
+        return "unknown"
+
+
+def _probe_writable(directory: str) -> str | None:
+    """Return None if *directory* can be written, else why it cannot.
+
+    ``os.access`` alone is not enough: it answers about the permission bits,
+    while what matters is whether a file can actually be created, which is also
+    decided by read-only mounts, full filesystems and (in a container) a uid the
+    image's group-writable directories were not prepared for. So the probe
+    creates and removes a real temporary file.
+    """
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except OSError as e:
+        print(f"[__main__:_probe_writable] {e}")
+        traceback.print_exc()
+        return str(e)
+    try:
+        fd, name = tempfile.mkstemp(dir=directory, prefix=".llmproxy-writetest-")
+        os.close(fd)
+        os.unlink(name)
+    except OSError as e:
+        print(f"[__main__:_probe_writable] {e}")
+        traceback.print_exc()
+        return str(e)
+    return None
+
+
+def _preflight_state_dir(log: logging.Logger) -> None:
+    """Report, once and in full, whether llmproxy can persist its own state.
+
+    Everything llmproxy learns on a schedule — the routing metadata, the
+    flagship membership, and the last-run timestamps that throttle all three
+    background refreshes — is written to the state directory. When that
+    directory is not writable, each refresh is permanently "due", because a
+    missing timestamp means the job has never run. The in-memory fallback in
+    config._save_state_file keeps that from turning into a refresh loop, but the
+    deployment is still losing everything it learns on every restart, and that
+    is worth one loud, actionable line at startup rather than a permission error
+    buried in the first cadence tick.
+    """
+    state_dir = str(get_state_dir())
+    reason = _probe_writable(state_dir)
+    if reason is None:
+        log.info("State directory: %s", state_dir)
+        return
+    log.warning(
+        "State directory %s is not writable by uid %s (%s). llmproxy will keep "
+        "its routing metadata, flagship membership and refresh timestamps in "
+        "memory only: everything it learns is lost on restart. In Docker, "
+        "either make the mounted directory writable on the host "
+        "(chown -R $(id -u):$(id -g) ~/.config/llmproxy), or run the container "
+        "as --user $(id -u):0, whose group the image's writable directories "
+        "belong to, or mount a writable volume and point LLMPROXY_STATE_DIR at "
+        "it (-v llmproxy_state:/state -e LLMPROXY_STATE_DIR=/state).",
+        state_dir, _describe_process_identity(), reason,
+    )
+
+
+def _preflight_bundled_providers(log: logging.Logger) -> None:
+    """Note whether the bundled providers.json can be refreshed in place.
+
+    Unlike the state directory this is expected to be read-only in a container —
+    it lives on the image layer — so it is reported at INFO. The free-models
+    sweep already degrades to computing the update in memory and opening a
+    providers PR from it, so a read-only copy costs nothing but is worth saying
+    out loud when someone is reading the log to explain a "could not persist"
+    line further down.
+    """
+    try:
+        from .providers import DATA_PATH
+    except Exception as e:  # noqa: BLE001 — diagnostics never block startup
+        print(f"[__main__:_preflight_bundled_providers] {e}")
+        traceback.print_exc()
+        return
+    if _probe_writable(str(DATA_PATH.parent)) is not None:
+        log.info(
+            "Bundled %s is on a read-only layer; the free-models sweep will "
+            "compute its update in memory rather than rewriting the file. This "
+            "is normal in a container and affects nothing but the file itself.",
+            DATA_PATH,
+        )
+
+
 # Libraries that log at DEBUG per HTTP request, per connection, or per retry.
 # urllib3 alone emits a line for every upstream call llmproxy makes, and the
 # proxy's whole job is making upstream calls.
@@ -252,6 +348,12 @@ def main() -> None:
     config_path = get_config_path()
     log = logging.getLogger("llmproxy")
     log.info("Config: %s", config_path)
+
+    # Say up front whether this deployment can persist what it learns. Done
+    # before any background work so the remedy is at the top of the log rather
+    # than interleaved with the first refresh's output.
+    _preflight_state_dir(log)
+    _preflight_bundled_providers(log)
 
     # Report the web admin UI status and warn about insecure exposure. Use the
     # blueprint's own predicate (which honors LLMPROXY_ADMIN_ENABLED) so the log

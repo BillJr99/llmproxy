@@ -126,6 +126,45 @@ def get_config_path(override: str | None = None) -> Path:
     return _DEFAULT_CONFIG_FILE
 
 
+def get_state_dir(config_path: str | None = None) -> Path:
+    """
+    Return the directory that holds llmproxy's machine-written state files.
+
+    Resolution order (highest to lowest priority):
+      1. LLMPROXY_STATE_DIR environment variable (read at call time)
+      2. the directory holding config.json
+
+    The two are separable because they have different writability needs.
+    config.json is hand-edited and can reasonably be mounted read-only, while
+    routing_metadata.json, flagship_models.json, update_state.json,
+    cost_probe_state.json and pr_state.json are rewritten on their own cadences
+    and must be writable for those cadences to be throttled at all. Leaving
+    LLMPROXY_STATE_DIR unset preserves the historical layout, in which every
+    state file sits beside config.json.
+    """
+    env_dir = os.environ.get("LLMPROXY_STATE_DIR")
+    if env_dir:
+        return Path(env_dir)
+    return get_config_path(config_path).parent
+
+
+def _state_file(name: str, config_path: str | None = None) -> Path:
+    """Resolve one state file inside the state directory."""
+    return get_state_dir(config_path) / name
+
+
+def _legacy_state_file(name: str, config_path: str | None = None) -> Path | None:
+    """The pre-LLMPROXY_STATE_DIR location of *name*, when it differs.
+
+    Returns None when the state directory already is the config directory, so
+    callers can skip the read-forward migration in the common case.
+    """
+    beside_config = get_config_path(config_path).parent / name
+    if beside_config == _state_file(name, config_path):
+        return None
+    return beside_config
+
+
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
@@ -347,6 +386,13 @@ def save_config(config: dict, config_path: str | None = None) -> bool:
     except Exception as e:
         print(f"[config:save_config] Failed to write {path}: {e}")
         traceback.print_exc()
+        # Invalidate the cache on failure too. load_config returns the cached
+        # dict itself rather than a copy, so a caller that mutated what it got
+        # back and then failed to persist it would otherwise leave the mutated
+        # snapshot pinned for the life of the process: the fingerprint still
+        # matches the untouched file on disk, so nothing would re-read it.
+        _cache = {}
+        _cache_stat = (0, 0)
         return False
 
 
@@ -359,7 +405,47 @@ def save_config(config: dict, config_path: str | None = None) -> bool:
 # every sweep. The last-run timestamps live in small sibling cache files rather
 # than in config.json so we don't churn the hand-edited config.
 
+# State that could not be written, kept in memory for the life of the process.
+#
+# Every scheduled job asks "am I due?" by reading a last-run timestamp out of one
+# of these files, and a missing timestamp means "due now" (scripts'
+# _probe_due). So a state directory that cannot be written used to mean the
+# timestamp was never recorded, every job was permanently due, and the
+# once-a-minute interval check in server._maybe_fire_interval_probes re-fired a
+# full provider scrape for as long as the container ran. Holding the state in
+# memory keeps the throttles honest for this process even when nothing can be
+# persisted: the cadence degrades to "once per process lifetime" instead of
+# "continuously". The write failure is still reported, and _save_state_file
+# still returns False, so no caller is told a write succeeded when it did not.
+_state_fallback: dict[Path, dict] = {}
+
+
+def _process_identity() -> str:
+    """``uid <n>:<n>`` for the running process, for a remedy the reader can act on.
+
+    POSIX-only, so a non-POSIX host gets a message that names the directory but
+    not an ownership it does not have.
+    """
+    try:
+        return f"uid {os.getuid()}:{os.getgid()}"
+    except AttributeError:  # pragma: no cover — non-POSIX
+        return "this process"
+
+# Paths whose write failure has already been reported. An unwritable directory
+# would otherwise print the same line on every cadence tick.
+_state_write_warned: set[Path] = set()
+
+
 def _load_state_file(path: Path, label: str) -> dict:
+    # An in-memory entry exists only because a write to this exact path failed,
+    # which means it is strictly newer than whatever is on disk. It therefore
+    # wins outright rather than only filling in for a missing file: the case
+    # that matters most is a state file that already exists but sits in a
+    # directory that can no longer be written, where the stale on-disk timestamp
+    # would otherwise keep the refresh permanently due.
+    fallback = _state_fallback.get(path)
+    if isinstance(fallback, dict):
+        return copy.deepcopy(fallback)
     if not path.exists():
         return {}
     try:
@@ -368,6 +454,7 @@ def _load_state_file(path: Path, label: str) -> dict:
         return data if isinstance(data, dict) else {}
     except Exception as e:  # noqa: BLE001 — a corrupt cache must never break a run
         print(f"[config:{label}] Failed to load {path}: {e}")
+        traceback.print_exc()
         return {}
 
 
@@ -389,24 +476,75 @@ def _save_state_file(state: dict, path: Path, label: str) -> bool:
             except OSError:
                 pass
             raise
+        # Persisted for real; drop any in-memory stand-in for this path so the
+        # file stays the single source of truth.
+        _state_fallback.pop(path, None)
+        _state_write_warned.discard(path)
         return True
     except Exception as e:  # noqa: BLE001
-        print(f"[config:{label}] Failed to write {path}: {e}")
+        _state_fallback[path] = copy.deepcopy(state)
+        if path not in _state_write_warned:
+            _state_write_warned.add(path)
+            print(
+                f"[config:{label}] Failed to write {path}: {e}\n"
+                f"[config:{label}] Keeping this state in memory for the life of "
+                f"the process so scheduled refreshes stay throttled; it will be "
+                f"lost on restart. Make {path.parent} writable by "
+                f"{_process_identity()} to persist it."
+            )
+            traceback.print_exc()
         return False
+
+
+def _load_state_file_with_legacy(
+    name: str, label: str, config_path: str | None = None
+) -> dict:
+    """Load a state file, reading it forward from its pre-state-dir location.
+
+    A deployment that set LLMPROXY_STATE_DIR after the fact still has its state
+    beside config.json. Read it from there once and write it forward, so the
+    cadence timestamps survive the move rather than every job coming due at the
+    moment the variable is introduced.
+    """
+    path = _state_file(name, config_path)
+    if path.exists() or path in _state_fallback:
+        # The fallback entry, when there is one, is newer than anything on disk
+        # in either location, so the legacy copy must not be consulted: reading
+        # a stale timestamp forward would put the refresh straight back into the
+        # permanently-due state this whole mechanism exists to prevent.
+        return _load_state_file(path, label)
+    legacy = _legacy_state_file(name, config_path)
+    if legacy is not None and legacy.exists():
+        data = _load_state_file(legacy, label)
+        if data:
+            _save_state_file(data, path, label)
+            return data
+    return _load_state_file(path, label)
 
 
 # --- Cost probe state (cost_probe_state.json) ---
 
 def get_cost_probe_state_path(config_path: str | None = None) -> Path:
-    return get_config_path(config_path).parent / "cost_probe_state.json"
+    return _state_file("cost_probe_state.json", config_path)
 
 
 def load_cost_probe_state(config_path: str | None = None) -> dict:
-    """Load cost probe state, migrating from the old probe_state.json if needed."""
+    """Load cost probe state, migrating from older locations if needed.
+
+    Two migrations can apply, oldest first: the file was once named
+    probe_state.json, and it once lived beside config.json rather than in the
+    state directory. Both are read-forward, so an upgrade does not reset the
+    probe's throttle and spend quota it had already decided to defer.
+    """
     path = get_cost_probe_state_path(config_path)
     if not path.exists():
-        old = path.parent / "probe_state.json"
-        if old.exists():
+        candidates = [path.parent / "probe_state.json"]
+        legacy_dir = _legacy_state_file("cost_probe_state.json", config_path)
+        if legacy_dir is not None:
+            candidates += [legacy_dir, legacy_dir.parent / "probe_state.json"]
+        for old in candidates:
+            if not old.exists():
+                continue
             data = _load_state_file(old, "load_cost_probe_state")
             if data:
                 _save_state_file(data, path, "load_cost_probe_state")
@@ -446,11 +584,13 @@ def save_probe_state(state: dict, config_path: str | None = None) -> bool:
 # a long-lived process still refreshes on its configured cadence.
 
 def get_update_state_path(config_path: str | None = None) -> Path:
-    return get_config_path(config_path).parent / "update_state.json"
+    return _state_file("update_state.json", config_path)
 
 
 def load_update_state(config_path: str | None = None) -> dict:
-    return _load_state_file(get_update_state_path(config_path), "load_update_state")
+    return _load_state_file_with_legacy(
+        "update_state.json", "load_update_state", config_path
+    )
 
 
 def save_update_state(state: dict, config_path: str | None = None) -> bool:
@@ -516,11 +656,13 @@ def flagship_tier_cfg(config: dict | None = None) -> dict:
 # belongs to the weights and not to the provider serving them.
 
 def get_flagship_state_path(config_path: str | None = None) -> Path:
-    return get_config_path(config_path).parent / "flagship_models.json"
+    return _state_file("flagship_models.json", config_path)
 
 
 def load_flagship_state(config_path: str | None = None) -> dict:
-    return _load_state_file(get_flagship_state_path(config_path), "load_flagship_state")
+    return _load_state_file_with_legacy(
+        "flagship_models.json", "load_flagship_state", config_path
+    )
 
 
 def save_flagship_state(state: dict, config_path: str | None = None) -> bool:
@@ -593,12 +735,12 @@ def routing_metadata_cfg(config: dict | None = None) -> dict:
 
 
 def get_routing_metadata_path(config_path: str | None = None) -> Path:
-    return get_config_path(config_path).parent / "routing_metadata.json"
+    return _state_file("routing_metadata.json", config_path)
 
 
 def load_routing_metadata(config_path: str | None = None) -> dict:
-    return _load_state_file(
-        get_routing_metadata_path(config_path), "load_routing_metadata"
+    return _load_state_file_with_legacy(
+        "routing_metadata.json", "load_routing_metadata", config_path
     )
 
 
@@ -611,11 +753,13 @@ def save_routing_metadata(state: dict, config_path: str | None = None) -> bool:
 # --- PR state (pr_state.json) ---
 
 def get_pr_state_path(config_path: str | None = None) -> Path:
-    return get_config_path(config_path).parent / "pr_state.json"
+    return _state_file("pr_state.json", config_path)
 
 
 def load_pr_state(config_path: str | None = None) -> dict:
-    return _load_state_file(get_pr_state_path(config_path), "load_pr_state")
+    return _load_state_file_with_legacy(
+        "pr_state.json", "load_pr_state", config_path
+    )
 
 
 def save_pr_state(state: dict, config_path: str | None = None) -> bool:
