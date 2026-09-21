@@ -802,6 +802,7 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
             "log_level": "INFO",
             "request_timeout": 120,
             "stream_timeout": 300,
+            "threads": 4,
         },
     }
 

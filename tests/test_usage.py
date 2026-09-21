@@ -233,3 +233,37 @@ def test_compute_cost_computed_from_pricing():
 def test_compute_cost_unknown():
     assert compute_cost("p", "m", {"prompt_tokens": 10}, {}) == (0.0, "unknown")
     assert compute_cost("p", "m", None, None) == (0.0, "unknown")
+
+
+def test_usage_timezone_config_pins_the_boundary(monkeypatch):
+    """A container's local zone is usually UTC while the provider's quota
+    resets somewhere else."""
+    import llmproxy.server as S
+    try:
+        S._apply_usage_timezone({"server": {"usage_timezone": "Pacific/Kiritimati"}})
+        east = usage.day_key()
+        S._apply_usage_timezone({"server": {"usage_timezone": "Pacific/Midway"}})
+        west = usage.day_key()
+    finally:
+        usage.set_default_timezone(None)
+    assert east >= west
+
+
+def test_an_unusable_timezone_is_ignored_not_fatal(caplog):
+    """A typo in an optional field must not stop the proxy from routing."""
+    import logging
+
+    import llmproxy.server as S
+    try:
+        with caplog.at_level(logging.WARNING, logger="llmproxy.server"):
+            S._apply_usage_timezone({"server": {"usage_timezone": "Not/AZone"}})
+        assert usage.day_key() == usage.day_key(None), "should fall back to local"
+        assert any("usage_timezone" in r.getMessage() for r in caplog.records)
+    finally:
+        usage.set_default_timezone(None)
+
+
+def test_no_timezone_configured_leaves_local_time_alone():
+    import llmproxy.server as S
+    S._apply_usage_timezone({"server": {}})
+    assert usage.day_key() == usage.day_key(None)

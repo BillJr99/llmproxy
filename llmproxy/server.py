@@ -368,9 +368,9 @@ _models_refresh_active = False
 # ---------------------------------------------------------------------------
 # Per-model usage tracking (free-tier capacity-aware load balancing + accounting)
 # ---------------------------------------------------------------------------
-# Resets on server restart. Each gunicorn worker process meters its own
-# counters — usage tracking is per-worker, not cross-process — which is why
-# server.workers defaults to 1; see state.py.
+# Resets on server restart. Shared between workers when there is more than one
+# (see state.py); per-process otherwise, which is the same thing when there is
+# only one process.
 #
 # The storage lives in state.py behind one interface. The functions below keep
 # their policy: they build the keys, read the config and write the log lines,
@@ -1190,9 +1190,10 @@ def _response_cache_put(
 # and with what — and the answer should not require turning on the request log
 # and grepping it, not least because the log is off by default.
 #
-# So failures are recorded structurally, in a bounded in-process ring: newest
-# first, capped, and pruned by age. Per worker, exactly like /v1/usage, which is
-# one more reason server.workers defaults to 1.
+# So failures are recorded structurally, in a bounded ring: newest first,
+# capped, and pruned by age. Shared between workers when there is more than one,
+# so the cap means "the last 250 failures" rather than "the last 250 this worker
+# happened to serve" -- which was never the question anyone was asking.
 
 # The ring and its bounds live in state.py, with the storage they bound: two
 # copies of a cap is one copy too many, and the endpoint below reports these
@@ -3906,6 +3907,35 @@ def _migrate_config_routing_keys(config_path: str | None = None) -> dict | None:
     return report
 
 
+def _apply_usage_timezone(config: dict) -> None:
+    """Pin which midnight the daily usage windows roll at.
+
+    ``server.usage_timezone`` takes an IANA name; unset means the process's
+    local zone, which is what this has always used. It exists because two
+    components resolving "today" independently can straddle a boundary and split
+    a day's counter in half, which reads as a quota reset that never happened —
+    and because a container's local zone is usually UTC while the provider's
+    quota resets somewhere else.
+
+    A bad name is logged and ignored rather than raised: a typo in an optional
+    field must not stop the proxy from routing.
+    """
+    raw = (config.get("server") or {}).get("usage_timezone")
+    if not raw:
+        return
+    try:
+        from zoneinfo import ZoneInfo
+
+        from .usage import set_default_timezone
+        set_default_timezone(ZoneInfo(str(raw)))
+        logger.info("[usage] daily windows roll at midnight in %s", raw)
+    except Exception as exc:  # noqa: BLE001 — never fail startup over a tz name
+        logger.warning(
+            "server.usage_timezone=%r is not a usable IANA zone (%s); "
+            "falling back to this process's local time.", raw, exc,
+        )
+
+
 def _run_startup_tasks_once(config_path: str | None = None) -> None:
     """Run the one-time per-worker startup tasks in a background daemon thread.
 
@@ -3963,6 +3993,7 @@ def _run_startup_tasks_once(config_path: str | None = None) -> None:
         _warm_route_cache_if_empty()
 
         config = load_config()
+        _apply_usage_timezone(config)
 
         # 1b. Say plainly, once, when there is nothing to route to. Without this
         #     the only signal is a "_warning" on /v1/models, which a client that

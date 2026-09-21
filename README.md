@@ -871,10 +871,12 @@ passing them through would advertise a capability no upstream in the pool has.
 
 **Statefulness.** `store` and `previous_response_id` work against a bounded
 **in-process** conversation store, and the limits are worth knowing before you rely on
-them: nothing is written to disk, so a restart drops every stored conversation, and a
-second gunicorn worker has its own store (another reason the
-[worker default](#workers) is 1). At most 256 conversations are kept, evicted
-oldest-first. `store: false` opts out.
+them: nothing is written to disk, so a restart drops every stored conversation.
+With [`server.workers > 1`](#workers) the store is shared between workers, so a
+conversation saved by one is found by another; it used to be per process, which
+made `previous_response_id` fail with a **400** for roughly (N−1)/N of requests.
+At most 256 conversations are kept, evicted oldest-first. `store: false` opts
+out.
 
 A `previous_response_id` this process does not hold returns a **400** rather than
 answering without the referenced history — silently dropping most of a conversation
@@ -1655,6 +1657,43 @@ A `200` that failed a content check — a forced tool call that never arrived, a
 unusable body — is still returned as-is. There is no upstream error status to
 sanitise, and handing the client the real body is deliberate.
 
+<a name="state-endpoint"></a>
+### `GET /v1/state` — is sharing actually on?
+
+Admin-gated, unlike [`/v1/usage`](#usage-endpoint) and
+[`/v1/failures`](#v1-failures): it names a filesystem path and the worker
+identities.
+
+It answers a question with no other symptom. A deployment that asked for four
+workers and [fell back to one](#shared-state) because its state directory was
+unwritable behaves perfectly correctly — just without the parallelism — and
+nothing else in the proxy would say so.
+
+```bash
+curl -s localhost:8080/v1/state | jq
+```
+
+```json
+{
+  "object": "llmproxy.state",
+  "backend": "sqlite",
+  "shared": true,
+  "path": "/state/shared_state.db",
+  "journal_mode": "wal",
+  "metered_keys": 38,
+  "cooling_keys": 2,
+  "stored_conversations": 11,
+  "leases": [
+    {"job": "free-models-update", "holder": "host:41", "expires_in": 1580.2, "held_for": 19.8}
+  ],
+  "usage_since": "2026-09-21T20:51:23+00:00"
+}
+```
+
+`"shared": false` with more than one worker configured means the fallback fired;
+the startup log says why. The `leases` list also answers "why has that scheduled
+job not run" — it names which worker holds it and for how long.
+
 <a name="v1-failures"></a>
 #### `GET /v1/failures` — which models have been failing, and why
 
@@ -1747,9 +1786,10 @@ and truncated to 300 characters. Ordinary text, including hyphenated model ids,
 survives intact.
 
 Like [`/v1/usage`](#usage-accounting), this is in-memory and **per process**: the ring
-holds the most recent 250 failures from the last six hours, and under a
-multi-worker WSGI server each worker reports only the requests it served. That
-is one more reason [`server.workers`](#workers) defaults to `1`.
+holds the most recent 250 failures from the last six hours. With
+[`server.workers > 1`](#workers) that is 250 for the deployment rather than 250
+per worker, so the report means "the last 250 failures" rather than "the last
+250 this worker happened to serve".
 
 <a name="capability-enforcement"></a>
 ### Capability enforcement — a model that cannot, is not picked
@@ -2341,19 +2381,96 @@ process memory, capped, and expire after six hours.
 > rank, which is why the pass had to be suppressed on ranked flagship pools.
 > Sticky-until-failure replaces it and behaves the same way on an unranked pool.
 
+<a name="threads"></a>
+### `server.threads` — the lever for concurrency
+
+**If you want to serve more requests at once, raise this, not
+[`server.workers`](#workers).**
+
+llmproxy spends virtually all of its wall time blocked on an upstream. A streamed
+request holds its gthread thread for that entire duration, so the thread count is
+the ceiling on concurrent in-flight requests: at the default of 4, ten concurrent
+requests queue six deep, which on its own is enough to turn a healthy median into
+a bad p90.
+
+Raising it is free. Threads share process memory, so every counter, cooldown and
+health window the routing layer keeps is already correct across them — that is
+what the lock on each one is for.
+
+```json
+"server": { "threads": 32 }
+```
+
+One thing it does **not** fix: an upstream's own queue. If a provider takes 60
+seconds to produce a first token, more threads mean more requests waiting 60
+seconds in parallel rather than in series. That is an improvement, but the p90
+will not fall below what one request costs.
+
 <a name="workers"></a>
-### `server.workers` — why the default is 1
+### `server.workers` — why the default is still 1
 
-Quota counters, health scores and the saturation registry all live in process
-memory and are **not shared between workers**. With more than one, a `429` that
-cools a candidate in one worker is invisible to the others, which hit the same
-exhausted endpoint on the very next request, and `free_limits` quotas are counted
-per worker — so the proxy believes it has roughly *N* times the headroom it really
-has and overruns the provider's limits.
+Workers buy CPU parallelism, which this proxy barely needs. The default stays `1`.
 
-The default is therefore `1` worker with 4 gthread threads, which still serves
-concurrent requests. Raise `server.workers` only if you want the CPU parallelism and
-accept the accounting drift; llmproxy logs a warning at startup when you do.
+It used to be `1` because nothing was shared: quota counters, health scores and
+saturation cooldowns lived in process memory, so a `429` that cooled a candidate
+in one worker was invisible to the others, `free_limits` quotas were counted once
+per worker — the proxy believing it had *N* times the headroom it had — and a
+conversation saved for `previous_response_id` drew a **400** from any other
+worker.
+
+That is fixed. With `workers > 1` the routing state is shared between the workers
+of one host through a SQLite database in the [state directory](#state-directory):
+
+| Shared | Still per-worker |
+| --- | --- |
+| Quota counters (minute, day, lifetime) | The `/v1/models` listing cache |
+| Health windows and saturation cooldowns | The response cache |
+| Learned capability gaps, oversize watermarks | The route / context / capability caches |
+| Conversation affinity pins | |
+| The `previous_response_id` store | |
+| The failure ring and usage report | |
+| Background-job single-flight (see below) | |
+
+What stays per-worker is derived and rebuildable, so the cost of not sharing it
+is duplicated work rather than wrong answers: expect up to **N× the provider
+`/models` fetches** and roughly a **1/N response-cache hit rate**. Both are
+logged at startup when you raise the setting.
+
+**Background jobs now run once per deployment.** The free-models scrape, the
+flagship recompute, the cost probe, the routing-metadata refresh, the
+providers pull request and the config-key migration are claimed with a lease. A
+worker that does not get the lease skips. Previously all *N* ran the whole
+scrape, all *N* spent cost-probe quota, and all *N* opened a pull request. One
+consequence worth knowing: if the worker holding a lease dies mid-job, the job
+waits for the lease to expire rather than being retried immediately elsewhere.
+
+<a name="shared-state"></a>
+### The shared state store
+
+Only relevant when `server.workers > 1`; with one worker nothing is written and
+nothing is opened.
+
+**Where it lives.** `shared_state.db` in the [state directory](#state-directory) —
+`/state` in the Docker image, beside `config.json` otherwise. **No `docker run`,
+compose file or volume changes:** `/state` is already a writable named volume,
+and your `/config` mount stays free to be read-only.
+
+**One host only.** WAL needs an mmap'd `-shm` region, which does not work across
+machines — and `server.workers` is a per-host setting anyway. A state directory
+on NFS or SMB is caught at startup and reported, not silently corrupted.
+
+**It is truncated at every boot.** Counters and cooldowns have never survived a
+restart, and a file-backed store would silently make them — leaving a six-hour-old
+cooldown on a candidate that recovered while the proxy was down. Three files
+appear (`.db`, `-wal`, `-shm`); none of them need backing up.
+
+**If it cannot be opened, the worker count drops to 1**, with an error naming the
+path, the uid:gid and the remedy. Not a quiet fallback to unshared state, which
+would reinstate the exact bug while looking healthy; and not a refusal to boot,
+because an unwritable state directory must not wedge the server. Losing CPU
+parallelism is the only one of the three that costs nothing but speed.
+
+Check whether sharing is actually on with [`GET /v1/state`](#state-endpoint).
 
 <a name="allow_implicit_paid"></a>
 ### `server.allow_implicit_paid` — keep cost-avoiding routes free
@@ -2868,6 +2985,16 @@ curl http://localhost:8080/v1/usage | jq
 }
 ```
 
+- **Daily windows roll at local midnight**, on the calendar date rather than by
+  adding 86400 seconds — which is not the same thing on a day that gains or
+  loses an hour to DST. The old arithmetic rolled an hour late on a 23-hour day
+  (charging the first hour of the new day against yesterday's `free_limits`
+  allowance) and an hour early on a 25-hour day. It re-aligned afterwards, so
+  the error was one boundary twice a year rather than a permanent skew, but a
+  quota exhausted against a day the provider has already reset is a real failed
+  request. Set `server.usage_timezone` to an IANA name (`"America/New_York"`) to
+  pin which midnight; the default is the process's local zone. Changing it
+  mid-day orphans that day's counters.
 - **Token counts** come from the upstream `usage` block of each response
   (streaming included — the proxy asks for a final usage chunk via
   `stream_options.include_usage`; disable with `server.stream_include_usage:
@@ -4494,6 +4621,13 @@ That is a warning rather than a fatal error, because a proxy that routes is more
 useful than one that refuses to start. It is still worth fixing: a deployment in
 that state relearns everything on every restart. See
 [pass `:0` as the group](#docker-user-group) for the usual cause in Docker.
+
+With [`server.workers > 1`](#workers) this directory also holds
+`shared_state.db` (plus its `-wal` and `-shm` files), the
+[shared state store](#shared-state). It is truncated at every boot and never
+needs backing up — but it does need a **local** filesystem, because WAL uses an
+mmap'd region that NFS and SMB cannot provide. A state directory on a network
+mount is reported at startup and the worker count drops to 1.
 
 Separating the two directories also lets the config mount be read-only:
 

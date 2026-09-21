@@ -541,14 +541,19 @@ def main() -> None:
             host, port, workers, threads,
         )
         if workers > 1:
-            logging.getLogger("llmproxy").warning(
-                "server.workers=%d: quota, health and saturation state is per-process "
-                "and is NOT shared between workers, so free-tier limits are counted "
-                "per worker and cooldowns do not propagate. If you raised this to "
-                "serve more concurrent requests, raise server.threads instead — this "
-                "proxy waits on upstreams rather than on CPU, and threads share that "
-                "state correctly.",
-                workers,
+            # Quota, health, cooldowns, capability gaps, affinity pins, the
+            # conversation store and the failure ring are all shared by now --
+            # _prepare_shared_state dropped to one worker if they could not be --
+            # so the old "none of this is shared" warning would be actively
+            # wrong here. What is still per-worker is the derived caches, which
+            # are rebuildable and only cost duplicated fetches.
+            logging.getLogger("llmproxy").info(
+                "server.workers=%d: routing state is shared; the model-listing and "
+                "response caches stay per-worker, so expect up to %d× the provider "
+                "/models fetches and a lower response-cache hit rate. Threads, not "
+                "workers, are the lever for serving more concurrent requests — this "
+                "proxy waits on upstreams rather than on CPU.",
+                workers, workers,
             )
         _StandaloneApp(app, options).run()
 
