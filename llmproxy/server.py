@@ -129,7 +129,12 @@ try:
     import fcntl  # POSIX advisory file locking
 except ImportError:  # pragma: no cover - non-POSIX (e.g. Windows)
     fcntl = None
-from .state import FAILURE_LOG_MAX, FAILURE_LOG_TTL_S, get_backend
+from .state import (
+    FAILURE_LOG_MAX,
+    FAILURE_LOG_TTL_S,
+    MAX_SATURATION_COOLDOWN_S,
+    get_backend,
+)
 from .usage import (
     compute_cost,
     extract_usage,
@@ -396,7 +401,9 @@ COST_OBSERVED_KEY = "cost_observed_free_tier"
 # a provider has several); a provider-wide sentinel model opens a circuit for a
 # whole provider/account when its shared allowance is depleted.
 _DEFAULT_SATURATION_COOLDOWN_S = 60.0
-_MAX_SATURATION_COOLDOWN_S = 3600.0
+# Single-sourced with the backend, which applies the same bound as a
+# read-side clamp against clock jumps.
+_MAX_SATURATION_COOLDOWN_S = MAX_SATURATION_COOLDOWN_S
 _PROVIDER_CIRCUIT_MODEL = "__provider__"  # sentinel model for a provider-wide circuit
 
 # --- oversized-request memory ---

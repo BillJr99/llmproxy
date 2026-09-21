@@ -106,6 +106,13 @@ class SharedState(Protocol):
 # Bounds, carried here with the storage they bound
 # ---------------------------------------------------------------------------
 
+# The longest a cooldown may last. Also the clamp a shared backend applies on
+# READ: a backward system-clock jump would otherwise leave an absolute deadline
+# far in the future, cooling a healthy candidate indefinitely. Clamping bounds
+# that to one window, and a forward jump only ends a cooldown early — which is
+# the safe direction, since the next 429 re-establishes it.
+MAX_SATURATION_COOLDOWN_S: float = 3600.0
+
 AFFINITY_PIN_MAX: int = 2048
 AFFINITY_PIN_TTL_S: float = 6 * 60 * 60
 FAILURE_LOG_MAX: int = 250
@@ -225,8 +232,10 @@ class InMemoryState:
             self._usage.clear()
         with self._paid_free_lock:
             self._paid_free.clear()
-        with self._saturation_lock:
-            self._saturation.clear()
+        # Through the accessor, not the dict: a subclass that stores cooldowns
+        # elsewhere must have them cleared too, and reaching past its override
+        # is how a reset silently half-works.
+        self.reset_saturation()
         self._usage_since = datetime.datetime.now(datetime.UTC).isoformat()
         return self._usage_since
 
@@ -421,6 +430,26 @@ class InMemoryState:
 _BACKEND: SharedState | None = None
 _BACKEND_LOCK = threading.Lock()
 
+# Set once in the gunicorn master, before it forks, and inherited by every
+# worker. A path here means "share state through this file"; None means each
+# process keeps its own, which is the default and what a single worker wants.
+_SHARED_DB_PATH: str | None = None
+
+
+def configure(db_path: str | None) -> None:
+    """Choose what workers build. Called in the master, before forking.
+
+    Deliberately not read from config here: this module has no business
+    importing the config layer, and the decision belongs to the one place that
+    already knows the worker count.
+    """
+    global _SHARED_DB_PATH
+    _SHARED_DB_PATH = str(db_path) if db_path else None
+
+
+def shared_db_path() -> str | None:
+    return _SHARED_DB_PATH
+
 
 def get_backend() -> SharedState:
     """The backend this process routes through, built on first use."""
@@ -429,8 +458,30 @@ def get_backend() -> SharedState:
         return _BACKEND
     with _BACKEND_LOCK:
         if _BACKEND is None:
-            _BACKEND = InMemoryState()
+            _BACKEND = (SqliteState(_SHARED_DB_PATH) if _SHARED_DB_PATH
+                        else InMemoryState())
     return _BACKEND
+
+
+def probe_shared_store(db_path) -> str | None:
+    """Open the shared store for real; return None on success, else the reason.
+
+    A real open, not a permission check: an unwritable directory, a filesystem
+    without the mmap WAL needs, and a full disk all fail here and all fail
+    differently, and the caller needs to say which in a message an operator can
+    act on.
+    """
+    try:
+        backend = SqliteState(db_path)
+    except Exception as exc:  # noqa: BLE001 — every failure is a fallback, not a crash
+        return f"{type(exc).__name__}: {exc}"
+    try:
+        backend.truncate()
+    except Exception as exc:  # noqa: BLE001
+        return f"{type(exc).__name__}: {exc}"
+    finally:
+        backend.close()
+    return None
 
 
 def set_backend(backend: SharedState | None) -> None:
@@ -441,7 +492,11 @@ def set_backend(backend: SharedState | None) -> None:
 
 
 def reset_for_worker() -> None:
-    """Drop any backend inherited across a fork.
+    """Drop the backend instance inherited across a fork, keeping the choice.
+
+    The configured path survives -- every worker should build the same kind of
+    backend -- but the object does not, so a connection can never be shared
+    across a fork(), which is the classic way to corrupt one.
 
     Called from gunicorn's ``post_worker_init``. Nothing here holds a file
     descriptor today, so this is currently a formality — but it is the hook that
@@ -450,3 +505,324 @@ def reset_for_worker() -> None:
     corrupt one.
     """
     set_backend(None)
+
+
+# ---------------------------------------------------------------------------
+# Cross-process implementation
+# ---------------------------------------------------------------------------
+
+_SCHEMA_VERSION = 1
+
+# The tables this backend owns so far. Everything not listed here still falls
+# through to the in-process storage inherited from InMemoryState, which is
+# correct-but-per-worker; see the class docstring.
+_DDL = """
+CREATE TABLE IF NOT EXISTS meta (
+  k TEXT PRIMARY KEY,
+  v TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS capability_gap (
+  key TEXT NOT NULL,
+  cap TEXT NOT NULL,
+  PRIMARY KEY (key, cap)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS saturation (
+  key        TEXT PRIMARY KEY,
+  expires_at REAL NOT NULL
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS ix_saturation_exp ON saturation(expires_at);
+
+CREATE TABLE IF NOT EXISTS oversize (
+  key       TEXT PRIMARY KEY,
+  min_bytes INTEGER NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS affinity_pin (
+  akey     TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  model    TEXT NOT NULL,
+  seen_at  REAL NOT NULL
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS ix_affinity_seen ON affinity_pin(seen_at);
+"""
+
+_DDL_STATEMENTS = [st.strip() for st in _DDL.split(";") if st.strip()]
+
+_PRUNE_INTERVAL_S = 60.0
+
+
+class SqliteState(InMemoryState):
+    """State shared between the worker processes of one host.
+
+    Subclasses ``InMemoryState`` deliberately. Each table added here overrides
+    one group of accessors; everything not yet overridden keeps the in-process
+    behaviour it inherits. That makes every intermediate state coherent — some
+    facts shared, the rest per-worker, none of it broken — rather than requiring
+    the whole surface to land at once.
+
+    **One host only.** WAL needs its ``-shm`` mmap region, which does not work
+    across machines, and ``server.workers`` is a per-host setting anyway. A
+    state directory on a network filesystem is caught at init and reported
+    rather than corrupting quietly.
+
+    **Wall clock, not monotonic.** ``time.monotonic()`` has no shared epoch
+    across processes, so deadlines are stored as absolute unix time. That trades
+    immunity to clock jumps for the ability to be read by another process; the
+    read-side clamp on ``MAX_SATURATION_COOLDOWN_S`` bounds what a backward jump
+    can cost. Callers see none of this: they still pass a TTL and read a bool.
+
+    **Writers always ``BEGIN IMMEDIATE``.** A deferred transaction that reads
+    and then writes can deadlock two writers into ``SQLITE_BUSY`` that
+    ``busy_timeout`` will not resolve, because neither can proceed without the
+    other yielding.
+    """
+
+    kind = "sqlite"
+
+    def __init__(self, path, *, worker: str | None = None) -> None:
+        super().__init__()
+        import os
+        import pathlib
+        import socket
+
+        self.path = pathlib.Path(path)
+        self.worker = worker or f"{socket.gethostname()}:{os.getpid()}"
+        self._local = threading.local()
+        self._last_prune = 0.0
+        self._init_schema()
+
+    # — connection handling ————————————————————————————————————————————————
+
+    def _conn(self):
+        """This thread's connection. gthread runs several threads per worker."""
+        import sqlite3
+
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(
+                str(self.path), timeout=5.0, isolation_level=None,
+                check_same_thread=False,
+            )
+            conn.execute("PRAGMA journal_mode=WAL")
+            # NORMAL, not FULL: a worker crash loses nothing (WAL is durable
+            # against process death); only host power loss can lose the last
+            # commits, and every byte here is regenerable operational telemetry.
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA temp_store=MEMORY")
+            conn.row_factory = sqlite3.Row
+            self._local.conn = conn
+        return conn
+
+    def _init_schema(self) -> None:
+        """Create the schema, or raise so the caller can fall back.
+
+        Racing workers are serialised by SQLite itself, so N of them running
+        this concurrently is safe. A schema from an older version is dropped
+        rather than migrated: this store is truncated on every boot anyway, so
+        there is nothing in it worth migrating.
+        """
+        conn = self._conn()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            have_meta = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
+            ).fetchone()
+            if have_meta:
+                row = conn.execute(
+                    "SELECT v FROM meta WHERE k='schema_version'").fetchone()
+                if row is None or int(row["v"]) != _SCHEMA_VERSION:
+                    for table in ("capability_gap", "saturation", "oversize",
+                                  "affinity_pin", "meta"):
+                        conn.execute(f"DROP TABLE IF EXISTS {table}")
+            # Statement by statement, not executescript(): that issues its own
+            # COMMIT first, which would silently end the transaction this
+            # function is relying on.
+            for stmt in _DDL_STATEMENTS:
+                conn.execute(stmt)
+            conn.execute(
+                "INSERT INTO meta(k, v) VALUES('schema_version', ?) "
+                "ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                (str(_SCHEMA_VERSION),),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+    def close(self) -> None:
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            self._local.conn = None
+
+    def truncate(self) -> None:
+        """Empty every table. Run once by the master before it forks.
+
+        Restart semantics must match the in-process backend's: counters and
+        cooldowns do not survive a restart, and a file-backed store would
+        silently make them. It also clears state left by a worker that was
+        killed rather than shut down.
+        """
+        conn = self._conn()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for table in ("capability_gap", "saturation", "oversize", "affinity_pin"):
+                conn.execute(f"DELETE FROM {table}")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+    # — opportunistic pruning ——————————————————————————————————————————————
+
+    def _maybe_prune(self, conn) -> None:
+        """Drop what has expired, at most once a minute, inside the caller's
+        transaction. A background thread for this would be a thread to supervise
+        and to shut down cleanly, for work that any write can carry."""
+        now = time.time()
+        if now - self._last_prune < _PRUNE_INTERVAL_S:
+            return
+        self._last_prune = now
+        conn.execute("DELETE FROM saturation WHERE expires_at < ?", (now,))
+        conn.execute("DELETE FROM affinity_pin WHERE seen_at < ?",
+                     (now - AFFINITY_PIN_TTL_S,))
+        conn.execute(
+            "DELETE FROM affinity_pin WHERE akey IN ("
+            "  SELECT akey FROM affinity_pin ORDER BY seen_at DESC LIMIT -1 OFFSET ?)",
+            (AFFINITY_PIN_MAX,),
+        )
+
+    def _write(self, statements) -> int:
+        """Run statements in one BEGIN IMMEDIATE; returns the last changes()."""
+        conn = self._conn()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            changed = 0
+            for sql, params in statements:
+                cur = conn.execute(sql, params)
+                changed = cur.rowcount
+            self._maybe_prune(conn)
+            conn.execute("COMMIT")
+            return changed
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+    # — capability gaps (monotone union, no clock) ——————————————————————————
+
+    def record_capability_gap(self, key: str, cap: str) -> bool:
+        if not cap:
+            return False
+        return self._write([(
+            "INSERT INTO capability_gap(key, cap) VALUES(?, ?) "
+            "ON CONFLICT(key, cap) DO NOTHING", (key, cap),
+        )]) > 0
+
+    def capability_gaps(self, key: str) -> set[str]:
+        rows = self._conn().execute(
+            "SELECT cap FROM capability_gap WHERE key = ?", (key,)).fetchall()
+        return {r["cap"] for r in rows}
+
+    def reset_capability_gaps(self) -> None:
+        self._write([("DELETE FROM capability_gap", ())])
+
+    # — saturation (absolute deadlines, clamped on read) ————————————————————
+
+    def mark_saturated(self, key: str, cooldown_s: float) -> None:
+        if cooldown_s <= 0:
+            return
+        # MAX on conflict, so a longer Retry-After wins rather than whichever
+        # worker happened to write last.
+        self._write([(
+            "INSERT INTO saturation(key, expires_at) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET expires_at=MAX(expires_at, excluded.expires_at)",
+            (key, time.time() + cooldown_s),
+        )])
+
+    def is_saturated(self, key: str) -> bool:
+        now = time.time()
+        row = self._conn().execute(
+            "SELECT 1 FROM saturation WHERE key = ? AND expires_at > ? AND expires_at <= ?",
+            (key, now, now + MAX_SATURATION_COOLDOWN_S),
+        ).fetchone()
+        return row is not None
+
+    def reset_saturation(self) -> None:
+        self._write([("DELETE FROM saturation", ())])
+
+    # — oversize watermarks (no clock) ——————————————————————————————————————
+
+    def record_oversize(self, key: str, size_bytes: int) -> None:
+        if size_bytes <= 0:
+            return
+        self._write([(
+            "INSERT INTO oversize(key, min_bytes) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET min_bytes=MIN(min_bytes, excluded.min_bytes)",
+            (key, size_bytes),
+        )])
+
+    def is_oversize(self, key: str, size_bytes: int) -> bool:
+        if size_bytes <= 0:
+            return False
+        row = self._conn().execute(
+            "SELECT 1 FROM oversize WHERE key = ? AND min_bytes <= ?",
+            (key, size_bytes),
+        ).fetchone()
+        return row is not None
+
+    def has_oversize(self) -> bool:
+        return self._conn().execute(
+            "SELECT 1 FROM oversize LIMIT 1").fetchone() is not None
+
+    def clear_oversize_at(self, key: str, size_bytes: int) -> bool:
+        if size_bytes <= 0:
+            return False
+        return self._write([(
+            "DELETE FROM oversize WHERE key = ? AND min_bytes <= ?",
+            (key, size_bytes),
+        )]) > 0
+
+    def reset_oversize(self) -> None:
+        self._write([("DELETE FROM oversize", ())])
+
+    # — affinity pins ——————————————————————————————————————————————————————
+
+    def record_affinity(self, akey: str, provider: str, model: str) -> None:
+        # The cap is enforced in the same transaction rather than left to the
+        # pruner: it is what bounds growth, and a bound that can be exceeded for
+        # a minute at a time is not one. The TTL stays opportunistic, since
+        # affinity_target already filters expired pins on read.
+        self._write([
+            (
+                "INSERT INTO affinity_pin(akey, provider, model, seen_at) "
+                "VALUES(?, ?, ?, ?) "
+                "ON CONFLICT(akey) DO UPDATE SET provider=excluded.provider, "
+                "model=excluded.model, seen_at=excluded.seen_at",
+                (akey, provider, model, time.time()),
+            ),
+            (
+                "DELETE FROM affinity_pin WHERE akey IN ("
+                "  SELECT akey FROM affinity_pin ORDER BY seen_at DESC "
+                "  LIMIT -1 OFFSET ?)",
+                (AFFINITY_PIN_MAX,),
+            ),
+        ])
+
+    def affinity_target(self, akey: str) -> tuple[str, str] | None:
+        row = self._conn().execute(
+            "SELECT provider, model FROM affinity_pin WHERE akey = ? AND seen_at >= ?",
+            (akey, time.time() - AFFINITY_PIN_TTL_S),
+        ).fetchone()
+        return (row["provider"], row["model"]) if row else None
+
+    def affinity_count(self) -> int:
+        return self._conn().execute(
+            "SELECT COUNT(*) AS n FROM affinity_pin").fetchone()["n"]
+
+    def reset_affinity(self) -> None:
+        self._write([("DELETE FROM affinity_pin", ())])

@@ -27,6 +27,7 @@ Options
 import argparse
 import logging
 import os
+import pathlib
 import tempfile
 import traceback
 
@@ -131,6 +132,59 @@ def _config_int_from(cfg: dict, key: str, default: int) -> int:
         return int(raw)
     except (TypeError, ValueError):
         return default
+
+
+def _prepare_shared_state(workers: int, server_cfg: dict) -> int:
+    """Decide whether state is shared, and return the worker count to actually use.
+
+    With one worker there is nothing to share, so this is a no-op and the proxy
+    pays nothing for a feature it is not using.
+
+    With more than one, the routing state has to be shared or the second worker
+    silently double-counts every free-tier quota and never sees the first one's
+    cooldowns. So the store is opened for real here, in the master, before any
+    worker exists: an unwritable state directory, a filesystem that cannot
+    support WAL, and a full disk all fail differently and all need saying.
+
+    If it cannot be opened, **the worker count drops to 1** rather than the
+    proxy running N workers on unshared state. That trade is deliberate. Falling
+    back quietly to per-worker state would reinstate exactly the bug this
+    exists to prevent, while looking healthy; refusing to boot would turn a
+    recoverable misconfiguration into an outage, and an unwritable state
+    directory must not wedge the server. Losing CPU parallelism is the only one
+    of the three that costs nothing but speed.
+
+    The store is truncated on the way through. Counters and cooldowns have never
+    survived a restart, and a file-backed store would silently make them --
+    leaving a six-hour-old cooldown on a candidate that recovered while the
+    proxy was down.
+    """
+    from . import state
+
+    if workers <= 1:
+        state.configure(None)
+        return workers
+
+    db_path = pathlib.Path(get_state_dir()) / "shared_state.db"
+    reason = state.probe_shared_store(db_path)
+    if reason is None:
+        state.configure(db_path)
+        logging.getLogger("llmproxy").info(
+            "server.workers=%d: sharing routing state through %s", workers, db_path,
+        )
+        return workers
+
+    state.configure(None)
+    logging.getLogger("llmproxy").error(
+        "server.workers=%d, but the shared routing store at %s could not be "
+        "opened: %s. Falling back to ONE worker, because %d workers on unshared "
+        "state would count every free-tier quota %d times over and never see "
+        "each other's cooldowns. Make that directory writable by %s (or set "
+        "LLMPROXY_STATE_DIR somewhere that is, on a local filesystem) to use "
+        "more than one.",
+        workers, db_path, reason, workers, workers, _describe_process_identity(),
+    )
+    return 1
 
 
 def _gunicorn_options(server_cfg: dict, host: str, port: int, log_level: str,
@@ -479,7 +533,8 @@ def main() -> None:
 
         options = _gunicorn_options(server_cfg, host, port, log_level,
                                     _post_worker_init)
-        workers = options["workers"]
+        workers = _prepare_shared_state(options["workers"], server_cfg)
+        options["workers"] = workers
         threads = options["threads"]
         logging.getLogger("llmproxy").info(
             "Starting with gunicorn — %s:%d (%d worker(s) x %d thread(s))",

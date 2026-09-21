@@ -20,13 +20,26 @@ import time
 import pytest
 
 from llmproxy import state
-from llmproxy.state import InMemoryState, SharedState
+from llmproxy.state import InMemoryState, SharedState, SqliteState
 
 
-@pytest.fixture(params=["memory"])
-def backend(request) -> SharedState:
-    """One test body, every backend. Add a param to hold a new one to this."""
-    return {"memory": InMemoryState}[request.param]()
+@pytest.fixture(params=["memory", "sqlite"])
+def backend(request, tmp_path) -> SharedState:
+    """One test body, every backend.
+
+    This is the fixture that stops the two implementations drifting: every
+    behaviour below is asserted identically against both, so a shared backend
+    cannot quietly decide that a watermark keeps the maximum or that an unseen
+    key reads as failing.
+    """
+    if request.param == "memory":
+        be = InMemoryState()
+    else:
+        be = SqliteState(tmp_path / "shared_state.db")
+    yield be
+    close = getattr(be, "close", None)
+    if close:
+        close()
 
 
 def test_the_implementation_satisfies_the_protocol(backend):
