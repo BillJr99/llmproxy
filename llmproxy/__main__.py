@@ -463,11 +463,18 @@ def main() -> None:
         # call would not propagate to forked workers; post_worker_init runs in the
         # worker. The task spawns its own daemon thread, so it never blocks boot.
         def _post_worker_init(worker):  # noqa: ANN001 — gunicorn hook signature
+            from . import state
             from .server import _run_startup_tasks_once
             # Drop any config cache state inherited from the pre-fork master so
             # this worker reads providers fresh from disk rather than serving a
             # snapshot the master happened to cache before forking.
             load_config(force_reload=True)
+            # Same for the routing-state backend. Nothing it holds today
+            # survives a fork badly, so this is currently a formality — but it
+            # is the hook that makes it structurally impossible for a
+            # connection-backed backend to be inherited across one, which is
+            # the classic way to corrupt a shared store.
+            state.reset_for_worker()
             _run_startup_tasks_once()
 
         options = _gunicorn_options(server_cfg, host, port, log_level,

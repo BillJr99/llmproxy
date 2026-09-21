@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 
 import llmproxy.server as S
+from llmproxy import state
 
 POOL = [("best", {}, "m-best"), ("second", {}, "m-2"), ("third", {}, "m-3")]
 KEY = "conversation-A"
@@ -25,10 +26,10 @@ KEY = "conversation-A"
 @pytest.fixture(autouse=True)
 def _clean():
     S._reset_affinity_pins()
-    S._saturation_registry.clear()
+    S.get_backend().reset_saturation()
     yield
     S._reset_affinity_pins()
-    S._saturation_registry.clear()
+    S.get_backend().reset_saturation()
 
 
 def _heads(pool, key):
@@ -102,7 +103,7 @@ def test_a_cooling_pinned_target_is_not_promoted():
 def test_the_pin_resumes_once_the_cooldown_clears():
     S._record_affinity_success(KEY, "second", "m-2")
     S._mark_saturated(S._usage_key("second", "m-2"), None)
-    S._saturation_registry.clear()
+    S.get_backend().reset_saturation()
     assert _heads(POOL, KEY)[0] == "second"
 
 
@@ -110,16 +111,16 @@ def test_the_pin_resumes_once_the_cooldown_clears():
 
 def test_the_pin_map_respects_its_cap():
     """Keyed by conversation, so unbounded growth is a slow leak."""
-    for i in range(S._AFFINITY_PIN_MAX + 50):
+    for i in range(state.AFFINITY_PIN_MAX + 50):
         S._record_affinity_success(f"convo-{i}", "best", "m-best")
-    assert len(S._affinity_pins) <= S._AFFINITY_PIN_MAX
+    assert S.get_backend().affinity_count() <= state.AFFINITY_PIN_MAX
 
 
 def test_an_expired_pin_is_dropped(monkeypatch):
     S._record_affinity_success(KEY, "second", "m-2")
     real = S.time.monotonic
     monkeypatch.setattr(S.time, "monotonic",
-                        lambda: real() + S._AFFINITY_PIN_TTL_S + 1)
+                        lambda: real() + state.AFFINITY_PIN_TTL_S + 1)
     assert S._affinity_pinned_target(KEY) is None
 
 

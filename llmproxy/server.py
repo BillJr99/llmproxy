@@ -68,7 +68,6 @@ import time
 import traceback
 import urllib.parse
 import uuid
-from collections import deque
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -130,8 +129,8 @@ try:
     import fcntl  # POSIX advisory file locking
 except ImportError:  # pragma: no cover - non-POSIX (e.g. Windows)
     fcntl = None
+from .state import FAILURE_LOG_MAX, FAILURE_LOG_TTL_S, get_backend
 from .usage import (
-    ModelUsage,
     compute_cost,
     extract_usage,
     load_pricing_map,
@@ -364,21 +363,14 @@ _models_refresh_active = False
 # ---------------------------------------------------------------------------
 # Per-model usage tracking (free-tier capacity-aware load balancing + accounting)
 # ---------------------------------------------------------------------------
-# In-memory only; resets on server restart.  Each gunicorn worker process
-# maintains its own counters — usage tracking is per-worker, not cross-process.
-# For cross-process accuracy, configure a single worker or use a shared store.
-# The pure counter / cost primitives live in usage.py so the scraper probe can
-# reuse them; this section wires them to the live config + believed_free set.
-
-_usage_registry: dict[str, ModelUsage] = {}
-_usage_registry_lock = threading.Lock()
-_usage_since: str = datetime.datetime.now(datetime.UTC).isoformat()
-
-# believed_free models that served a request reporting a non-zero cost. Surfaced
-# via GET /v1/usage and persisted to config['cost_observed_free_tier'] so the
-# updater stops re-adding them to believed_free.
-_paid_free_flags: dict[str, dict] = {}
-_paid_free_lock = threading.Lock()
+# Resets on server restart. Each gunicorn worker process meters its own
+# counters — usage tracking is per-worker, not cross-process — which is why
+# server.workers defaults to 1; see state.py.
+#
+# The storage lives in state.py behind one interface. The functions below keep
+# their policy: they build the keys, read the config and write the log lines,
+# and hand the backend only what to store. The pure counter / cost primitives
+# stay in usage.py so the scraper probe can reuse them.
 
 # Serializes the best-effort config.json append in _persist_cost_observed so two
 # concurrent first-observations don't race the read-modify-write.
@@ -403,8 +395,6 @@ COST_OBSERVED_KEY = "cost_observed_free_tier"
 # the usage counters. Keyed identically to the usage registry (per account when
 # a provider has several); a provider-wide sentinel model opens a circuit for a
 # whole provider/account when its shared allowance is depleted.
-_saturation_registry: dict[str, float] = {}  # key -> monotonic expiry (seconds)
-_saturation_lock = threading.Lock()
 _DEFAULT_SATURATION_COOLDOWN_S = 60.0
 _MAX_SATURATION_COOLDOWN_S = 3600.0
 _PROVIDER_CIRCUIT_MODEL = "__provider__"  # sentinel model for a provider-wide circuit
@@ -427,8 +417,7 @@ _PROVIDER_CIRCUIT_MODEL = "__provider__"  # sentinel model for a provider-wide c
 # first oversized request after a restart rediscovers it, at the cost of one
 # failover — so persisting it would buy a schema and a staleness problem and
 # nothing else. The dict is bounded by the number of routing targets.
-_oversize_registry: dict[str, int] = {}  # provider/model -> smallest 413'd body, bytes
-_oversize_lock = threading.Lock()
+# Stored in state.py; the watermark keeps the minimum observed being refused.
 
 # provider/model -> capabilities the upstream has REFUSED to serve, learned from
 # rejections rather than from any listing. The proactive path (a provider's own
@@ -436,8 +425,7 @@ _oversize_lock = threading.Lock()
 # providers publish, and a gateway that advertises tool support it cannot route
 # to is exactly the case no amount of metadata-reading catches. See
 # _record_capability_gap.
-_capability_gap_registry: dict[str, set[str]] = {}
-_capability_gap_lock = threading.Lock()
+# Stored in state.py as a per-target set union; never cleared in normal running.
 
 
 def _oversize_key(provider_name: str, upstream_model: str) -> str:
@@ -483,22 +471,14 @@ def _record_oversize(provider_name: str, upstream_model: str, size_bytes: int) -
     a larger one never loosens it — the limit can only be bounded from above by
     what we have actually observed being refused.
     """
-    if size_bytes <= 0:
-        return
-    key = _oversize_key(provider_name, upstream_model)
-    with _oversize_lock:
-        prev = _oversize_registry.get(key)
-        if prev is None or size_bytes < prev:
-            _oversize_registry[key] = size_bytes
+    get_backend().record_oversize(
+        _oversize_key(provider_name, upstream_model), size_bytes)
 
 
 def _is_oversize_for(provider_name: str, upstream_model: str, size_bytes: int) -> bool:
     """True when this request is at least as large as one this target refused."""
-    if size_bytes <= 0:
-        return False
-    with _oversize_lock:
-        limit = _oversize_registry.get(_oversize_key(provider_name, upstream_model))
-    return limit is not None and size_bytes >= limit
+    return get_backend().is_oversize(
+        _oversize_key(provider_name, upstream_model), size_bytes)
 
 
 # OpenRouter names the filter that eliminated every endpoint; other gateways
@@ -553,14 +533,9 @@ def _record_capability_gap(provider_name: str, upstream_model: str, cap: str) ->
     warning because silently deciding a model is incapable would be invisible
     exactly when it is wrong.
     """
-    if not cap:
-        return
     key = _oversize_key(provider_name, upstream_model)
-    with _capability_gap_lock:
-        known = _capability_gap_registry.setdefault(key, set())
-        if cap in known:
-            return
-        known.add(cap)
+    if not get_backend().record_capability_gap(key, cap):
+        return
     logger.warning(
         "[capability] %s/%s rejected a request for lack of '%s'; it will not be "
         "selected for requests needing that capability",
@@ -570,8 +545,7 @@ def _record_capability_gap(provider_name: str, upstream_model: str, cap: str) ->
 
 def _learned_capability_gaps(provider_name: str, upstream_model: str) -> set[str]:
     """Capabilities this target has been observed refusing."""
-    with _capability_gap_lock:
-        return set(_capability_gap_registry.get(_oversize_key(provider_name, upstream_model), ()))
+    return get_backend().capability_gaps(_oversize_key(provider_name, upstream_model))
 
 
 def _note_capability_rejection(
@@ -596,17 +570,8 @@ def _note_accepted_size(provider_name: str, upstream_model: str, size_bytes: int
     Only a success at or above the watermark is evidence: a smaller request
     succeeding says nothing about the limit, so it leaves the watermark alone.
     """
-    if size_bytes <= 0:
-        return
     key = _oversize_key(provider_name, upstream_model)
-    with _oversize_lock:
-        limit = _oversize_registry.get(key)
-        if limit is not None and size_bytes >= limit:
-            del _oversize_registry[key]
-            cleared = True
-        else:
-            cleared = False
-    if cleared:
+    if get_backend().clear_oversize_at(key, size_bytes):
         logger.info(
             "  %s/%s accepted a %d-byte request after refusing one that size — "
             "forgetting its size limit",
@@ -616,8 +581,7 @@ def _note_accepted_size(provider_name: str, upstream_model: str, size_bytes: int
 
 def _reset_oversize() -> None:
     """Drop every watermark. For tests."""
-    with _oversize_lock:
-        _oversize_registry.clear()
+    get_backend().reset_oversize()
 
 
 # HTTP statuses that mean "out of quota / rate limited": 402 Payment Required
@@ -736,21 +700,12 @@ def _mark_saturated(key: str, retry_after=None) -> None:
     cooldown = _saturation_cooldown_seconds(retry_after)
     if cooldown <= 0:
         return
-    with _saturation_lock:
-        _saturation_registry[key] = time.monotonic() + cooldown
+    get_backend().mark_saturated(key, cooldown)
 
 
 def _is_saturated(key: str) -> bool:
-    """True while *key* is still cooling; lazily evicts expired entries."""
-    now = time.monotonic()
-    with _saturation_lock:
-        expiry = _saturation_registry.get(key)
-        if expiry is None:
-            return False
-        if expiry <= now:
-            del _saturation_registry[key]
-            return False
-        return True
+    """True while *key* is still cooling."""
+    return get_backend().is_saturated(key)
 
 
 def _mark_provider_circuit(provider_name: str, account_id: str | None = None, retry_after=None) -> None:
@@ -780,15 +735,6 @@ def _usage_key(provider_name: str, upstream_model: str, account_id: str | None =
     return f"{provider_name}/{upstream_model}".lower()
 
 
-def _get_or_create_tracker(key: str) -> ModelUsage:
-    with _usage_registry_lock:
-        tracker = _usage_registry.get(key)
-        if tracker is None:
-            tracker = ModelUsage()
-            _usage_registry[key] = tracker
-    return tracker
-
-
 def _flag_paid_free(key: str, cost: float, source: str) -> bool:
     """Record (once-warned) that a believed-free model reported a cost.
 
@@ -796,23 +742,14 @@ def _flag_paid_free(key: str, cost: float, source: str) -> bool:
     persist it to ``cost_observed_free_tier`` exactly once rather than on every
     request.
     """
-    with _paid_free_lock:
-        entry = _paid_free_flags.get(key)
-        if entry is None:
-            _paid_free_flags[key] = {
-                "observed_cost": round(cost, 8),
-                "cost_source": source,
-                "samples": 1,
-            }
-            logger.warning(
-                "[usage] believed_free model %s reported a cost (%.8f, source=%s); "
-                "adding to %s so the updater stops re-adding it to believed_free.",
-                key, cost, source, COST_OBSERVED_KEY,
-            )
-            return True
-        entry["samples"] += 1
-        entry["observed_cost"] = round(max(entry["observed_cost"], cost), 8)
+    if not get_backend().flag_paid_free(key, cost, source):
         return False
+    logger.warning(
+        "[usage] believed_free model %s reported a cost (%.8f, source=%s); "
+        "adding to %s so the updater stops re-adding it to believed_free.",
+        key, cost, source, COST_OBSERVED_KEY,
+    )
+    return True
 
 
 def _persist_cost_observed(qualified_id: str) -> None:
@@ -928,7 +865,6 @@ def _record_usage(
     historical per-model accounting untouched.
     """
     key = _usage_key(provider_name, upstream_model, account_id)
-    tracker = _get_or_create_tracker(key)
 
     prompt = completion = total = 0
     cost = 0.0
@@ -939,7 +875,8 @@ def _record_usage(
         total = usage.get("total_tokens", 0) or (prompt + completion)
         cost, source = compute_cost(provider_name, upstream_model, usage, load_pricing_map())
 
-    tracker.record(
+    get_backend().record_usage(
+        key,
         requests=1 if count_request else 0,
         prompt=prompt, completion=completion, total=total,
         cost=cost, cost_source=source,
@@ -974,23 +911,17 @@ def _record_stream_usage(
 
 def _get_usage_snapshot(key: str) -> tuple[int, int]:
     """Return (requests_last_60s, requests_today) for the given provider/model key."""
-    with _usage_registry_lock:
-        tracker = _usage_registry.get(key)
-    return tracker.snapshot() if tracker else (0, 0)
+    return get_backend().usage_snapshot(key)
 
 
 def _get_token_snapshot(key: str) -> tuple[int, int]:
     """Return (tokens_last_60s, tokens_today) for the given provider/model key."""
-    with _usage_registry_lock:
-        tracker = _usage_registry.get(key)
-    return tracker.token_snapshot() if tracker else (0, 0)
+    return get_backend().token_snapshot(key)
 
 
 def _get_health_snapshot(key: str) -> tuple[float, float, int]:
     """Return (success_rate, avg_latency_ms, samples) for a provider/model key."""
-    with _usage_registry_lock:
-        tracker = _usage_registry.get(key)
-    return tracker.health_snapshot() if tracker else (1.0, 0.0, 0)
+    return get_backend().health_snapshot(key)
 
 
 def _record_outcome(
@@ -1002,8 +933,8 @@ def _record_outcome(
     account_id: str | None = None,
 ) -> None:
     """Record whether one upstream attempt worked, for health-aware ordering."""
-    tracker = _get_or_create_tracker(_usage_key(provider_name, upstream_model, account_id))
-    tracker.record_outcome(ok, latency_ms)
+    get_backend().record_outcome(
+        _usage_key(provider_name, upstream_model, account_id), ok, latency_ms)
 
 
 # Exception types and message fragments that mean *the client went away* or that
@@ -1104,15 +1035,8 @@ def _health_score(provider_name: str, upstream_model: str, account_id: str | Non
 
 
 def _reset_usage() -> None:
-    """Clear all in-memory usage counters, paid-free flags, and saturation state."""
-    global _usage_since
-    with _usage_registry_lock:
-        _usage_registry.clear()
-    with _paid_free_lock:
-        _paid_free_flags.clear()
-    with _saturation_lock:
-        _saturation_registry.clear()
-    _usage_since = datetime.datetime.now(datetime.UTC).isoformat()
+    """Clear all usage counters, paid-free flags, and saturation state."""
+    get_backend().reset_usage()
 
 
 # ---------------------------------------------------------------------------
@@ -1223,12 +1147,12 @@ def _response_cache_put(
 # first, capped, and pruned by age. Per worker, exactly like /v1/usage, which is
 # one more reason server.workers defaults to 1.
 
-_FAILURE_LOG_MAX: int = 250
-_FAILURE_LOG_TTL_S: float = 6 * 60 * 60
+# The ring and its bounds live in state.py, with the storage they bound: two
+# copies of a cap is one copy too many, and the endpoint below reports these
+# numbers as fact.
+_FAILURE_LOG_MAX: int = FAILURE_LOG_MAX
+_FAILURE_LOG_TTL_S: float = FAILURE_LOG_TTL_S
 _FAILURE_DETAIL_MAX_CHARS: int = 300
-
-_failure_log: deque = deque(maxlen=_FAILURE_LOG_MAX)
-_failure_log_lock = threading.Lock()
 
 # Credential shapes that must never reach the failure report. Request headers
 # are never recorded at all (see the audit-record note below, and _log_request),
@@ -1379,8 +1303,7 @@ def _record_failure(
             "detail": detail_text,
             "duration_ms": round(duration_ms, 1) if duration_ms is not None else None,
         }
-        with _failure_log_lock:
-            _failure_log.append(record)
+        get_backend().record_failure(record)
     except Exception as e:  # noqa: BLE001 — never fail a request over a diagnostic
         print(f"[server:_record_failure] {e}")
         traceback.print_exc()
@@ -1526,15 +1449,7 @@ def _exception_failure_kind(exc: BaseException) -> str:
 
 def _failure_records(since_ts: float | None = None) -> list[dict]:
     """Recent failures, newest first, pruned of anything past the TTL."""
-    cutoff = time.time() - _FAILURE_LOG_TTL_S
-    with _failure_log_lock:
-        rows = [r for r in _failure_log if r.get("ts", 0) >= cutoff]
-        if len(rows) != len(_failure_log):
-            _failure_log.clear()
-            _failure_log.extend(rows)
-    if since_ts is not None:
-        rows = [r for r in rows if r.get("ts", 0) >= since_ts]
-    return list(reversed(rows))
+    return get_backend().failure_records(since_ts)
 
 
 _SINCE_UNITS: dict[str, int] = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -1563,8 +1478,7 @@ def _parse_since(raw: str | None) -> float | None:
 
 def _reset_failures() -> None:
     """Clear the failure ring."""
-    with _failure_log_lock:
-        _failure_log.clear()
+    get_backend().reset_failures()
 
 
 # ---------------------------------------------------------------------------
@@ -6323,9 +6237,8 @@ def _demote_oversize_candidates(
     """
     if not candidates:
         return candidates, 0
-    with _oversize_lock:
-        if not _oversize_registry:
-            return candidates, 0
+    if not get_backend().has_oversize():
+        return candidates, 0
     size = _payload_size_bytes(payload)
     if size <= 0:
         return candidates, 0
@@ -7896,29 +7809,6 @@ def _rendezvous_rank(key: str, identity: str) -> int:
 # pin records what actually WORKED, and later turns keep it until it stops
 # working. Best-first and stickiness stop being in tension, because the pin is
 # set by the ordering rather than competing with it.
-_AFFINITY_PIN_MAX: int = 2048
-_AFFINITY_PIN_TTL_S: float = 6 * 60 * 60
-_affinity_pins: dict[str, tuple[tuple[str, str], float]] = {}
-_affinity_pin_lock = threading.Lock()
-
-
-def _prune_affinity_pins_locked() -> None:
-    """Drop expired pins, then the oldest, until the map is back inside its cap.
-
-    Caller holds ``_affinity_pin_lock``. The cap matters more than the TTL: an
-    unbounded map keyed by conversation is a slow leak on a long-lived process.
-    """
-    cutoff = time.monotonic() - _AFFINITY_PIN_TTL_S
-    for key in [k for k, (_t, seen) in _affinity_pins.items() if seen < cutoff]:
-        _affinity_pins.pop(key, None)
-    if len(_affinity_pins) <= _AFFINITY_PIN_MAX:
-        return
-    for key, _ in sorted(_affinity_pins.items(), key=lambda kv: kv[1][1])[
-        : len(_affinity_pins) - _AFFINITY_PIN_MAX
-    ]:
-        _affinity_pins.pop(key, None)
-
-
 def _record_affinity_success(affinity_key: str | None, provider_name: str, upstream_model: str) -> None:
     """Pin this conversation to the target that just served it successfully.
 
@@ -7928,30 +7818,19 @@ def _record_affinity_success(affinity_key: str | None, provider_name: str, upstr
     """
     if not affinity_key:
         return
-    with _affinity_pin_lock:
-        _affinity_pins[affinity_key] = ((provider_name, upstream_model), time.monotonic())
-        _prune_affinity_pins_locked()
+    get_backend().record_affinity(affinity_key, provider_name, upstream_model)
 
 
 def _affinity_pinned_target(affinity_key: str | None) -> tuple[str, str] | None:
     """The target this conversation is pinned to, if the pin is still live."""
     if not affinity_key:
         return None
-    with _affinity_pin_lock:
-        entry = _affinity_pins.get(affinity_key)
-        if not entry:
-            return None
-        target, seen = entry
-        if seen < time.monotonic() - _AFFINITY_PIN_TTL_S:
-            _affinity_pins.pop(affinity_key, None)
-            return None
-        return target
+    return get_backend().affinity_target(affinity_key)
 
 
 def _reset_affinity_pins() -> None:
     """Clear every pin. Used by tests and by an explicit usage reset."""
-    with _affinity_pin_lock:
-        _affinity_pins.clear()
+    get_backend().reset_affinity()
 
 
 def _order_by_sticky_affinity(
@@ -11003,18 +10882,20 @@ def _build_usage_report() -> dict:
     exactly as before. Account labels are surfaced, never the key material.
     """
     config = load_config()
-    with _usage_registry_lock:
-        items = list(_usage_registry.items())
+    backend = get_backend()
+    rows = backend.usage_rows()
 
     models: list[dict] = []
     totals = {
         "requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
         "total_tokens": 0, "cost": 0.0,
     }
-    for key, tracker in items:
-        snap = tracker.cost_snapshot()
-        tok_min, tok_day = tracker.token_snapshot()
-        success_rate, avg_latency_ms, health_samples = tracker.health_snapshot()
+    for key, snap in rows:
+        tok_min = snap["tokens_last_60s"]
+        tok_day = snap["tokens_today"]
+        success_rate = snap["success_rate"]
+        avg_latency_ms = snap["avg_latency_ms"]
+        health_samples = snap["health_samples"]
         provider_name, account_id, upstream_model = _split_usage_key(key)
         believed_free = bool(upstream_model) and _is_model_free(provider_name, upstream_model, config)
         entry = {
@@ -11046,14 +10927,13 @@ def _build_usage_report() -> dict:
     totals["cost"] = round(totals["cost"], 8)
     models.sort(key=lambda m: (m["model"], m.get("account") or ""))
 
-    with _paid_free_lock:
-        flagged = [
-            {"model": k, **v} for k, v in sorted(_paid_free_flags.items())
-        ]
+    flagged = [
+        {"model": k, **v} for k, v in sorted(backend.paid_free_flags().items())
+    ]
 
     return {
         "object": "usage.report",
-        "since": _usage_since,
+        "since": backend.usage_since,
         "models": models,
         "totals": totals,
         "flagged_paid_free_models": flagged,
@@ -11318,7 +11198,8 @@ def usage_reset() -> Response:
         body, status = auth_err
         return make_response(body, status)
     _reset_usage()
-    return jsonify({"object": "usage.reset", "ok": True, "since": _usage_since})
+    return jsonify({"object": "usage.reset", "ok": True,
+                    "since": get_backend().usage_since})
 
 
 # ---------------------------------------------------------------------------

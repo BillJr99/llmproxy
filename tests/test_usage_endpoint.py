@@ -91,13 +91,14 @@ def test_per_account_usage_is_metered_separately(usage_server):
     usage_server._record_usage("groq", "free-model", usage=common, config=cfg, account_id="a")
     usage_server._record_usage("groq", "free-model", usage=common, config=cfg, account_id="b")
 
-    reg = usage_server._usage_registry
-    assert "groq#a/free-model" in reg
-    assert "groq#b/free-model" in reg
-    assert reg["groq#a/free-model"].snapshot()[1] == 2  # requests_today
-    assert reg["groq#b/free-model"].snapshot()[1] == 1
+    metered = dict(usage_server.get_backend().usage_rows())
+    assert "groq#a/free-model" in metered
+    assert "groq#b/free-model" in metered
+    # requests_today, per account
+    assert usage_server._get_usage_snapshot("groq#a/free-model")[1] == 2
+    assert usage_server._get_usage_snapshot("groq#b/free-model")[1] == 1
     # The anonymous per-model key is untouched when accounts are used.
-    assert "groq/free-model" not in reg
+    assert "groq/free-model" not in metered
 
 
 def test_per_account_cost_flag_is_model_level(usage_server):

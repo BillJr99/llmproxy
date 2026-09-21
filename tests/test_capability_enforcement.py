@@ -22,10 +22,10 @@ from llmproxy.flagship import normalize_model_id
 
 @pytest.fixture(autouse=True)
 def _clean_registries():
-    S._capability_gap_registry.clear()
+    S.get_backend().reset_capability_gaps()
     S._reset_failures()
     yield
-    S._capability_gap_registry.clear()
+    S.get_backend().reset_capability_gaps()
     S._reset_failures()
 
 

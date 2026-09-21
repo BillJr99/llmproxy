@@ -58,3 +58,24 @@ def minimal_config(tmp_path: Path) -> Path:
     p = tmp_path / "config.json"
     p.write_text(json.dumps(cfg))
     return p
+
+
+@pytest.fixture(autouse=True)
+def _fresh_state():
+    """Give every test its own routing state.
+
+    Quota counters, health windows, saturation cooldowns, capability gaps,
+    oversize watermarks, affinity pins and the failure ring live in
+    ``llmproxy.state`` behind one backend object. That object is process-scoped
+    by design, which is correct in production and wrong in a test session: it
+    outlives the ``importlib.reload(server)`` that several suites use to rebuild
+    the module against a new config, so without this one test's cooldowns and
+    counters would leak into the next.
+
+    Autouse, because the leak is silent and order-dependent — the kind of thing
+    that passes locally and fails in CI on a different shard.
+    """
+    from llmproxy import state
+    state.set_backend(None)
+    yield
+    state.set_backend(None)
