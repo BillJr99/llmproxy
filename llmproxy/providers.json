@@ -34,6 +34,7 @@
     "minimax",
     "atria-asi",
     "unbiased-ai",
+    "typesafe",
     "kilo",
     "modelscope",
     "aion-labs",
@@ -6422,6 +6423,17 @@
           "vision"
         ]
       },
+      "free_limits": {}
+    },
+    "typesafe": {
+      "display": "TypeSafe AI (Jev decision model, native System One API)",
+      "base_url": "https://api.typesafe.ai/v1",
+      "key_required": true,
+      "key_hint": "Create an API key in your TypeSafe account (docs.typesafe.ai/introduction/quickstart); paid, $0.042 per 1M input tokens, output tokens free",
+      "_note": "Jev is a decision model, not a chat model: it answers typed questions (noul / choice / score) about a state and returns probabilities, never text. Call it through llmproxy's POST /v1/systemone with the native TypeSafe body and model 'typesafe/jev-latest'. It is never offered by /v1/models or picked by any virtual model, and a chat request naming it returns a 400 pointing here. /models lists aliases under 'models[].name'.",
+      "models_id_field": "name",
+      "believed_free": [],
+      "model_reasoning": {},
       "free_limits": {}
     },
     "kilo": {
@@ -23735,6 +23747,18 @@
     "together/zai-org/glm-5.3-flash": {
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 5e-07
+    },
+    "typesafe/jev-1.13.0": {
+      "input_cost_per_token": 4.2e-08,
+      "output_cost_per_token": 0.0
+    },
+    "typesafe/jev-latest": {
+      "input_cost_per_token": 4.2e-08,
+      "output_cost_per_token": 0.0
+    },
+    "typesafe/jev-preview": {
+      "input_cost_per_token": 4.2e-08,
+      "output_cost_per_token": 0.0
     },
     "xai/grok-3": {
       "input_cost_per_token": 1.25e-06,
