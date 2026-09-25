@@ -179,6 +179,12 @@
         "agnes-2.0-flash"
       ]
     },
+    "xiaomi-mimo": {
+      "_note": "OpenAI-compatible (the platform also serves an Anthropic-format endpoint under /anthropic, which llmproxy does not use). GET /v1/models is key-gated: without a key it answers 401 JSON 'invalid_key', where an unknown /v1 path answers a 404 HTML page, so the route exists and default discovery with Bearer auth works; no models_url override is needed (verified September 2026). The catalog may also list non-chat models such as mimo-v2-tts; no model_filter is set because the live id list could not be confirmed without a key, and a filter that misses would register nothing.",
+      "base_url": "https://api.xiaomimimo.com/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
     "huggingface": {
       "base_url": "https://router.huggingface.co/v1",
       "api_key": "hf_...",
