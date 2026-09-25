@@ -99,6 +99,12 @@ BUILTIN = OrderedDict([
         "key_required": True,
         "key_hint": "Create an API key in the Agnes console at platform.agnes-ai.com → API Key management. Keys look like sk-... (docs: wiki.agnes-ai.com). The catalog also lists image and video models; set model_filter to the text ones.",
     }),
+    ("xiaomi-mimo", {
+        "display": "Xiaomi MiMo",
+        "base_url": "https://api.xiaomimimo.com/v1",
+        "key_required": True,
+        "key_hint": "Create an API key in the Xiaomi MiMo API Open Platform console at platform.xiaomimimo.com → API Keys (docs: mimo.mi.com/docs)",
+    }),
 ])
 
 # Fields the wizard copies from a template onto the config entry.

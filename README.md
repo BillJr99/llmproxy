@@ -4015,6 +4015,7 @@ The wizard currently offers ready-made templates for these providers:
 | ModelScope (Alibaba API-Inference)         | `modelscope`            | `https://api-inference.modelscope.cn/v1`                                       |
 | Aion Labs                                  | `aion-labs`             | `https://api.aionlabs.ai/v1`                                                   |
 | Agnes AI (multimodal gateway)              | `agnes-ai`              | `https://apihub.agnes-ai.com/v1`                                               |
+| Xiaomi MiMo                                | `xiaomi-mimo`           | `https://api.xiaomimimo.com/v1`                                                |
 | Hugging Face Inference                     | `huggingface`           | `https://router.huggingface.co/v1`                                             |
 | xAI (Grok)                                 | `xai`                   | `https://api.x.ai/v1`                                                          |
 | Cloudflare AI Gateway                      | `cloudflare-ai-gateway` | `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai/v1` |
