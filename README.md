@@ -759,6 +759,39 @@ need no separate inbound surface — use the OpenAI or Anthropic endpoints for t
 > Ollama REST API rather than OpenAI-over-`/api` needs the endpoints in
 > [Ollama-protocol endpoints](#ollama-protocol-endpoints) below.
 
+### TypeSafe Jev decision model (`POST /v1/systemone`)
+
+[TypeSafe AI](https://docs.typesafe.ai/)'s Jev is a *decision* model, not a chat
+model. It evaluates a `state` against typed `questions` (`noul` = yes/no
+probability, `choice` = pick one with a probability distribution, `score` =
+rubric level) and returns calibrated answers. It never produces text. llmproxy
+serves it on its own endpoint and sends TypeSafe's native body through untouched
+apart from the model id:
+
+```bash
+curl -s http://localhost:8080/v1/systemone -H "Content-Type: application/json" -d '{
+  "model": "typesafe/jev-latest",
+  "state": "Help! My payouts have been failing for 3 days.",
+  "questions": {"is_urgent": {"type": "noul", "instructions": "Does this convey urgency?"}}
+}'
+# → {"model": "jev-1.13.0", "answers": {"is_urgent": {"type": "noul", "noul": 0.95}},
+#    "usage": {"input_tokens": 296, "output_tokens": 20}}
+```
+
+- **Setup:** add the `typesafe` provider (`llmproxy --setup`, or copy the block
+  from `config.example.json`). Model names are TypeSafe's own: `jev-latest`,
+  `jev-preview`, or a pinned `jev-1.13.0`.
+- **Accounting:** TypeSafe's `input_tokens`/`output_tokens` are recorded in
+  [`/v1/usage`](#usage-endpoint) at the published rate of $0.042 per 1M input
+  tokens. Output tokens are free.
+- **Kept out of chat routing:** Jev models are never listed by `/v1/models`
+  and never enter a virtual pool. That holds whether TypeSafe itself lists them
+  or a gateway relays them (`vercel/typesafe-ai/jev`,
+  `requesty/typesafe/jev-1.13.0`). A chat, Messages, Responses or Gemini request
+  that names one directly gets a `400` pointing here.
+- **Not supported:** streaming and failover. A decision model is always named
+  directly.
+
 ### Ollama-protocol endpoints
 
 Separate from the `/api` base-URL alias above: these answer the Ollama REST API
@@ -4837,6 +4870,7 @@ All endpoints mirror the OpenAI API.
 | GET    | `/v1/responses/<id>`    | Stored-conversation lookup                |
 | DELETE | `/v1/responses/<id>`    | Forget a stored conversation              |
 | POST   | `/v1/embeddings`        | Embeddings                                |
+| POST   | [`/v1/systemone`](#typesafe-jev-decision-model-post-v1systemone) | TypeSafe Jev decision requests (native body) |
 | *      | `/v1/<anything>`        | Pass-through to upstream (see note below) |
 
 For pass-through endpoints not listed above (e.g., `/v1/audio/transcriptions`),

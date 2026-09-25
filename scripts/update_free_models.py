@@ -89,6 +89,21 @@ _PINNED_PRICING: dict[str, dict[str, float]] = {
         "input_cost_per_token": 2.5e-06,
         "output_cost_per_token": 7.5e-06,
     },
+    # docs.typesafe.ai/models: Jev 1.13 is $0.042/Mtok, charged per input token
+    # only ("Output tokens are free"). jev-latest and jev-preview are aliases of
+    # jev-1.13.0 today; re-check this when TypeSafe ships a new release.
+    "typesafe/jev-1.13.0": {
+        "input_cost_per_token": 4.2e-08,
+        "output_cost_per_token": 0.0,
+    },
+    "typesafe/jev-latest": {
+        "input_cost_per_token": 4.2e-08,
+        "output_cost_per_token": 0.0,
+    },
+    "typesafe/jev-preview": {
+        "input_cost_per_token": 4.2e-08,
+        "output_cost_per_token": 0.0,
+    },
 }
 
 # Placeholder API keys used when regenerating config.example.json. Keeping

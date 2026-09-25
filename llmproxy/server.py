@@ -7,7 +7,8 @@ Implements the following OpenAI API endpoints:
   POST /v1/chat/completions        Proxy chat completions (streaming + non-streaming)
   POST /v1/completions             Proxy legacy completions (chat/completions fallback)
   POST /v1/embeddings              Proxy embeddings
-  GET  /v1/usage                   Token + cost accounting report
+  POST /v1/systemone               Proxy TypeSafe Jev decision requests (native body)
+  GET  /v1/usage                  Token + cost accounting report
   POST /v1/usage/reset             Clear usage counters (admin-gated)
   GET  /health                     Health check
 
@@ -2134,6 +2135,22 @@ def _describe_fetch_failure(url: str, resp: "requests.Response | None") -> str:
     return "".join(parts)
 
 
+_DECISION_MODEL_RE = re.compile(r"^jev(?:[-_.:@]|$)")
+
+
+def _is_decision_model(upstream_id: str) -> bool:
+    """True for TypeSafe's Jev models, under any provider that relays them.
+
+    Jev is a "System One" decision model: it returns probabilities for typed
+    questions, never text, so it has no place in a chat candidate pool. It is
+    matched on the last path segment because gateways namespace it differently
+    (``typesafe/jev-1.13.0`` on Requesty, ``typesafe-ai/jev`` on Vercel, bare
+    ``jev-latest`` on TypeSafe itself).
+    """
+    leaf = upstream_id.rsplit("/", 1)[-1].lower()
+    return bool(_DECISION_MODEL_RE.match(leaf))
+
+
 def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int) -> list[dict]:
     """
     Fetch the model list from a single provider, apply any configured filter,
@@ -2251,6 +2268,15 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         if is_embedding:
             logger.info(
                 "  skipping embedding model %s/%s", provider_name, upstream_id,
+            )
+            continue
+        # Skip decision models (TypeSafe Jev) for the same reason: they answer
+        # typed questions through /v1/systemone and cannot serve a chat turn, so
+        # every virtual pool built from the route cache must never see them.
+        if _is_decision_model(upstream_id):
+            logger.info(
+                "  skipping decision model %s/%s (use /v1/systemone)",
+                provider_name, upstream_id,
             )
             continue
         # Build a proxy-facing model object.  Drop non-standard fields that
@@ -10521,6 +10547,18 @@ def _proxy_endpoint(
     server_cfg = config.get("server", {})
     is_streaming: bool = payload.get("stream", False)
 
+    # A decision model named directly would otherwise reach an upstream chat
+    # endpoint that does not exist for it (TypeSafe) or cannot answer in text
+    # (gateways relaying Jev); say where it is served instead.
+    if not _is_virtual_model(model_full) and _is_decision_model(
+            model_full.rsplit("__", 1)[-1]):
+        return _error(
+            f"'{model_full}' is a decision model: it answers typed questions "
+            "and does not generate text. Send the native TypeSafe body "
+            "({model, state, questions}) to POST /v1/systemone instead.",
+            status=400, code="invalid_request_error",
+        )
+
     # Ask the upstream to emit a final usage chunk so streamed responses can be
     # accounted (token/cost). Standard OpenAI option; opt out per-server via
     # server.stream_include_usage=false if an upstream rejects it.
@@ -10979,6 +11017,61 @@ def embeddings() -> Response:
     if 200 <= resp.status_code < 300:
         _record_usage(provider_name, upstream_model,
                       usage=extract_usage(resp.get_data()), config=config)
+    return resp
+
+
+def _systemone_usage(body: bytes) -> dict | None:
+    """Read a TypeSafe ``usage`` block ({input_tokens, output_tokens}) as OpenAI usage."""
+    try:
+        usage = json.loads(body).get("usage")
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if not isinstance(usage, dict):
+        return None
+    return extract_usage({"usage": {
+        "prompt_tokens": usage.get("input_tokens"),
+        "completion_tokens": usage.get("output_tokens"),
+    }})
+
+
+@app.route("/v1/systemone", methods=["POST"])
+def systemone() -> Response:
+    """Proxy TypeSafe System One decision requests (Jev) in their native shape.
+
+    The body is TypeSafe's own ``{model, state, questions}`` and is forwarded
+    verbatim apart from the model id, so every question type TypeSafe adds
+    works without a change here. There is no streaming and no failover: a
+    decision model is named directly, never picked by a virtual model.
+    """
+    payload = request.get_json(force=True, silent=True)
+    if not isinstance(payload, dict):
+        return _error("Request body must be a JSON object.", status=400)
+    if payload.get("stream"):
+        return _error("POST /v1/systemone does not support streaming.", status=400)
+
+    model_full: str = payload.get("model", "")
+    if not model_full:
+        return _error("Request body must include a 'model' field, e.g. "
+                      "'typesafe/jev-latest'.", status=400)
+
+    config = load_config()
+    model_full = _canonicalize_model_id(model_full, config)
+    provider_name, provider_cfg, upstream_model, err = _resolve_provider(model_full)
+    if err is not None:
+        return err
+    if not _is_decision_model(upstream_model):
+        return _error(
+            f"'{model_full}' is not a decision model; POST /v1/systemone only "
+            "serves TypeSafe Jev models (e.g. 'typesafe/jev-latest').",
+            status=400, code="invalid_request_error",
+        )
+
+    timeout = config.get("server", {}).get("request_timeout", 120)
+    upstream_payload = {**payload, "model": upstream_model}
+    resp = _proxy_request("systemone", provider_name, provider_cfg, upstream_payload, timeout)
+    if 200 <= resp.status_code < 300:
+        _record_usage(provider_name, upstream_model,
+                      usage=_systemone_usage(resp.get_data()), config=config)
     return resp
 
 
