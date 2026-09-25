@@ -414,6 +414,7 @@ function renderProviderCard(name, p, isNew) {
       <option value="openai" ${proto==="openai"?"selected":""}>openai — OpenAI-compatible (default)</option>
       <option value="anthropic" ${proto==="anthropic"?"selected":""}>anthropic — native Messages API</option>
       <option value="gemini" ${proto==="gemini"?"selected":""}>gemini — native generateContent</option>
+      <option value="typesafe" ${proto==="typesafe"?"selected":""}>typesafe — Jev decisions for structured chat</option>
     </select>
     <label class="switch" style="margin-top:12px"><input type="checkbox" data-f="expose_to_virtual_models" ${p.expose_to_virtual_models===false?"":"checked"} /> Expose to virtual endpoints</label>
     <div class="actions">

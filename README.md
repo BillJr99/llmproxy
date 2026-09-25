@@ -761,36 +761,188 @@ need no separate inbound surface — use the OpenAI or Anthropic endpoints for t
 
 ### TypeSafe Jev decision model (`POST /v1/systemone`)
 
-[TypeSafe AI](https://docs.typesafe.ai/)'s Jev is a *decision* model, not a chat
-model. It evaluates a `state` against typed `questions` (`noul` = yes/no
-probability, `choice` = pick one with a probability distribution, `score` =
-rubric level) and returns calibrated answers. It never produces text. llmproxy
-serves it on its own endpoint and sends TypeSafe's native body through untouched
-apart from the model id:
+[TypeSafe AI](https://docs.typesafe.ai/)'s **Jev** is a *decision* model (TypeSafe
+calls it a "System One" model), not a chat model. You give it a **state** (text,
+a JSON object, or a list such as a conversation) and a set of typed
+**questions**. It returns a calibrated **answer** for each question, never
+generated text. Three question types exist:
+
+| Type | Asks | Answer fields |
+| --- | --- | --- |
+| `noul` | a yes/no question | `noul`: probability of yes, 0 to 1 |
+| `choice` | pick one of 2 to 255 options | `choice`, `probabilities` (sum to 1), `confidence` |
+| `score` | rate on an ordered rubric of 2 to 10 levels | `score` (a level index, can fall between levels), `legend`, `probabilities`, `confidence` |
+
+TypeSafe charges only for input tokens: Jev 1.13 costs $0.042 per 1M input
+tokens, and output tokens are free. A request can hold 64k tokens in total, and
+the state plus its longest question must fit in 32k. Input is text only. The
+models are `jev-latest` (the current stable release), `jev-preview` (the newest
+build, which currently points to the same model), and pinned versions such as
+`jev-1.13.0`. Pin a version once you have tuned thresholds against its
+confidences, because an alias moves when TypeSafe ships a release.
+
+llmproxy reaches Jev in two ways:
+
+| | `POST /v1/systemone` (native) | Chat bridge (`protocol: "typesafe"`) |
+| --- | --- | --- |
+| **Request** | TypeSafe's own `{model, state, questions}` | An ordinary chat/Responses request with a `response_format` JSON schema |
+| **Response** | TypeSafe's own `{model, answers, usage}` | A `chat.completion` whose content is the JSON object your schema describes |
+| **Control** | Everything: structured `instructions` and `criteria`, rubric descriptions, one state for many questions | Questions and levels are derived from the schema |
+| **Client** | Any HTTP client, or TypeSafe's SDK pointed at llmproxy | Any OpenAI SDK (or structured-output library) unchanged |
+| **Streaming** | Rejected (`400`) | Accepted; the whole answer arrives in one chunk |
+
+#### When to call `/v1/systemone`
+
+Use the native endpoint when you are writing code against Jev on purpose. That
+covers these cases:
+- you want the **probabilities and confidence** as first-class data, for
+  example to threshold, route or escalate on them;
+- you want **rubric text** for each choice option or score level;
+- you want **structured instructions** that point at fields of the state;
+- you are packing **many questions against one state** (TypeSafe's "speculative
+  fan-out");
+- you are porting code written for TypeSafe's API or SDK.
+
+The body is TypeSafe's, and llmproxy forwards it unchanged except for the model
+id. Name the model as `typesafe/jev-latest` (or `typesafe__jev-latest`). The
+`Authorization` header is only needed if your proxy requires a key:
 
 ```bash
-curl -s http://localhost:8080/v1/systemone -H "Content-Type: application/json" -d '{
-  "model": "typesafe/jev-latest",
-  "state": "Help! My payouts have been failing for 3 days.",
-  "questions": {"is_urgent": {"type": "noul", "instructions": "Does this convey urgency?"}}
-}'
-# → {"model": "jev-1.13.0", "answers": {"is_urgent": {"type": "noul", "noul": 0.95}},
-#    "usage": {"input_tokens": 296, "output_tokens": 20}}
+curl -s http://localhost:8080/v1/systemone \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LLMPROXY_KEY" \
+  -d '{
+    "model": "typesafe/jev-latest",
+    "state": "Help! My payouts have been failing for 3 days.",
+    "questions": {
+      "is_urgent":  {"type": "noul",   "instructions": "Does this convey urgency?",
+                     "criteria": {"true": "Explicitly time-sensitive", "false": "No urgency expressed"}},
+      "department": {"type": "choice", "instructions": "Which team should handle this?",
+                     "criteria": {"billing": "Payments, invoicing, refunds",
+                                  "technical": "Bugs, outages, integrations",
+                                  "sales": "Pricing, upgrades, new accounts"}},
+      "frustration":{"type": "score",  "instructions": "How frustrated is the customer?",
+                     "criteria": ["Calm", "Frustrated", "Very angry"]}
+    }
+  }'
 ```
 
-- **Setup:** add the `typesafe` provider (`llmproxy --setup`, or copy the block
-  from `config.example.json`). Model names are TypeSafe's own: `jev-latest`,
-  `jev-preview`, or a pinned `jev-1.13.0`.
-- **Accounting:** TypeSafe's `input_tokens`/`output_tokens` are recorded in
-  [`/v1/usage`](#usage-endpoint) at the published rate of $0.042 per 1M input
-  tokens. Output tokens are free.
-- **Kept out of chat routing:** Jev models are never listed by `/v1/models`
-  and never enter a virtual pool. That holds whether TypeSafe itself lists them
-  or a gateway relays them (`vercel/typesafe-ai/jev`,
-  `requesty/typesafe/jev-1.13.0`). A chat, Messages, Responses or Gemini request
-  that names one directly gets a `400` pointing here.
-- **Not supported:** streaming and failover. A decision model is always named
-  directly.
+```json
+{
+  "model": "jev-1.13.0",
+  "answers": {
+    "is_urgent":   {"type": "noul", "noul": 0.95},
+    "department":  {"type": "choice", "choice": "billing",
+                    "probabilities": {"billing": 0.88, "technical": 0.12, "sales": 0.0}, "confidence": 0.81},
+    "frustration": {"type": "score", "score": 1.05, "legend": {"0": "Calm", "1": "Frustrated", "2": "Very angry"},
+                    "probabilities": {"0": 0.0, "1": 0.95, "2": 0.05}, "confidence": 0.92}
+  },
+  "usage": {"input_tokens": 318, "output_tokens": 34}
+}
+```
+
+Errors come back unchanged from TypeSafe: `401` for a bad key, `422` for a
+malformed question (the body names the field), `429` when rate limited, and
+`529` when TypeSafe is overloaded. The route itself returns `400` for streaming,
+a missing `model`, or a model that is not a Jev model. Tokens and cost are
+recorded in [`/v1/usage`](#usage-endpoint) under `typesafe/<model>`.
+
+#### When to use the chat bridge
+
+Use the bridge when an existing OpenAI-style client already asks for
+**structured output** and every field is a decision, such as classifiers,
+routers, moderation flags, triage, or rubric grading. The client then gets Jev's
+speed and price without code written against TypeSafe. It needs
+`"protocol": "typesafe"` on the provider, which the setup wizard sets for you.
+Send `/v1/chat/completions` (or `/v1/responses` with `text.format`) with a JSON
+schema, and name the model directly:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="unused")
+
+reply = client.chat.completions.create(
+    model="typesafe/jev-latest",
+    messages=[{"role": "system", "content": "You triage support tickets."},
+              {"role": "user", "content": "Help! My payouts have been failing for 3 days."}],
+    response_format={"type": "json_schema", "json_schema": {"name": "triage", "schema": {
+        "type": "object",
+        "properties": {
+            "urgent":      {"type": "boolean", "description": "Does this convey urgency?"},
+            "p_churn":     {"type": "number", "minimum": 0, "maximum": 1,
+                            "description": "Probability the customer cancels"},
+            "department":  {"type": "string", "enum": ["billing", "technical", "sales"],
+                            "description": "Which team should handle this?"},
+            "frustration": {"type": "integer", "description": "How frustrated is the customer?",
+                            "oneOf": [{"const": 0, "description": "Calm"},
+                                      {"const": 1, "description": "Frustrated"},
+                                      {"const": 2, "description": "Very angry"}]},
+        },
+        "required": ["urgent", "p_churn", "department", "frustration"]}}},
+)
+print(reply.choices[0].message.content)
+# {"urgent": true, "p_churn": 0.31, "department": "billing", "frustration": 1}
+```
+
+The bridge turns each schema field into one question as follows. A field's
+`description` (or `title`) becomes the question's `instructions`.
+
+| Schema field | Becomes | Value in the reply |
+| --- | --- | --- |
+| `boolean` | `noul` | `true` when the probability is at least 0.5 |
+| `number` with `minimum: 0, maximum: 1` | `noul` | the probability itself |
+| `enum` of 2 to 255 values | `choice` | the chosen value (numbers stay numbers) |
+| `oneOf`/`anyOf` of `{const, description}` (non-integer) | `choice`, with the descriptions as the rubric | the chosen `const` |
+| `integer` with `oneOf`/`anyOf` of `{const, description}` | `score`, levels ordered by `const`, descriptions as level text | the nearest level's `const` |
+| `integer` with `minimum`..`maximum` spanning 2 to 10 values | `score` | the nearest level |
+| anything else (free `string`, nested objects, arrays) | rejected | `400` naming the field |
+
+The conversation becomes the state, as a list of `{role, content}` including the
+system prompt. The reply is a normal `chat.completion` with `finish_reason:
+"stop"` and OpenAI-style `usage`. The calibrated answers behind each value
+(`probabilities`, `confidence`, `legend`) are carried in a top-level `typesafe`
+field, keyed by schema field. Strict OpenAI clients ignore that field, and code
+that wants it can read it from the raw response.
+
+The bridge returns `400` with the reason, and never reaches TypeSafe, in these
+cases: no `json_schema` `response_format` (plain chat, or `json_object`); a field
+Jev cannot decide; `tools` in the request; a non-text part such as an image; or an
+empty conversation. `/v1/messages` and the Gemini surface carry no JSON schema,
+so on those surfaces a Jev model always gets that `400`. Use `/v1/systemone`,
+chat, or Responses instead. Sampling parameters (`temperature`, `max_tokens`, …)
+are ignored because Jev does not sample.
+
+#### What is kept away from Jev
+
+Jev is never listed by `/v1/models` and never enters a virtual pool (`free`,
+`loadbalanced`, reasoning, capability, flagship, fusion). This holds whether
+TypeSafe itself lists it or a gateway relays it (`vercel/typesafe-ai/jev`,
+`requesty/typesafe/jev-1.13.0`). It is only ever reached by naming it directly.
+A chat-surface request naming a gateway-relayed Jev, or TypeSafe without the
+`typesafe` protocol, gets a `400` pointing to `/v1/systemone`. Whether those
+gateways can answer Jev over their own chat endpoints is unverified, so llmproxy
+does not rely on it.
+
+#### Configuration
+
+`llmproxy --setup` offers **TypeSafe AI** and writes this block. The same block is
+in `config.example.json`:
+
+```json
+"typesafe": {
+  "base_url": "https://api.typesafe.ai/v1",
+  "api_key": "YOUR_TYPESAFE_API_KEY",
+  "model_filter": null,
+  "models_id_field": "name",
+  "protocol": "typesafe"
+}
+```
+
+`models_id_field: "name"` matches TypeSafe's `/models`, which returns
+`{"models": [{"name": ...}]}`. Leave `model_filter` null so that a newly released
+pinned version (TypeSafe accepts versioned ids that `/models` does not list)
+works without a config change. Without `protocol`, only `/v1/systemone` works.
+You can also set the protocol from the admin UI's provider editor.
 
 ### Ollama-protocol endpoints
 
@@ -930,6 +1082,7 @@ A provider's optional `"protocol"` field selects how llmproxy talks to it:
 | `openai` (default) | `{base_url}/chat/completions` | `Authorization: Bearer` |
 | `anthropic` | `{base_url}/messages` (native Messages API) | `x-api-key` + `anthropic-version` |
 | `gemini` | `{base_url}/models/{model}:generateContent` (+ `:streamGenerateContent`) | `x-goog-api-key` |
+| `typesafe` | `{base_url}/systemone`, from a chat request's `response_format` JSON schema (see [TypeSafe Jev](#typesafe-jev-decision-model-post-v1systemone)) | `Authorization: Bearer` |
 
 This means the big providers can be added with just an API key — Anthropic (Claude) and
 Google Gemini over their **native** protocols, and OpenAI plus dozens of
