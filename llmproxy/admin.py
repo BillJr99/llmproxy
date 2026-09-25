@@ -124,7 +124,7 @@ _PROVIDER_FIELDS = (
 )
 
 # Upstream dialects llmproxy can translate to (see llmproxy/dialects/).
-_PROVIDER_PROTOCOLS = ("openai", "anthropic", "gemini")
+_PROVIDER_PROTOCOLS = ("openai", "anthropic", "gemini", "typesafe")
 
 _SERVER_INT_FIELDS = (
     "port",

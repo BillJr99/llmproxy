@@ -6428,9 +6428,10 @@
     "typesafe": {
       "display": "TypeSafe AI (Jev decision model, native System One API)",
       "base_url": "https://api.typesafe.ai/v1",
+      "protocol": "typesafe",
       "key_required": true,
       "key_hint": "Create an API key in your TypeSafe account (docs.typesafe.ai/introduction/quickstart); paid, $0.042 per 1M input tokens, output tokens free",
-      "_note": "Jev is a decision model, not a chat model: it answers typed questions (noul / choice / score) about a state and returns probabilities, never text. Call it through llmproxy's POST /v1/systemone with the native TypeSafe body and model 'typesafe/jev-latest'. It is never offered by /v1/models or picked by any virtual model, and a chat request naming it returns a 400 pointing here. /models lists aliases under 'models[].name'.",
+      "_note": "Jev is a decision model, not a chat model: it answers typed questions (noul / choice / score) about a state and returns probabilities, never text. Two ways in: POST /v1/systemone with the native TypeSafe body {model, state, questions} for full control, or a chat/Responses request whose response_format JSON schema is made of decisions (booleans, 0..1 probabilities, enums, bounded integers), which the 'typesafe' protocol turns into questions and answers as that JSON object. Either way it is never offered by /v1/models or picked by any virtual model; name it directly as 'typesafe/jev-latest'. /models lists aliases under 'models[].name'.",
       "models_id_field": "name",
       "believed_free": [],
       "model_reasoning": {},

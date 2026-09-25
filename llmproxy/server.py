@@ -112,6 +112,7 @@ from .config import (
     save_routing_metadata,
 )
 from .dialects import get_inbound, get_outbound
+from .dialects import typesafe as typesafe_dialect
 from .dialects.responses import UnknownPreviousResponse
 from .providers import (
     OVERLAY_REASONING_LEVELS,
@@ -10547,17 +10548,34 @@ def _proxy_endpoint(
     server_cfg = config.get("server", {})
     is_streaming: bool = payload.get("stream", False)
 
-    # A decision model named directly would otherwise reach an upstream chat
-    # endpoint that does not exist for it (TypeSafe) or cannot answer in text
-    # (gateways relaying Jev); say where it is served instead.
+    # A decision model named directly cannot hold a conversation. On a provider
+    # speaking the typesafe protocol it can still answer a chat request whose
+    # response_format schema is made of decisions (dialects/typesafe.py); check
+    # that here so a request it cannot express fails with the reason rather
+    # than as a 502. Anywhere else (a gateway relaying Jev, or TypeSafe without
+    # the protocol) there is no chat endpoint to reach, so say where to go.
     if not _is_virtual_model(model_full) and _is_decision_model(
             model_full.rsplit("__", 1)[-1]):
-        return _error(
-            f"'{model_full}' is a decision model: it answers typed questions "
-            "and does not generate text. Send the native TypeSafe body "
-            "({model, state, questions}) to POST /v1/systemone instead.",
-            status=400, code="invalid_request_error",
-        )
+        _dpn, decision_cfg, _dum, _derr = _resolve_provider(model_full)
+        bridged = bool(decision_cfg) and (
+            str(decision_cfg.get("protocol") or "").lower() == "typesafe")
+        if not bridged:
+            return _error(
+                f"'{model_full}' is a decision model: it answers typed questions "
+                "and does not generate text. Send the native TypeSafe body "
+                "({model, state, questions}) to POST /v1/systemone, or set "
+                "\"protocol\": \"typesafe\" on the typesafe provider to answer "
+                "structured chat requests.",
+                status=400, code="invalid_request_error",
+            )
+        try:
+            typesafe_dialect.to_systemone_request(payload)
+        except ValueError as e:
+            return _error(
+                f"'{model_full}' cannot answer this request: {e}. For full control "
+                "over the questions, POST the native TypeSafe body to /v1/systemone.",
+                status=400, code="invalid_request_error",
+            )
 
     # Ask the upstream to emit a final usage chunk so streamed responses can be
     # accounted (token/cost). Standard OpenAI option; opt out per-server via
@@ -11068,7 +11086,11 @@ def systemone() -> Response:
 
     timeout = config.get("server", {}).get("request_timeout", 120)
     upstream_payload = {**payload, "model": upstream_model}
-    resp = _proxy_request("systemone", provider_name, provider_cfg, upstream_payload, timeout)
+    # Native body, so bypass the provider's protocol adapter: with
+    # "protocol": "typesafe" set for the chat bridge, that adapter would try to
+    # rebuild this body from chat messages.
+    resp = _proxy_request("systemone", provider_name, provider_cfg, upstream_payload,
+                          timeout, outbound=get_outbound("openai"))
     if 200 <= resp.status_code < 300:
         _record_usage(provider_name, upstream_model,
                       usage=_systemone_usage(resp.get_data()), config=config)

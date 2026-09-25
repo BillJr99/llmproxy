@@ -138,11 +138,12 @@
       ]
     },
     "typesafe": {
-      "_note": "Jev is a decision model, not a chat model: it answers typed questions (noul / choice / score) about a state and returns probabilities, never text. Call it through llmproxy's POST /v1/systemone with the native TypeSafe body and model 'typesafe/jev-latest'. It is never offered by /v1/models or picked by any virtual model, and a chat request naming it returns a 400 pointing here. /models lists aliases under 'models[].name'.",
+      "_note": "Jev is a decision model, not a chat model: it answers typed questions (noul / choice / score) about a state and returns probabilities, never text. Two ways in: POST /v1/systemone with the native TypeSafe body {model, state, questions} for full control, or a chat/Responses request whose response_format JSON schema is made of decisions (booleans, 0..1 probabilities, enums, bounded integers), which the 'typesafe' protocol turns into questions and answers as that JSON object. Either way it is never offered by /v1/models or picked by any virtual model; name it directly as 'typesafe/jev-latest'. /models lists aliases under 'models[].name'.",
       "base_url": "https://api.typesafe.ai/v1",
       "api_key": "...",
       "model_filter": null,
-      "models_id_field": "name"
+      "models_id_field": "name",
+      "protocol": "typesafe"
     },
     "kilo": {
       "_note": "OpenAI-compatible multi-vendor gateway. The base path is /api/gateway, not /v1, so discovery hits /api/gateway/models; that endpoint answers 200 without a key and returns an OpenRouter-shaped {\"data\": [...]} catalog (~380 models as of September 2026, ids like anthropic/claude-sonnet-5 and kilo-auto/* router pseudo-models), so no models_url override is needed. Inference is credit-based; some catalog entries carry an isFree flag, but no free tier is asserted here because none was observed in use.",
