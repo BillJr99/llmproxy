@@ -4902,6 +4902,65 @@ which is expected and harmless; the sweep computes its update in memory, routing
 uses it for that run, and a [providers PR](#pr-providers-list) can still be
 opened from it.
 
+#### Starting before host mounts are ready
+
+On some hosts Docker starts the container at boot before the filesystem that
+holds `config.json` is mounted (a late fstab entry, an external drive, NFS or
+CIFS). Starting anyway would bring the proxy up on built-in defaults with no
+providers. So when a config path is set explicitly (`LLMPROXY_CONFIG`, which
+every Docker example sets, or `--config`) and the file is missing or not yet
+parseable, the server waits for it before doing anything else. It checks again
+after 1s, 2s, 4s and so on, capped at 30s between checks, for up to
+`LLMPROXY_STARTUP_WAIT_SECONDS` in total (default `600`, ten minutes):
+
+```
+WARNING  llmproxy.startup  Config /config/config.json is not available yet (file does not exist); retrying in 4s (593s left before giving up).
+```
+
+If the file never appears, the process **exits with status 1** rather than
+starting on defaults, so nothing is written into the empty mountpoint. Set
+`LLMPROXY_STARTUP_WAIT_SECONDS=0` to turn the wait off and keep the old
+start-on-defaults behavior. A bare local run with no config path set never
+waits.
+
+The exit matters because of how Docker bind mounts work. A bind mount is set up
+when the container starts, and by default (`rprivate` propagation) a host mount
+made **after** that never appears inside the container, so waiting inside the
+process cannot see it. There are three ways to deal with this, from most to
+least robust:
+
+1. **Make Docker wait for the mount (recommended).** On the host, tell systemd
+   not to start Docker until the mountpoint is up:
+
+   ```bash
+   sudo systemctl edit docker.service
+   # add, using your mountpoint:
+   [Unit]
+   RequiresMountsFor=/mnt/data
+   ```
+
+   Then `sudo systemctl daemon-reload`. Containers with a restart policy then
+   start only after the volume is mounted.
+
+2. **Keep a restart policy** (`--restart unless-stopped`, already set in
+   `docker-compose.yml`). When the wait times out and the process exits, Docker
+   starts the container again, and the restart sets up fresh bind mounts that
+   pick up the now-mounted filesystem.
+
+3. **Let the running container see the late mount** with slave propagation, so
+   the in-process wait picks it up without a restart. This needs `--mount`
+   rather than `-v`:
+
+   ```bash
+   docker run -d ... \
+     --mount type=bind,src=/mnt/data/llmproxy,dst=/config,bind-propagation=rslave \
+     ...
+   ```
+
+   Here the source must be the parent mountpoint or a directory under it that
+   already exists on the host before the drive is mounted, which is less
+   convenient than option 1.
+
 ---
 
 ## docker-compose
@@ -5162,6 +5221,8 @@ usage: run.py [--setup] [--config PATH] [--host HOST] [--port PORT]
 | Variable          | Purpose                                |
 |-------------------|----------------------------------------|
 | `LLMPROXY_CONFIG` | Override the default config file path. |
+| `LLMPROXY_STATE_DIR` | Directory for machine-written state files (image default `/state`). See [State directory](#state-directory). |
+| `LLMPROXY_STARTUP_WAIT_SECONDS` | How long the server waits for an explicitly configured `config.json` to become readable before exiting with status 1 (default `600`; `0` disables). See [Starting before host mounts are ready](#starting-before-host-mounts-are-ready). |
 
 ---
 
