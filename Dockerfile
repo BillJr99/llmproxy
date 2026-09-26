@@ -33,6 +33,11 @@
 # by root and nothing in the container can write it:
 #   sudo chown -R $(id -u):$(id -g) ~/.config/llmproxy
 #
+# If the host mounts the config volume late at boot, the server waits (with
+# backoff) up to LLMPROXY_STARTUP_WAIT_SECONDS (default 600) for config.json to
+# appear, then exits 1 so --restart unless-stopped retries with fresh mounts.
+# See README "Starting before host mounts are ready".
+#
 # If upstream provider domains fail to resolve (a common symptom after a Docker
 # update that resets the daemon's DNS/iptables), pin public resolvers with
 # --dns (the compose file already sets these for you):

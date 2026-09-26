@@ -25,10 +25,13 @@ Options
 """
 
 import argparse
+import json
 import logging
 import os
 import pathlib
+import sys
 import tempfile
+import time
 import traceback
 
 from . import __version__
@@ -372,6 +375,147 @@ def _quiet_third_party_loggers(server_cfg: dict) -> None:
         logging.getLogger(name).setLevel(level)
 
 
+# How long the server waits for an explicitly configured config.json to appear
+# before giving up, and the backoff between checks. The timeout is an
+# environment variable rather than a config key because config.json is the very
+# thing being waited for.
+_STARTUP_WAIT_ENV = "LLMPROXY_STARTUP_WAIT_SECONDS"
+_STARTUP_WAIT_DEFAULT = 600
+_STARTUP_WAIT_FIRST_DELAY = 1.0
+_STARTUP_WAIT_MAX_DELAY = 30.0
+
+# Module-level so tests can substitute a fake clock instead of really sleeping.
+_sleep = time.sleep
+_monotonic = time.monotonic
+
+
+def _startup_wait_timeout() -> int:
+    """Read LLMPROXY_STARTUP_WAIT_SECONDS; a missing or malformed value means the default.
+
+    0 (or a negative number) disables the wait entirely.
+    """
+    raw = os.environ.get(_STARTUP_WAIT_ENV)
+    if raw is None or not raw.strip():
+        return _STARTUP_WAIT_DEFAULT
+    try:
+        return int(float(raw))
+    except ValueError as e:
+        print(f"[__main__:_startup_wait_timeout] {e}")
+        traceback.print_exc()
+        return _STARTUP_WAIT_DEFAULT
+
+
+def _config_ready(path: pathlib.Path) -> str | None:
+    """Return None if *path* is a readable, parseable config file, else why not.
+
+    Parsing, not just existence, is the test: a network filesystem that is
+    still coming up can expose a file whose contents are not yet readable.
+    """
+    try:
+        if not path.is_file():
+            return "file does not exist"
+        with open(path, encoding="utf-8") as fh:
+            json.load(fh)
+        return None
+    except (OSError, ValueError) as e:
+        return f"{type(e).__name__}: {e}"
+
+
+def _wait_for_config(timeout: float, log: logging.Logger) -> bool:
+    """Wait, with exponential backoff, for the configured config.json to be readable.
+
+    This is for hosts that start the container before the volume holding
+    config.json is mounted (a late fstab/NFS/CIFS mount on boot). Without it the
+    proxy would come up on built-in defaults with no providers, and the
+    auto-heal step could write a default config.json into the empty mountpoint.
+
+    Returns True once the file is ready, False if *timeout* seconds pass first.
+    A timeout <= 0 skips waiting and reports readiness as-is.
+    """
+    path = get_config_path()
+    reason = _config_ready(path)
+    if reason is None:
+        return True
+    if timeout <= 0:
+        return False
+
+    deadline = _monotonic() + timeout
+    delay = _STARTUP_WAIT_FIRST_DELAY
+    while True:
+        remaining = deadline - _monotonic()
+        if remaining <= 0:
+            return False
+        step = min(delay, _STARTUP_WAIT_MAX_DELAY, remaining)
+        log.warning(
+            "Config %s is not available yet (%s); retrying in %.0fs "
+            "(%.0fs left before giving up).",
+            path, reason, step, remaining,
+        )
+        _sleep(step)
+        reason = _config_ready(path)
+        if reason is None:
+            log.info("Config %s is now available.", path)
+            return True
+        delay = min(delay * 2, _STARTUP_WAIT_MAX_DELAY)
+
+
+def _config_path_is_explicit(args: argparse.Namespace) -> bool:
+    """True when the operator named a config file (--config or LLMPROXY_CONFIG).
+
+    Only then is a missing file an error worth waiting on. A bare local run with
+    no config keeps its historical behavior of starting on defaults.
+    """
+    return bool(args.config or os.environ.get("LLMPROXY_CONFIG"))
+
+
+def _await_config_or_exit(args: argparse.Namespace) -> None:
+    """Block server startup until the explicit config is readable, or exit(1).
+
+    Exiting non-zero on timeout, rather than continuing on defaults, is
+    deliberate: in Docker a bind mount is set up when the container starts, so a
+    host mount that arrives later is often invisible to this process. Exiting
+    lets the restart policy start the container again with fresh mounts.
+    """
+    if not _config_path_is_explicit(args):
+        return
+    # Logging is not configured yet (the log level lives in the config being
+    # waited for), so attach a temporary handler rather than calling
+    # basicConfig, which would pre-empt main()'s own basicConfig later.
+    log = logging.getLogger("llmproxy.startup")
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    ))
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+    try:
+        timeout = _startup_wait_timeout()
+        if _wait_for_config(timeout, log):
+            return
+        if timeout <= 0:
+            # Waiting is disabled: keep the historical start-on-defaults behavior.
+            log.warning(
+                "Config %s is not available and %s=0; starting on defaults.",
+                get_config_path(), _STARTUP_WAIT_ENV,
+            )
+            return
+        log.error(
+            "Config %s was still not available after %ds; exiting so the "
+            "container restart policy can retry with fresh mounts. If the file "
+            "lives on a volume the host mounts at boot, make Docker wait for it "
+            "(systemctl edit docker.service -> [Unit] "
+            "RequiresMountsFor=<mountpoint>), or raise %s.",
+            get_config_path(), timeout, _STARTUP_WAIT_ENV,
+        )
+        sys.exit(1)
+    finally:
+        log.removeHandler(handler)
+        log.setLevel(logging.NOTSET)
+        log.propagate = True
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
@@ -407,6 +551,10 @@ def main() -> None:
         return
 
     # ----------------------------------------------------------- run server
+    # Wait for a late-mounted config volume before anything reads the config,
+    # so the server never boots (or auto-heals) on defaults by accident.
+    _await_config_or_exit(args)
+
     from .server import app
 
     # Apply any CLI overrides to the config's server section.

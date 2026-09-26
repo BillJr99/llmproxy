@@ -45,6 +45,9 @@ services:
     build: .
     image: llmproxy:latest
     container_name: llmproxy
+    # Also covers boot races: if ~/.config/llmproxy is on a volume the host has
+    # not mounted yet, the server waits up to LLMPROXY_STARTUP_WAIT_SECONDS
+    # (default 600) and then exits 1, and this policy restarts it with fresh mounts.
     restart: unless-stopped
     user: "${UID:-1000}:${GID:-0}"
     ports:
