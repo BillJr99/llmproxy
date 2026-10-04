@@ -109,6 +109,12 @@
       "api_key": "thk_live_...",
       "model_filter": null
     },
+    "tokenrouter": {
+      "_note": "OpenAI-compatible new-api gateway (it also serves Anthropic- and Gemini-format endpoints, which llmproxy does not use). GET /v1/models is key-gated: without a key it answers 401 JSON 'Invalid token', where an unknown /v1 path answers a 404 JSON 'Invalid URL', so default discovery with Bearer auth works and no models_url override is needed (verified October 2026). Pricing comes from the public, keyless GET https://api.tokenrouter.com/api/pricing (scripts/sources/tokenrouter.py): input $/1M = model_ratio * 2 * group_ratio.default, output = input * completion_ratio. Pricing is keyed tokenrouter/<model>, so name the config entry 'tokenrouter'.",
+      "base_url": "https://api.tokenrouter.com/v1",
+      "api_key": "sk-...",
+      "model_filter": null
+    },
     "ollama-cloud": {
       "base_url": "https://ollama.com/v1",
       "api_key": "...",

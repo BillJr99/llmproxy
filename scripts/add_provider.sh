@@ -63,6 +63,12 @@ BUILTIN = OrderedDict([
         "key_required": True,
         "key_hint": "Create an API key at tokenharbor.ai/dashboard/api-keys (Universal Key, format thk_live_...; docs: tokenharbor.ai/docs). Free models carry a ':free' id suffix and never bill the wallet.",
     }),
+    ("tokenrouter", {
+        "display": "TokenRouter (multi-vendor gateway)",
+        "base_url": "https://api.tokenrouter.com/v1",
+        "key_required": True,
+        "key_hint": "Create an API key in the TokenRouter console at tokenrouter.com (model prices: tokenrouter.com/models). Name the entry 'tokenrouter' so the bundled per-model pricing applies.",
+    }),
     ("atria-asi", {
         "display": "Atria ASI",
         "base_url": "https://api.atria-asi.ai/v1",
