@@ -127,6 +127,7 @@ _PLACEHOLDER_KEYS: dict[str, str] = {
     "xkiro": "sk-xt-...",
     "teamorouter": "sk-teamo-...",
     "tokenharbor": "thk_live_...",
+    "tokenrouter": "sk-...",
     "atria-asi": "atr_...",
     "unbiased-ai": "sk_...",
     "modelscope": "ms-...",

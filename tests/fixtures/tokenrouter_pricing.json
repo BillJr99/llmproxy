@@ -1,0 +1,181 @@
+{
+  "success": true,
+  "group_ratio": {
+    "default": 1,
+    "vip": 1
+  },
+  "usable_group": {
+    "default": "\u9ed8\u8ba4\u5206\u7ec4",
+    "vip": "vip\u5206\u7ec4"
+  },
+  "data": [
+    {
+      "model_name": "deepseek/deepseek-v4.1-flash",
+      "icon": "DeepSeek.Color",
+      "tags": "Text",
+      "vendor_id": 7,
+      "quota_type": 0,
+      "model_ratio": 0.09,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 4,
+      "cache_ratio": 0.02,
+      "enable_groups": [
+        "default",
+        "vip",
+        "svip"
+      ],
+      "supported_endpoint_types": [
+        "openai",
+        "openai-response"
+      ]
+    },
+    {
+      "model_name": "openai/text-embedding-3-small",
+      "icon": "OpenAI",
+      "tags": "Embedding",
+      "vendor_id": 2,
+      "quota_type": 0,
+      "model_ratio": 0.01,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "default",
+        "vip",
+        "svip"
+      ],
+      "supported_endpoint_types": [
+        "embeddings"
+      ]
+    },
+    {
+      "model_name": "wan3.0-video",
+      "icon": "Qwen.Color",
+      "tags": "Video",
+      "vendor_id": 1,
+      "quota_type": 1,
+      "model_ratio": 0,
+      "model_price": 0.2,
+      "owner_by": "",
+      "completion_ratio": 0,
+      "enable_groups": [
+        "default",
+        "vip",
+        "svip"
+      ],
+      "supported_endpoint_types": [
+        "video-generation"
+      ]
+    },
+    {
+      "model_name": "MiniMax-M3",
+      "icon": "Minimax.Color",
+      "tags": "Text",
+      "vendor_id": 11,
+      "quota_type": 0,
+      "model_ratio": 0.15,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 4,
+      "cache_ratio": 0.2,
+      "enable_groups": [
+        "default",
+        "vip",
+        "svip"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "model_name": "anthropic/claude-sonnet-4",
+      "icon": "Claude.Color",
+      "tags": "Text",
+      "vendor_id": 4,
+      "quota_type": 0,
+      "model_ratio": 1.5,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 5,
+      "cache_ratio": 0.09999999999999999,
+      "create_cache_ratio": 1.25,
+      "enable_groups": [
+        "default"
+      ],
+      "supported_endpoint_types": [
+        "anthropic-compatible"
+      ]
+    },
+    {
+      "model_name": "openai/gpt-audio",
+      "icon": "OpenAI",
+      "tags": "Text,Audio",
+      "vendor_id": 2,
+      "quota_type": 0,
+      "model_ratio": 1.25,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 4,
+      "audio_ratio": 12.8,
+      "audio_completion_ratio": 2,
+      "enable_groups": [
+        "default",
+        "vip",
+        "svip"
+      ],
+      "supported_endpoint_types": [
+        "audio-chat"
+      ]
+    },
+    {
+      "model_name": "openai/gpt-5.4",
+      "icon": "OpenAI",
+      "tags": "Text",
+      "vendor_id": 2,
+      "quota_type": 0,
+      "model_ratio": 1.25,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 6,
+      "cache_ratio": 0.1,
+      "enable_groups": [
+        "default",
+        "vip",
+        "svip"
+      ],
+      "supported_endpoint_types": [
+        "openai-response"
+      ]
+    },
+    {
+      "model_name": "stealth/ox-alpha",
+      "quota_type": 0,
+      "model_ratio": 0,
+      "model_price": 0,
+      "owner_by": "",
+      "completion_ratio": 1,
+      "enable_groups": [
+        "default",
+        "vip",
+        "svip"
+      ],
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "model_name": "stealth/zero-anthropic-only",
+      "quota_type": 0,
+      "model_ratio": 0,
+      "model_price": 0,
+      "completion_ratio": 1,
+      "enable_groups": [
+        "default"
+      ],
+      "supported_endpoint_types": [
+        "anthropic"
+      ]
+    }
+  ]
+}

@@ -4006,6 +4006,7 @@ The wizard currently offers ready-made templates for these providers:
 | xKiro (multi-vendor gateway)               | `xkiro`                 | `https://api.xkiro.com/v1`                                                     |
 | TeamoRouter (LLM routing gateway)          | `teamorouter`           | `https://api.teamorouter.com/v1`                                               |
 | Token Harbor (multi-vendor gateway)        | `tokenharbor`           | `https://tokenharbor.ai/v1`                                                    |
+| TokenRouter (multi-vendor gateway)         | `tokenrouter`           | `https://api.tokenrouter.com/v1`                                               |
 | Ollama Cloud                               | `ollama-cloud`          | `https://ollama.com/v1`                                                        |
 | Moonshot AI (Kimi)                         | `moonshot`              | `https://api.moonshot.ai/v1`                                                   |
 | MiniMax                                    | `minimax`               | `https://api.minimax.io/v1`                                                    |
@@ -4212,6 +4213,7 @@ land those changes durably in the repository.
 | `fireworks`  | high       | When `FIREWORKS_API_KEY` is set, reads Fireworks' `/inference/v1/models` and flags models marked `is_free`/`serverless_billing: free` or zero-priced as free. |
 | `requesty`   | high       | When `REQUESTY_API_KEY` is set, reads Requesty's `/v1/models` pricing — zero-priced models are free; paid models contribute per-token prices to the `pricing` block. |
 | `xkiro`      | high       | Reads xKiro's public `/v1/models` catalog. No API key is required, so this one also runs in CI: models marked `access_tier: "free"` with zero input/output price are flagged free, paid models contribute per-token prices to the `pricing` block, and any `believed_free` id the catalog has dropped is reported as no longer free. |
+| `tokenrouter`| high       | Reads TokenRouter's public pricing feed (`https://api.tokenrouter.com/api/pricing`, the data behind tokenrouter.com/models). No API key is required, so it also runs in CI. new-api ratios are converted to dollars (input $/1M = `model_ratio` × 2 × the default group ratio; output = input × `completion_ratio`) and written to the `pricing` block under `tokenrouter/<model>`; a zero-priced model on the OpenAI chat endpoint is flagged free, and a `believed_free` id that stops being free is reported. Name your config entry `tokenrouter` so these prices apply. |
 | `community`  | low        | Pulls the [tashfeenahmed/freellmapi](https://github.com/tashfeenahmed/freellmapi) community list as a sanity signal. |
 | `probe`      | high · **opt-in** | Sends a tiny real chat request to each `believed_free` model and flags any that report a cost. Off by default; enable with `probe_cost: true` in `config.json` or the `--probe` flag. Spends a little quota. |
 
