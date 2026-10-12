@@ -762,6 +762,28 @@ def _flag_paid_free(key: str, cost: float, source: str) -> bool:
     return True
 
 
+_estimated_free_cost_noted: set[str] = set()
+_estimated_free_cost_lock = threading.Lock()
+
+
+def _note_estimated_free_cost(key: str, cost: float, source: str) -> None:
+    """Log, once per model per process, a believed-free model priced by estimate.
+
+    Not a cost observation: nothing is flagged or persisted, and the model stays
+    free. The line is there so an operator who suspects a real charge can check
+    the provider's billing page rather than have a catalog price decide it.
+    """
+    with _estimated_free_cost_lock:
+        if key in _estimated_free_cost_noted:
+            return
+        _estimated_free_cost_noted.add(key)
+    logger.info(
+        "[usage] believed_free model %s has an estimated cost (%.8f, source=%s); "
+        "not treated as a charge because the provider did not report one.",
+        key, cost, source,
+    )
+
+
 def _persist_cost_observed(qualified_id: str) -> None:
     """Record *qualified_id* as cost-observed in the routing-metadata sidecar.
 
@@ -893,9 +915,18 @@ def _record_usage(
     if usage and cost > 0:
         cfg = config if config is not None else load_config()
         if _is_model_free(provider_name, upstream_model, cfg):
+            # Only a cost the UPSTREAM reported is evidence of a charge. A
+            # "computed" cost is token counts multiplied by the litellm catalog
+            # rate: a list price for the model, not a bill to this account, and
+            # exactly what a free-tier key produces whenever the catalog prices
+            # the model. Treating it as a charge is how free groq models kept
+            # being reclassified as paid and re-proposed in every providers PR.
+            if source != "provider":
+                _note_estimated_free_cost(
+                    _usage_key(provider_name, upstream_model), cost, source or "unknown")
             # Cost-observation is a property of the *model*, not the account, so
             # it is flagged/persisted at model granularity regardless of account.
-            if _flag_paid_free(_usage_key(provider_name, upstream_model), cost, source or "unknown"):
+            elif _flag_paid_free(_usage_key(provider_name, upstream_model), cost, source):
                 # First observation — persist the original-cased qualified id so
                 # the updater never re-adds it to believed_free.
                 _persist_cost_observed(f"{provider_name}/{upstream_model}")
@@ -1089,6 +1120,8 @@ def _health_score(provider_name: str, upstream_model: str, account_id: str | Non
 def _reset_usage() -> None:
     """Clear all usage counters, paid-free flags, and saturation state."""
     get_backend().reset_usage()
+    with _estimated_free_cost_lock:
+        _estimated_free_cost_noted.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -11180,7 +11213,10 @@ def _build_usage_report() -> dict:
             "cost_currency": "USD",
             "cost_sources": snap["cost_sources"],
             "believed_free": believed_free,
-            "unexpected_cost": believed_free and snap["cost"] > 0,
+            # Only a provider-reported cost is unexpected on a free model; an
+            # estimate from the catalog rate is a list price, not a charge.
+            "unexpected_cost": (believed_free and snap["cost"] > 0
+                                and bool((snap["cost_sources"] or {}).get("provider"))),
             # Health over the recent attempt window (see usage.HEALTH_WINDOW).
             # "health_samples" is what makes the rate readable: a success_rate of
             # 1.0 over zero samples means untried, not proven good.

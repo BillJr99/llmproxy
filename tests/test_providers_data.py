@@ -186,9 +186,10 @@ def test_template_required_fields(pkey):
 # the check, not to forbid the fact.
 #
 # THE DISCRIMINATOR. usage.compute_cost returns (cost, source), and
-# server._flag_paid_free records and logs that source but does not gate on it:
-# it persists any cost > 0. So the two cases are already distinguishable in the
-# evidence, just not in the code.
+# server._record_usage now gates on it: only source="provider" reaches
+# _flag_paid_free and is persisted. A "computed" cost on a free model is logged
+# as "has an estimated cost" and nothing else. An entry recorded before that
+# gate existed may still be computed, so a re-proposal is still worth checking.
 #
 #   source="provider"  upstream reported usage.cost directly. A real charge
 #                      against the account. CORROBORATED -- retire the entry

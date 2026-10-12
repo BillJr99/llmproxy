@@ -191,6 +191,60 @@ def test_cost_observed_persisted_to_the_sidecar(usage_server, tmp_path):
     assert sidecar["by_provider"]["groq"]["cost_observed_free_tier"] == ["free-model"]
 
 
+def _price_free_model(server, monkeypatch, rate=0.001):
+    """Make the litellm-style pricing map list a price for the free model, so a
+    response WITHOUT usage.cost is priced as source="computed"."""
+    monkeypatch.setattr(server, "load_pricing_map",
+                        lambda *a, **k: {"groq/free-model": (rate, rate)})
+
+
+def test_an_estimated_cost_does_not_flag_a_free_model(usage_server, monkeypatch, tmp_path):
+    """The groq regression: a free-tier key, a catalog price, no usage.cost.
+    That is a list price, not a bill, so the model must stay free and nothing
+    may be persisted for the providers PR to promote."""
+    _price_free_model(usage_server, monkeypatch)
+    usage_server._record_usage(
+        "groq", "free-model",
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        config=usage_server.load_config(),
+    )
+    body = usage_server.app.test_client().get("/v1/usage").get_json()
+    assert body["flagged_paid_free_models"] == []
+    row = body["models"][0]
+    assert row["cost_sources"] == {"computed": 1}
+    assert row["believed_free"] is True
+    assert row["unexpected_cost"] is False
+    assert usage_server._is_model_free("groq", "free-model", usage_server.load_config())
+    sidecar = tmp_path / "routing_metadata.json"
+    if sidecar.exists():
+        assert "cost_observed_free_tier" not in json.dumps(json.loads(sidecar.read_text()))
+
+
+def test_an_estimated_cost_is_logged_once(usage_server, monkeypatch, caplog):
+    _price_free_model(usage_server, monkeypatch)
+    cfg = usage_server.load_config()
+    usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    with caplog.at_level("INFO"):
+        usage_server._record_usage("groq", "free-model", usage=usage, config=cfg)
+        usage_server._record_usage("groq", "free-model", usage=usage, config=cfg)
+    lines = [r for r in caplog.records if "estimated cost" in r.getMessage()]
+    assert len(lines) == 1
+    assert "source=computed" in lines[0].getMessage()
+
+
+def test_a_reported_cost_still_flags_when_the_catalog_also_prices_it(usage_server, monkeypatch):
+    """GUARD: the gate is on the source, not on the presence of a catalog price.
+    usage.cost from the upstream is a real charge and wins."""
+    _price_free_model(usage_server, monkeypatch)
+    usage_server._record_usage(
+        "groq", "free-model",
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cost": 0.002},
+        config=usage_server.load_config(),
+    )
+    flagged = usage_server.app.test_client().get("/v1/usage").get_json()["flagged_paid_free_models"]
+    assert [f["cost_source"] for f in flagged] == ["provider"]
+
+
 def test_flag_paid_free_reports_first_observation_only(usage_server):
     assert usage_server._flag_paid_free("groq/m", 0.002, "provider") is True
     assert usage_server._flag_paid_free("groq/m", 0.004, "provider") is False
