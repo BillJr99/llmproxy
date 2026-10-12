@@ -558,6 +558,87 @@ def dump_sidecar(sidecar: dict) -> str:
     return json.dumps(sidecar, indent=2) + "\n"
 
 
+# Facts a human corrected while reviewing an automated refresh. The same file is
+# what tests/test_providers_data.py enforces, so applying it here is what keeps
+# a refresh -- this scraper's, or one a running deployment promotes and PRs --
+# from re-proposing a correction CI would only reject after the fact.
+REVIEW_OVERRIDES_PATH = DATA_PATH.parent / "review_overrides.json"
+
+
+def load_review_overrides(path: Path | None = None) -> dict:
+    """Return the review-overrides tables, or empty tables if unreadable.
+
+    Never raises: an unreadable file must not stop a refresh, and the CI guard
+    still catches whatever slips through.
+    """
+    empty = {"cost_observations_needing_corroboration": {}, "required_capabilities": {}}
+    try:
+        data = json.loads(Path(path or REVIEW_OVERRIDES_PATH).read_text())
+        if not isinstance(data, dict):
+            raise ValueError("review overrides must be a JSON object")
+        return {key: data.get(key) if isinstance(data.get(key), dict) else {}
+                for key in empty}
+    except Exception as e:  # noqa: BLE001 — never break a refresh over this file
+        print(f"[update_free_models:load_review_overrides] {e}")
+        traceback.print_exc()
+        return empty
+
+
+def apply_review_overrides(sidecar: dict, overrides: dict | None = None) -> dict:
+    """Re-apply reviewed corrections to *sidecar* in place.
+
+    * A cost observation still awaiting corroboration is held back from
+      ``cost_observed_free_tier`` (the key is dropped once it empties).
+    * A required capability tag is unioned back into an existing
+      ``model_capabilities`` entry. A missing entry is NOT recreated: the model
+      may really be withdrawn, and that is for a reviewer to decide.
+
+    Returns ``{"held_back": {provider: [ids]}, "restored": {provider: {id:
+    [tags]}}}``, empty when nothing needed correcting.
+    """
+    if overrides is None:
+        overrides = load_review_overrides()
+    report: dict = {"held_back": {}, "restored": {}}
+    providers = sidecar.get("providers")
+    if not isinstance(providers, dict):
+        return report
+
+    for pkey, held in (overrides.get("cost_observations_needing_corroboration") or {}).items():
+        entry = providers.get(pkey)
+        if not isinstance(entry, dict) or not isinstance(held, dict):
+            continue
+        observed = entry.get("cost_observed_free_tier")
+        if not isinstance(observed, list):
+            continue
+        held_ids = {m.lower() for m in held if isinstance(m, str)}
+        dropped = [m for m in observed if isinstance(m, str) and m.lower() in held_ids]
+        if not dropped:
+            continue
+        kept = [m for m in observed if m not in dropped]
+        if kept:
+            entry["cost_observed_free_tier"] = kept
+        else:
+            del entry["cost_observed_free_tier"]
+        report["held_back"][pkey] = sorted(dropped)
+
+    for pkey, required in (overrides.get("required_capabilities") or {}).items():
+        entry = providers.get(pkey)
+        if not isinstance(entry, dict) or not isinstance(required, dict):
+            continue
+        caps = entry.get("model_capabilities")
+        if not isinstance(caps, dict):
+            continue
+        for mid, tags in required.items():
+            current = caps.get(mid)
+            if not isinstance(current, list) or not isinstance(tags, list):
+                continue
+            missing = sorted(set(tags) - set(current))
+            if missing:
+                caps[mid] = sorted(set(current) | set(missing))
+                report["restored"].setdefault(pkey, {})[mid] = missing
+    return report
+
+
 def _collect_source_pricing(updates: dict) -> dict[str, dict]:
     """Flatten per-provider live pricing from ``aggregate`` into one block.
 
@@ -1178,6 +1259,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     changed = apply_updates(sidecar, updates) or pricing_changed
+    overrides = apply_review_overrides(sidecar)
+    if overrides["held_back"] or overrides["restored"]:
+        print(_dim(f"Review overrides applied: {overrides}"))
+        changed = True
     if changed:
         try:
             _atomic_write_text(DATA_PATH, dump_sidecar(sidecar))

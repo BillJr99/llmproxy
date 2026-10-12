@@ -1,0 +1,15 @@
+{
+  "_comment": "Facts a human corrected while reviewing an automated providers.json refresh. Applied by scripts/update_free_models.apply_review_overrides to every refresh and every deployment-opened providers PR, and enforced in CI by tests/test_providers_data.py. See the 'Review overrides' block there for the evidence that retires an entry; to retire one, delete it and say why in the commit message.",
+  "cost_observations_needing_corroboration": {
+    "groq": {
+      "groq/llama-3.3-70b-versatile": "free-tier key; cost was computed, not billed",
+      "groq/openai/gpt-oss-120b": "free-tier key; cost was computed, not billed"
+    }
+  },
+  "required_capabilities": {
+    "xkiro": {
+      "xkiro/qwen/qwen3-vl-plus:free": ["vision"],
+      "xkiro/qwen/qwen3-omni-flash:free": ["vision"]
+    }
+  }
+}
