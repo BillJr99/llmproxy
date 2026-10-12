@@ -124,6 +124,8 @@
         "nous/anthropic/claude-sonnet-4.6": "exploratory",
         "nous/anthropic/claude-sonnet-4.6:batch": "exploratory",
         "nous/anthropic/claude-sonnet-5": "exploratory",
+        "nous/anthropic/claude-sonnet-5.5": "exploratory",
+        "nous/anthropic/claude-sonnet-5.5:batch": "exploratory",
         "nous/anthropic/claude-sonnet-5:batch": "exploratory",
         "nous/arcee-ai/trinity-large-thinking": "standard",
         "nous/baai/bge-base-en-v1.5": "exploratory",
@@ -157,6 +159,7 @@
         "nous/deepseek/deepseek-v4-pro-0813:batch": "exploratory",
         "nous/deepseek/deepseek-v4.1-flash": "exploratory",
         "nous/deepseek/deepseek-v4.1-flash:batch": "exploratory",
+        "nous/deepseek/deepseek-v4.1-flash:us": "exploratory",
         "nous/fireworks/ember-1": "exploratory",
         "nous/google/gemini-2.5-flash": "standard",
         "nous/google/gemini-2.5-flash-lite": "exploratory",
@@ -194,8 +197,10 @@
         "nous/inclusionai/ling-3.0-flash": "exploratory",
         "nous/inclusionai/ling-3.0-flash-fin": "exploratory",
         "nous/inclusionai/ling-3.0-flash-fin:free": "exploratory",
+        "nous/inclusionai/ling-3.0-flash-sante": "exploratory",
         "nous/inclusionai/ling-3.0-flash-sante:free": "exploratory",
         "nous/inclusionai/ling-3.0-flash-vl": "exploratory",
+        "nous/inclusionai/ling-3.1-flash": "exploratory",
         "nous/intfloat/e5-base-v2": "exploratory",
         "nous/intfloat/e5-large-v2": "standard",
         "nous/intfloat/multilingual-e5-large": "standard",
@@ -340,6 +345,10 @@
         "nous/openai/gpt-6-sol-pro": "exploratory",
         "nous/openai/gpt-6-sol-pro:batch": "exploratory",
         "nous/openai/gpt-6-sol:batch": "exploratory",
+        "nous/openai/gpt-6.1-sol": "exploratory",
+        "nous/openai/gpt-6.1-sol-pro": "exploratory",
+        "nous/openai/gpt-6.1-sol-pro:batch": "exploratory",
+        "nous/openai/gpt-6.1-sol:batch": "exploratory",
         "nous/openai/gpt-audio": "exploratory",
         "nous/openai/gpt-audio-mini": "exploratory",
         "nous/openai/gpt-chat-latest": "exploratory",
@@ -432,6 +441,8 @@
         "nous/stepfun/step-3.5-flash": "exploratory",
         "nous/stepfun/step-3.7-flash": "exploratory",
         "nous/stepfun/step-3.7-flash:free": "exploratory",
+        "nous/stepfun/step-5-preview": "exploratory",
+        "nous/stepfun/step-5-preview:free": "exploratory",
         "nous/tencent/hy3": "exploratory",
         "nous/tencent/hy3-preview": "exploratory",
         "nous/tencent/hy3:free": "exploratory",
@@ -442,7 +453,9 @@
         "nous/thinkingmachines/inkling-small": "exploratory",
         "nous/thinkingmachines/inkling:batch": "exploratory",
         "nous/unbiased/pareto": "deep",
+        "nous/unbiased/pareto-26.10-preview": "exploratory",
         "nous/upstage/solar-mini4": "exploratory",
+        "nous/upstage/solar-mini4:free": "exploratory",
         "nous/upstage/solar-pro-3": "exploratory",
         "nous/upstage/solar-pro4": "exploratory",
         "nous/upstage/solar-pro4:free": "exploratory",
@@ -715,6 +728,18 @@
           "tools",
           "vision"
         ],
+        "nous/anthropic/claude-sonnet-5.5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "nous/anthropic/claude-sonnet-5.5:batch": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "nous/anthropic/claude-sonnet-5:batch": [
           "json",
           "reasoning",
@@ -872,6 +897,11 @@
           "reasoning",
           "tools",
           "vision"
+        ],
+        "nous/deepseek/deepseek-v4.1-flash:us": [
+          "json",
+          "reasoning",
+          "tools"
         ],
         "nous/fireworks/ember-1": [
           "json",
@@ -1087,6 +1117,10 @@
           "reasoning",
           "tools"
         ],
+        "nous/inclusionai/ling-3.0-flash-sante": [
+          "reasoning",
+          "tools"
+        ],
         "nous/inclusionai/ling-3.0-flash-sante:free": [
           "reasoning",
           "tools"
@@ -1096,6 +1130,10 @@
           "reasoning",
           "tools",
           "vision"
+        ],
+        "nous/inclusionai/ling-3.1-flash": [
+          "reasoning",
+          "tools"
         ],
         "nous/intfloat/multilingual-e5-large": [
           "reasoning",
@@ -1314,6 +1352,7 @@
           "vision"
         ],
         "nous/mistralai/mistral-small-3.1-24b-instruct": [
+          "json",
           "tools",
           "vision"
         ],
@@ -1860,6 +1899,30 @@
           "tools",
           "vision"
         ],
+        "nous/openai/gpt-6.1-sol": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "nous/openai/gpt-6.1-sol-pro": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "nous/openai/gpt-6.1-sol-pro:batch": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "nous/openai/gpt-6.1-sol:batch": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "nous/openai/gpt-audio": [
           "json",
           "tools"
@@ -2315,6 +2378,16 @@
           "tools",
           "vision"
         ],
+        "nous/stepfun/step-5-preview": [
+          "json",
+          "reasoning",
+          "vision"
+        ],
+        "nous/stepfun/step-5-preview:free": [
+          "json",
+          "reasoning",
+          "vision"
+        ],
         "nous/tencent/hy3": [
           "json",
           "reasoning",
@@ -2348,10 +2421,20 @@
           "vision"
         ],
         "nous/unbiased/pareto": [
+          "json",
+          "tools",
+          "vision"
+        ],
+        "nous/unbiased/pareto-26.10-preview": [
           "tools",
           "vision"
         ],
         "nous/upstage/solar-mini4": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "nous/upstage/solar-mini4:free": [
           "json",
           "reasoning",
           "tools"
@@ -2763,6 +2846,9 @@
         "nvidia/zyphra/zamba2-7b-instruct": "exploratory"
       },
       "model_capabilities": {
+        "nvidia/deepseek-ai/deepseek-coder-6.7b-instruct": [
+          "tools"
+        ],
         "nvidia/deepseek-ai/deepseek-v4-flash-0731": [
           "json",
           "reasoning",
@@ -3370,7 +3456,11 @@
           "tokens_per_minute": null,
           "tokens_per_day": null
         }
-      }
+      },
+      "cost_observed_free_tier": [
+        "groq/llama-3.3-70b-versatile",
+        "groq/openai/gpt-oss-120b"
+      ]
     },
     "cloudflare-workers": {
       "display": "Cloudflare Workers AI",
@@ -3565,7 +3655,7 @@
       },
       "model_capabilities": {
         "cloudflare-workers/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b": [
-          "reasoning"
+          "tools"
         ],
         "cloudflare-workers/@cf/ibm-granite/granite-4.0-h-micro": [
           "json"
@@ -3872,7 +3962,10 @@
         "openrouter/anthropic/claude-sonnet-4.6": "exploratory",
         "openrouter/anthropic/claude-sonnet-4.6:batch": "exploratory",
         "openrouter/anthropic/claude-sonnet-5": "exploratory",
+        "openrouter/anthropic/claude-sonnet-5.5": "exploratory",
+        "openrouter/anthropic/claude-sonnet-5.5:batch": "exploratory",
         "openrouter/anthropic/claude-sonnet-5:batch": "exploratory",
+        "openrouter/apodex/apodex-1.1-mini:free": "exploratory",
         "openrouter/arcee-ai/trinity-large-thinking": "standard",
         "openrouter/baidu/ernie-4.5-vl-424b-a47b": "deep",
         "openrouter/bytedance-seed/seed-1.6": "exploratory",
@@ -3960,9 +4053,11 @@
         "openrouter/inclusionai/ling-3.0-flash": "exploratory",
         "openrouter/inclusionai/ling-3.0-flash-fin": "exploratory",
         "openrouter/inclusionai/ling-3.0-flash-fin:free": "exploratory",
+        "openrouter/inclusionai/ling-3.0-flash-sante": "exploratory",
         "openrouter/inclusionai/ling-3.0-flash-sante:free": "exploratory",
         "openrouter/inclusionai/ling-3.0-flash-vl": "exploratory",
         "openrouter/inclusionai/ling-3.0-flash-vl:free": "exploratory",
+        "openrouter/inclusionai/ling-3.1-flash": "exploratory",
         "openrouter/inference-net/schematron-v2-small": "exploratory",
         "openrouter/inference-net/schematron-v2-turbo": "exploratory",
         "openrouter/kwaipilot/kat-coder-pro-v2": "exploratory",
@@ -4048,6 +4143,7 @@
         "openrouter/nvidia/nemotron-3.5-content-safety:free": "exploratory",
         "openrouter/nvidia/nemotron-3.5-lightning": "exploratory",
         "openrouter/nvidia/nemotron-3.5-lightning:free": "exploratory",
+        "openrouter/nvidia/switchyard": "exploratory",
         "openrouter/openai/gpt-3.5-turbo": "exploratory",
         "openrouter/openai/gpt-3.5-turbo-0613": "exploratory",
         "openrouter/openai/gpt-3.5-turbo-16k": "exploratory",
@@ -4129,6 +4225,10 @@
         "openrouter/openai/gpt-6-sol-pro": "exploratory",
         "openrouter/openai/gpt-6-sol-pro:batch": "exploratory",
         "openrouter/openai/gpt-6-sol:batch": "exploratory",
+        "openrouter/openai/gpt-6.1-sol": "exploratory",
+        "openrouter/openai/gpt-6.1-sol-pro": "exploratory",
+        "openrouter/openai/gpt-6.1-sol-pro:batch": "exploratory",
+        "openrouter/openai/gpt-6.1-sol:batch": "exploratory",
         "openrouter/openai/gpt-audio": "exploratory",
         "openrouter/openai/gpt-audio-mini": "exploratory",
         "openrouter/openai/gpt-chat-latest": "exploratory",
@@ -4236,6 +4336,7 @@
         "openrouter/stealth/space-bunny-alpha": "exploratory",
         "openrouter/stepfun/step-3.5-flash": "exploratory",
         "openrouter/stepfun/step-3.7-flash": "exploratory",
+        "openrouter/stepfun/step-5-preview": "exploratory",
         "openrouter/tencent/hunyuan-a13b-instruct": "exploratory",
         "openrouter/tencent/hy-mt2-1.8b": "exploratory",
         "openrouter/tencent/hy-mt2-30b-a3b": "standard",
@@ -4252,6 +4353,7 @@
         "openrouter/thinkingmachines/inkling:batch": "exploratory",
         "openrouter/thinkingmachines/inkling:free": "exploratory",
         "openrouter/unbiased/pareto": "deep",
+        "openrouter/unbiased/pareto-26.10-preview": "exploratory",
         "openrouter/undi95/remm-slerp-l2-13b": "exploratory",
         "openrouter/upstage/solar-mini4": "exploratory",
         "openrouter/upstage/solar-pro-3": "exploratory",
@@ -4529,11 +4631,28 @@
           "tools",
           "vision"
         ],
+        "openrouter/anthropic/claude-sonnet-5.5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "openrouter/anthropic/claude-sonnet-5.5:batch": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "openrouter/anthropic/claude-sonnet-5:batch": [
           "json",
           "reasoning",
           "tools",
           "vision"
+        ],
+        "openrouter/apodex/apodex-1.1-mini:free": [
+          "json",
+          "reasoning",
+          "tools"
         ],
         "openrouter/arcee-ai/trinity-large-thinking": [
           "json",
@@ -4991,6 +5110,10 @@
           "reasoning",
           "tools"
         ],
+        "openrouter/inclusionai/ling-3.0-flash-sante": [
+          "reasoning",
+          "tools"
+        ],
         "openrouter/inclusionai/ling-3.0-flash-sante:free": [
           "reasoning",
           "tools"
@@ -5006,6 +5129,10 @@
           "reasoning",
           "tools",
           "vision"
+        ],
+        "openrouter/inclusionai/ling-3.1-flash": [
+          "reasoning",
+          "tools"
         ],
         "openrouter/inference-net/schematron-v2-small": [
           "json"
@@ -5257,6 +5384,7 @@
           "vision"
         ],
         "openrouter/mistralai/mistral-small-3.1-24b-instruct": [
+          "json",
           "tools",
           "vision"
         ],
@@ -5324,7 +5452,6 @@
         "openrouter/nex-agi/nex-n2.5-mini": [
           "json",
           "reasoning",
-          "tools",
           "vision"
         ],
         "openrouter/nex-agi/nex-n2.5-mini:free": [
@@ -5858,6 +5985,30 @@
           "tools",
           "vision"
         ],
+        "openrouter/openai/gpt-6.1-sol": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "openrouter/openai/gpt-6.1-sol-pro": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "openrouter/openai/gpt-6.1-sol-pro:batch": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "openrouter/openai/gpt-6.1-sol:batch": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "openrouter/openai/gpt-audio": [
           "json",
           "tools"
@@ -5992,13 +6143,13 @@
         ],
         "openrouter/perplexity/sonar": [
           "json",
+          "reasoning",
           "vision"
         ],
         "openrouter/perplexity/sonar-deep-research": [
           "reasoning"
         ],
         "openrouter/perplexity/sonar-pro": [
-          "json",
           "vision"
         ],
         "openrouter/perplexity/sonar-pro-search": [
@@ -6007,7 +6158,6 @@
           "vision"
         ],
         "openrouter/perplexity/sonar-reasoning-pro": [
-          "json",
           "reasoning",
           "vision"
         ],
@@ -6388,6 +6538,11 @@
           "tools",
           "vision"
         ],
+        "openrouter/stepfun/step-5-preview": [
+          "json",
+          "reasoning",
+          "vision"
+        ],
         "openrouter/tencent/hunyuan-a13b-instruct": [
           "json",
           "reasoning"
@@ -6455,6 +6610,11 @@
           "vision"
         ],
         "openrouter/unbiased/pareto": [
+          "json",
+          "tools",
+          "vision"
+        ],
+        "openrouter/unbiased/pareto-26.10-preview": [
           "tools",
           "vision"
         ],
@@ -6889,6 +7049,7 @@
       },
       "model_capabilities": {
         "unbiased-ai/pareto": [
+          "json",
           "tools",
           "vision"
         ]
@@ -6943,6 +7104,7 @@
         "kilo/anthropic/claude-sonnet-4.5": "exploratory",
         "kilo/anthropic/claude-sonnet-4.6": "exploratory",
         "kilo/anthropic/claude-sonnet-5": "exploratory",
+        "kilo/anthropic/claude-sonnet-5.5": "exploratory",
         "kilo/arcee-ai/trinity-large-thinking": "standard",
         "kilo/baidu/ernie-4.5-vl-424b-a47b": "deep",
         "kilo/bytedance-seed/seed-1.6": "exploratory",
@@ -7012,9 +7174,11 @@
         "kilo/inclusionai/ling-3.0-flash": "exploratory",
         "kilo/inclusionai/ling-3.0-flash-fin": "exploratory",
         "kilo/inclusionai/ling-3.0-flash-fin:free": "exploratory",
+        "kilo/inclusionai/ling-3.0-flash-sante": "exploratory",
         "kilo/inclusionai/ling-3.0-flash-sante:free": "exploratory",
         "kilo/inclusionai/ling-3.0-flash-vl": "exploratory",
         "kilo/inclusionai/ling-3.0-flash-vl:free": "exploratory",
+        "kilo/inclusionai/ling-3.1-flash": "exploratory",
         "kilo/inference-net/schematron-v2-small": "exploratory",
         "kilo/inference-net/schematron-v2-turbo": "exploratory",
         "kilo/kilo-auto/balanced": "exploratory",
@@ -7096,6 +7260,7 @@
         "kilo/nvidia/nemotron-3.5-content-safety:free": "exploratory",
         "kilo/nvidia/nemotron-3.5-lightning": "exploratory",
         "kilo/nvidia/nemotron-3.5-lightning:free": "exploratory",
+        "kilo/nvidia/switchyard": "exploratory",
         "kilo/openai/gpt-3.5-turbo": "exploratory",
         "kilo/openai/gpt-3.5-turbo-0613": "exploratory",
         "kilo/openai/gpt-3.5-turbo-16k": "exploratory",
@@ -7145,6 +7310,8 @@
         "kilo/openai/gpt-6-luna-pro": "exploratory",
         "kilo/openai/gpt-6-sol": "exploratory",
         "kilo/openai/gpt-6-sol-pro": "exploratory",
+        "kilo/openai/gpt-6.1-sol": "exploratory",
+        "kilo/openai/gpt-6.1-sol-pro": "exploratory",
         "kilo/openai/gpt-audio": "exploratory",
         "kilo/openai/gpt-audio-mini": "exploratory",
         "kilo/openai/gpt-chat-latest": "exploratory",
@@ -7251,6 +7418,8 @@
         "kilo/stepfun/step-3.5-flash": "exploratory",
         "kilo/stepfun/step-3.7-flash": "exploratory",
         "kilo/stepfun/step-3.7-flash:free": "exploratory",
+        "kilo/stepfun/step-5-preview": "exploratory",
+        "kilo/stepfun/step-5-preview-free": "exploratory",
         "kilo/tencent/hunyuan-a13b-instruct": "exploratory",
         "kilo/tencent/hy-mt2-1.8b": "exploratory",
         "kilo/tencent/hy-mt2-30b-a3b": "standard",
@@ -7265,6 +7434,7 @@
         "kilo/thinkingmachines/inkling-small": "exploratory",
         "kilo/thinkingmachines/inkling-small:free": "exploratory",
         "kilo/unbiased/pareto": "deep",
+        "kilo/unbiased/pareto-26.10-preview": "exploratory",
         "kilo/undi95/remm-slerp-l2-13b": "exploratory",
         "kilo/upstage/solar-mini4": "exploratory",
         "kilo/upstage/solar-pro-3": "exploratory",
@@ -7460,6 +7630,12 @@
           "vision"
         ],
         "kilo/anthropic/claude-sonnet-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "kilo/anthropic/claude-sonnet-5.5": [
           "json",
           "reasoning",
           "tools",
@@ -7816,6 +7992,10 @@
           "reasoning",
           "tools"
         ],
+        "kilo/inclusionai/ling-3.0-flash-sante": [
+          "reasoning",
+          "tools"
+        ],
         "kilo/inclusionai/ling-3.0-flash-sante:free": [
           "reasoning",
           "tools"
@@ -7831,6 +8011,10 @@
           "reasoning",
           "tools",
           "vision"
+        ],
+        "kilo/inclusionai/ling-3.1-flash": [
+          "reasoning",
+          "tools"
         ],
         "kilo/inference-net/schematron-v2-small": [
           "json"
@@ -8061,6 +8245,7 @@
           "vision"
         ],
         "kilo/mistralai/mistral-small-3.1-24b-instruct": [
+          "json",
           "tools",
           "vision"
         ],
@@ -8122,7 +8307,6 @@
         "kilo/nex-agi/nex-n2.5-mini": [
           "json",
           "reasoning",
-          "tools",
           "vision"
         ],
         "kilo/nex-agi/nex-n2.5-mini:free": [
@@ -8472,6 +8656,18 @@
           "tools",
           "vision"
         ],
+        "kilo/openai/gpt-6.1-sol": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "kilo/openai/gpt-6.1-sol-pro": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "kilo/openai/gpt-audio": [
           "json",
           "tools"
@@ -8579,13 +8775,13 @@
         ],
         "kilo/perplexity/sonar": [
           "json",
+          "reasoning",
           "vision"
         ],
         "kilo/perplexity/sonar-deep-research": [
           "reasoning"
         ],
         "kilo/perplexity/sonar-pro": [
-          "json",
           "vision"
         ],
         "kilo/perplexity/sonar-pro-search": [
@@ -8594,7 +8790,6 @@
           "vision"
         ],
         "kilo/perplexity/sonar-reasoning-pro": [
-          "json",
           "reasoning",
           "vision"
         ],
@@ -8999,6 +9194,16 @@
           "tools",
           "vision"
         ],
+        "kilo/stepfun/step-5-preview": [
+          "json",
+          "reasoning",
+          "vision"
+        ],
+        "kilo/stepfun/step-5-preview-free": [
+          "json",
+          "reasoning",
+          "vision"
+        ],
         "kilo/tencent/hunyuan-a13b-instruct": [
           "json",
           "reasoning"
@@ -9055,6 +9260,11 @@
           "vision"
         ],
         "kilo/unbiased/pareto": [
+          "json",
+          "tools",
+          "vision"
+        ],
+        "kilo/unbiased/pareto-26.10-preview": [
           "tools",
           "vision"
         ],
@@ -9434,7 +9644,6 @@
         "modelscope/nex-agi/nex-n2.5-mini": [
           "json",
           "reasoning",
-          "tools",
           "vision"
         ],
         "modelscope/nex-agi/nex-n2.5-pro": [
@@ -9801,6 +10010,8 @@
         "huggingface/thinkingmachines/inkling-small": "exploratory",
         "huggingface/xiaomimimo/mimo-v2.5": "exploratory",
         "huggingface/xiaomimimo/mimo-v2.5-pro": "exploratory",
+        "huggingface/xiaomimimo/mimo-v2.6-flash-rl": "exploratory",
+        "huggingface/xiaomimimo/mimo-v2.6-pro-rl": "exploratory",
         "huggingface/zai-org/autoglm-phone-9b-multilingual": "exploratory",
         "huggingface/zai-org/glm-4-32b-0414": "standard",
         "huggingface/zai-org/glm-4.5": "deep",
@@ -9808,6 +10019,7 @@
         "huggingface/zai-org/glm-4.5v": "exploratory",
         "huggingface/zai-org/glm-4.5v-fp8": "exploratory",
         "huggingface/zai-org/glm-4.6": "exploratory",
+        "huggingface/zai-org/glm-4.6-fp8": "exploratory",
         "huggingface/zai-org/glm-4.6v": "exploratory",
         "huggingface/zai-org/glm-4.6v-flash": "exploratory",
         "huggingface/zai-org/glm-4.6v-fp8": "exploratory",
@@ -9872,13 +10084,16 @@
           "reasoning"
         ],
         "huggingface/deepseek-ai/deepseek-r1-distill-llama-8b": [
-          "reasoning"
+          "tools"
         ],
         "huggingface/deepseek-ai/deepseek-r1-distill-qwen-14b": [
-          "reasoning"
+          "tools"
         ],
         "huggingface/deepseek-ai/deepseek-r1-distill-qwen-7b": [
-          "reasoning"
+          "tools"
+        ],
+        "huggingface/deepseek-ai/deepseek-v3": [
+          "tools"
         ],
         "huggingface/deepseek-ai/deepseek-v3-0324": [
           "json",
@@ -10295,6 +10510,18 @@
           "reasoning",
           "tools"
         ],
+        "huggingface/xiaomimimo/mimo-v2.6-flash-rl": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "huggingface/xiaomimimo/mimo-v2.6-pro-rl": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "huggingface/zai-org/autoglm-phone-9b-multilingual": [
           "reasoning",
           "tools"
@@ -10329,6 +10556,10 @@
         ],
         "huggingface/zai-org/glm-4.6": [
           "json",
+          "reasoning",
+          "tools"
+        ],
+        "huggingface/zai-org/glm-4.6-fp8": [
           "reasoning",
           "tools"
         ],
@@ -10535,6 +10766,7 @@
         "vercel/anthropic/claude-sonnet-4.5": "exploratory",
         "vercel/anthropic/claude-sonnet-4.6": "exploratory",
         "vercel/anthropic/claude-sonnet-5": "exploratory",
+        "vercel/anthropic/claude-sonnet-5.5": "exploratory",
         "vercel/arcee-ai/trinity-large-thinking": "standard",
         "vercel/bfl/flux-2-flex": "exploratory",
         "vercel/bfl/flux-2-klein-4b": "exploratory",
@@ -10566,6 +10798,8 @@
         "vercel/cohere/rerank-v3.5": "exploratory",
         "vercel/cohere/rerank-v4-fast": "exploratory",
         "vercel/cohere/rerank-v4-pro": "exploratory",
+        "vercel/convaiinnovations/laya": "exploratory",
+        "vercel/convaiinnovations/laya-free": "exploratory",
         "vercel/deepseek/deepseek-r1": "deep",
         "vercel/deepseek/deepseek-v3.1": "deep",
         "vercel/deepseek/deepseek-v3.1-terminus": "exploratory",
@@ -10626,6 +10860,8 @@
         "vercel/inclusionai/ling-3.0-flash-sante-free": "exploratory",
         "vercel/inclusionai/ling-3.0-flash-vl": "exploratory",
         "vercel/inclusionai/ling-3.0-flash-vl-free": "exploratory",
+        "vercel/inclusionai/ling-3.1-flash": "exploratory",
+        "vercel/inclusionai/ling-3.1-flash-free": "exploratory",
         "vercel/inference-net/schematron-v2-small": "exploratory",
         "vercel/inference-net/schematron-v2-turbo": "exploratory",
         "vercel/interfaze/interfaze-beta": "exploratory",
@@ -10637,6 +10873,7 @@
         "vercel/klingai/kling-v3.0-i2v": "exploratory",
         "vercel/klingai/kling-v3.0-motion-control": "exploratory",
         "vercel/klingai/kling-v3.0-t2v": "exploratory",
+        "vercel/liquid/d1": "exploratory",
         "vercel/meituan/longcat-2.5-preview": "exploratory",
         "vercel/meta/llama-3.1-70b": "standard",
         "vercel/meta/llama-3.1-8b": "exploratory",
@@ -10650,6 +10887,12 @@
         "vercel/meta/muse-spark-1.2-contributor": "exploratory",
         "vercel/meta/muse-spark-1.3": "exploratory",
         "vercel/meta/muse-spark-1.3-contributor": "exploratory",
+        "vercel/microsoft/mai-transcribe-2": "exploratory",
+        "vercel/microsoft/mai-transcribe-2-streaming": "exploratory",
+        "vercel/microsoft/mai-voice-2": "exploratory",
+        "vercel/microsoft/mai-voice-2-flash": "exploratory",
+        "vercel/microsoft/mai-voice-2.1": "exploratory",
+        "vercel/microsoft/mai-voice-2.1-flash": "exploratory",
         "vercel/minimax/minimax-h3": "exploratory",
         "vercel/minimax/minimax-h3-max": "exploratory",
         "vercel/minimax/minimax-m2": "exploratory",
@@ -10740,6 +10983,8 @@
         "vercel/openai/gpt-6-luna-fast": "exploratory",
         "vercel/openai/gpt-6-sol": "exploratory",
         "vercel/openai/gpt-6-sol-fast": "exploratory",
+        "vercel/openai/gpt-6.1-sol": "exploratory",
+        "vercel/openai/gpt-6.1-sol-fast": "exploratory",
         "vercel/openai/gpt-image-1": "exploratory",
         "vercel/openai/gpt-image-1-mini": "exploratory",
         "vercel/openai/gpt-image-1.5": "exploratory",
@@ -10810,6 +11055,7 @@
         "vercel/spacexai/grok-imagine-image-2.0": "exploratory",
         "vercel/spacexai/grok-imagine-video": "exploratory",
         "vercel/spacexai/grok-imagine-video-1.5": "exploratory",
+        "vercel/spacexai/grok-imagine-video-1.5-lite": "exploratory",
         "vercel/spacexai/grok-stt": "exploratory",
         "vercel/spacexai/grok-tts": "exploratory",
         "vercel/spacexai/grok-voice-think-fast-1.0": "exploratory",
@@ -10827,6 +11073,8 @@
         "vercel/typesafe-ai/jev": "exploratory",
         "vercel/voyage/rerank-2.5": "exploratory",
         "vercel/voyage/rerank-2.5-lite": "exploratory",
+        "vercel/voyage/rerank-3": "exploratory",
+        "vercel/voyage/rerank-3-lite": "exploratory",
         "vercel/voyage/voyage-3-large": "standard",
         "vercel/voyage/voyage-3.5": "exploratory",
         "vercel/voyage/voyage-3.5-lite": "exploratory",
@@ -11165,6 +11413,7 @@
           "vision"
         ],
         "vercel/anthropic/claude-opus-5.5-fast": [
+          "json",
           "reasoning",
           "tools",
           "vision"
@@ -11188,6 +11437,12 @@
           "vision"
         ],
         "vercel/anthropic/claude-sonnet-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "vercel/anthropic/claude-sonnet-5.5": [
           "json",
           "reasoning",
           "tools",
@@ -11513,6 +11768,14 @@
           "reasoning",
           "tools",
           "vision"
+        ],
+        "vercel/inclusionai/ling-3.1-flash": [
+          "reasoning",
+          "tools"
+        ],
+        "vercel/inclusionai/ling-3.1-flash-free": [
+          "reasoning",
+          "tools"
         ],
         "vercel/inference-net/schematron-v2-small": [
           "json"
@@ -12102,6 +12365,18 @@
           "tools",
           "vision"
         ],
+        "vercel/openai/gpt-6.1-sol": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "vercel/openai/gpt-6.1-sol-fast": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "vercel/openai/gpt-image-1": [
           "json",
           "tools",
@@ -12215,6 +12490,7 @@
         ],
         "vercel/perplexity/sonar": [
           "json",
+          "reasoning",
           "vision"
         ],
         "vercel/perplexity/sonar-pro": [
@@ -12368,6 +12644,12 @@
           "vision"
         ],
         "vercel/spacexai/grok-imagine-video-1.5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "vercel/spacexai/grok-imagine-video-1.5-lite": [
           "json",
           "reasoning",
           "tools",
@@ -12568,6 +12850,7 @@
       "key_hint": "Get your API key at venice.ai/settings/api",
       "believed_free": [],
       "model_reasoning": {
+        "venice/abliteration-abliterated-model-large-v2": "standard",
         "venice/aion-labs-aion-3-0": "exploratory",
         "venice/aion-labs-aion-3-0-mini": "exploratory",
         "venice/aion-labs-aion-3-5": "exploratory",
@@ -12586,6 +12869,7 @@
         "venice/claude-sonnet-4-5": "exploratory",
         "venice/claude-sonnet-4-6": "exploratory",
         "venice/claude-sonnet-5": "exploratory",
+        "venice/claude-sonnet-5-5": "exploratory",
         "venice/deepseek-v3.2": "exploratory",
         "venice/deepseek-v4-1-flash": "exploratory",
         "venice/deepseek-v4-flash": "standard",
@@ -12660,6 +12944,7 @@
         "venice/openai-gpt-6-astra-pro": "exploratory",
         "venice/openai-gpt-6-luna": "exploratory",
         "venice/openai-gpt-6-sol": "exploratory",
+        "venice/openai-gpt-61-sol": "exploratory",
         "venice/openai-gpt-oss-120b": "deep",
         "venice/qwen-3-6-plus": "exploratory",
         "venice/qwen-3-7-max": "exploratory",
@@ -12682,6 +12967,7 @@
         "venice/venice-uncensored-1-2": "exploratory",
         "venice/venice-uncensored-role-play": "exploratory",
         "venice/xiaomi-mimo-v2-5": "exploratory",
+        "venice/xiaomi-mimo-v2-6-flash": "exploratory",
         "venice/z-ai-glm-5-3": "exploratory",
         "venice/z-ai-glm-5-3-flash": "exploratory",
         "venice/z-ai-glm-5-turbo": "exploratory",
@@ -12770,6 +13056,7 @@
           "vision"
         ],
         "venice/claude-opus-5-5-fast": [
+          "json",
           "reasoning",
           "tools",
           "vision"
@@ -12793,6 +13080,12 @@
           "vision"
         ],
         "venice/claude-sonnet-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "venice/claude-sonnet-5-5": [
           "json",
           "reasoning",
           "tools",
@@ -13188,6 +13481,12 @@
           "reasoning",
           "tools"
         ],
+        "venice/openai-gpt-61-sol": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "venice/openai-gpt-oss-120b": [
           "json",
           "reasoning",
@@ -13295,6 +13594,12 @@
           "reasoning",
           "tools"
         ],
+        "venice/xiaomi-mimo-v2-6-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "venice/z-ai-glm-5-3": [
           "json",
           "reasoning",
@@ -13377,6 +13682,7 @@
         "requesty/anthropic/claude-sonnet-4-5": "exploratory",
         "requesty/anthropic/claude-sonnet-4-6": "exploratory",
         "requesty/anthropic/claude-sonnet-5": "exploratory",
+        "requesty/anthropic/claude-sonnet-5-5": "exploratory",
         "requesty/azure/gpt-4.1": "exploratory",
         "requesty/azure/gpt-4.1-mini@eastus2": "exploratory",
         "requesty/azure/gpt-4.1-mini@francecentral": "exploratory",
@@ -13466,6 +13772,11 @@
         "requesty/azure/gpt-6-sol@germanywestcentral": "exploratory",
         "requesty/azure/gpt-6-sol@swedencentral": "exploratory",
         "requesty/azure/gpt-6-sol@westeurope": "exploratory",
+        "requesty/azure/gpt-6.1-sol@eastus2": "exploratory",
+        "requesty/azure/gpt-6.1-sol@francecentral": "exploratory",
+        "requesty/azure/gpt-6.1-sol@germanywestcentral": "exploratory",
+        "requesty/azure/gpt-6.1-sol@swedencentral": "exploratory",
+        "requesty/azure/gpt-6.1-sol@westeurope": "exploratory",
         "requesty/azure/o4-mini@eastus2": "exploratory",
         "requesty/azure/o4-mini@francecentral": "exploratory",
         "requesty/azure/o4-mini@germanywestcentral": "exploratory",
@@ -13538,6 +13849,7 @@
         "requesty/bedrock/claude-sonnet-4@us-east-2": "exploratory",
         "requesty/bedrock/claude-sonnet-4@us-west-2": "exploratory",
         "requesty/bedrock/claude-sonnet-5": "exploratory",
+        "requesty/bedrock/claude-sonnet-5-5": "exploratory",
         "requesty/bedrock/claude-sonnet-5@ap-southeast-2": "exploratory",
         "requesty/bedrock/claude-sonnet-5@eu-central-1": "exploratory",
         "requesty/bedrock/claude-sonnet-5@eu-north-1": "exploratory",
@@ -13735,6 +14047,10 @@
         "requesty/lyceum/glm-5.3": "exploratory",
         "requesty/lyceum/glm-5.3-flash": "exploratory",
         "requesty/lyceum/kimi-k3": "exploratory",
+        "requesty/melious/deepseek-v4-flash-0731": "exploratory",
+        "requesty/melious/deepseek-v4.1-flash": "exploratory",
+        "requesty/melious/glm-5.3": "exploratory",
+        "requesty/melious/glm-5.3-flash": "exploratory",
         "requesty/minimaxi/minimax-m2": "exploratory",
         "requesty/minimaxi/minimax-m2.5": "standard",
         "requesty/minimaxi/minimax-m2.5-highspeed": "exploratory",
@@ -13795,6 +14111,7 @@
         "requesty/novita/inclusionai/ling-3.0-tiny": "exploratory",
         "requesty/novita/inclusionai/ring-2.6-1t": "exploratory",
         "requesty/novita/kwaipilot/kat-coder-pro": "exploratory",
+        "requesty/novita/ling-3.1-flash": "exploratory",
         "requesty/novita/meta-llama/llama-3.1-8b-instruct": "exploratory",
         "requesty/novita/meta-llama/llama-3.3-70b-instruct": "standard",
         "requesty/novita/meta-llama/llama-4-maverick-17b-128e-instruct-fp8": "standard",
@@ -13865,6 +14182,8 @@
         "requesty/openai/gpt-6-luna:flex": "exploratory",
         "requesty/openai/gpt-6-sol": "exploratory",
         "requesty/openai/gpt-6-sol:flex": "exploratory",
+        "requesty/openai/gpt-6.1-sol": "exploratory",
+        "requesty/openai/gpt-6.1-sol:flex": "exploratory",
         "requesty/openai/o1": "deep",
         "requesty/openai/o1:high": "exploratory",
         "requesty/openai/o1:low": "exploratory",
@@ -13970,6 +14289,8 @@
         "requesty/vertex/claude-opus-4@us-east5": "exploratory",
         "requesty/vertex/claude-opus-5": "exploratory",
         "requesty/vertex/claude-opus-5-5": "exploratory",
+        "requesty/vertex/claude-opus-5-5@eu": "exploratory",
+        "requesty/vertex/claude-opus-5-5@us": "exploratory",
         "requesty/vertex/claude-opus-5@eu": "exploratory",
         "requesty/vertex/claude-opus-5@us": "exploratory",
         "requesty/vertex/claude-sonnet-4": "exploratory",
@@ -13982,6 +14303,9 @@
         "requesty/vertex/claude-sonnet-4@europe-west1": "exploratory",
         "requesty/vertex/claude-sonnet-4@us-east5": "exploratory",
         "requesty/vertex/claude-sonnet-5": "exploratory",
+        "requesty/vertex/claude-sonnet-5-5": "exploratory",
+        "requesty/vertex/claude-sonnet-5-5@eu": "exploratory",
+        "requesty/vertex/claude-sonnet-5-5@us": "exploratory",
         "requesty/vertex/claude-sonnet-5@eu": "exploratory",
         "requesty/vertex/claude-sonnet-5@us": "exploratory",
         "requesty/vertex/deepseek-v3.2": "exploratory",
@@ -14207,6 +14531,12 @@
           "vision"
         ],
         "requesty/anthropic/claude-sonnet-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/anthropic/claude-sonnet-5-5": [
           "json",
           "reasoning",
           "tools",
@@ -14673,6 +15003,36 @@
           "reasoning",
           "tools"
         ],
+        "requesty/azure/gpt-6.1-sol@eastus2": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/azure/gpt-6.1-sol@francecentral": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/azure/gpt-6.1-sol@germanywestcentral": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/azure/gpt-6.1-sol@swedencentral": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/azure/gpt-6.1-sol@westeurope": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "requesty/bedrock/claude-fable-5@us-east-1": [
           "json",
           "reasoning",
@@ -15049,6 +15409,12 @@
           "tools",
           "vision"
         ],
+        "requesty/bedrock/claude-sonnet-5-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "requesty/bedrock/claude-sonnet-5@ap-southeast-2": [
           "json",
           "reasoning",
@@ -15363,6 +15729,9 @@
         "requesty/deepinfra/deepseek-ai/deepseek-r1-distill-llama-70b": [
           "reasoning"
         ],
+        "requesty/deepinfra/deepseek-ai/deepseek-v3": [
+          "tools"
+        ],
         "requesty/deepinfra/deepseek-ai/deepseek-v3.1": [
           "json",
           "reasoning",
@@ -15371,6 +15740,9 @@
         "requesty/deepinfra/deepseek-ai/deepseek-v3.1:flex": [
           "json",
           "reasoning",
+          "tools"
+        ],
+        "requesty/deepinfra/deepseek-ai/deepseek-v3:flex": [
           "tools"
         ],
         "requesty/deepinfra/deepseek-v4-flash-0424": [
@@ -15678,6 +16050,9 @@
         ],
         "requesty/deepseek/deepseek-chat": [
           "json",
+          "tools"
+        ],
+        "requesty/deepseek/deepseek-reasoner": [
           "tools"
         ],
         "requesty/deepseek/deepseek-v4-pro-0813": [
@@ -16035,6 +16410,28 @@
           "tools",
           "vision"
         ],
+        "requesty/melious/deepseek-v4-flash-0731": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "requesty/melious/deepseek-v4.1-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/melious/glm-5.3": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "requesty/melious/glm-5.3-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "requesty/minimaxi/minimax-m2": [
           "json",
           "reasoning",
@@ -16230,10 +16627,13 @@
           "reasoning"
         ],
         "requesty/novita/deepseek/deepseek-r1-turbo": [
-          "reasoning"
+          "tools"
         ],
         "requesty/novita/deepseek/deepseek-v3-0324": [
           "json",
+          "tools"
+        ],
+        "requesty/novita/deepseek/deepseek-v3-turbo": [
           "tools"
         ],
         "requesty/novita/deepseek/deepseek-v3.2": [
@@ -16249,6 +16649,9 @@
         "requesty/novita/deepseek/deepseek-v4-flash-0731": [
           "json",
           "reasoning",
+          "tools"
+        ],
+        "requesty/novita/deepseek/deepseek_v3": [
           "tools"
         ],
         "requesty/novita/glm-5": [
@@ -16285,6 +16688,10 @@
         ],
         "requesty/novita/kwaipilot/kat-coder-pro": [
           "json",
+          "tools"
+        ],
+        "requesty/novita/ling-3.1-flash": [
+          "reasoning",
           "tools"
         ],
         "requesty/novita/meta-llama/llama-3.1-8b-instruct": [
@@ -16641,6 +17048,18 @@
           "reasoning",
           "tools"
         ],
+        "requesty/openai/gpt-6.1-sol": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/openai/gpt-6.1-sol:flex": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "requesty/openai/o1": [
           "json",
           "reasoning",
@@ -16705,14 +17124,13 @@
         ],
         "requesty/perplexity/sonar": [
           "json",
+          "reasoning",
           "vision"
         ],
         "requesty/perplexity/sonar-pro": [
-          "json",
           "vision"
         ],
         "requesty/perplexity/sonar-reasoning-pro": [
-          "json",
           "reasoning",
           "vision"
         ],
@@ -17147,6 +17565,18 @@
           "tools",
           "vision"
         ],
+        "requesty/vertex/claude-opus-5-5@eu": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/vertex/claude-opus-5-5@us": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "requesty/vertex/claude-opus-5@eu": [
           "reasoning",
           "tools",
@@ -17212,6 +17642,24 @@
           "vision"
         ],
         "requesty/vertex/claude-sonnet-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/vertex/claude-sonnet-5-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/vertex/claude-sonnet-5-5@eu": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/vertex/claude-sonnet-5-5@us": [
           "json",
           "reasoning",
           "tools",
@@ -17815,6 +18263,7 @@
         "bai/claude-sonnet-4.5": "exploratory",
         "bai/claude-sonnet-4.6": "exploratory",
         "bai/claude-sonnet-5": "exploratory",
+        "bai/claude-sonnet-5.5": "exploratory",
         "bai/deepseek-v4-pro": "exploratory",
         "bai/deepseek-v4.1-flash": "exploratory",
         "bai/gemini-3-flash": "standard",
@@ -17843,6 +18292,7 @@
         "bai/gpt-6-astra": "exploratory",
         "bai/gpt-6-luna": "exploratory",
         "bai/gpt-6-sol": "exploratory",
+        "bai/gpt-6.1-sol": "exploratory",
         "bai/gpt-image-2": "exploratory",
         "bai/hy3": "exploratory",
         "bai/hy4-preview": "exploratory",
@@ -17928,6 +18378,12 @@
           "vision"
         ],
         "bai/claude-sonnet-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "bai/claude-sonnet-5.5": [
           "json",
           "reasoning",
           "tools",
@@ -18097,6 +18553,12 @@
           "tools",
           "vision"
         ],
+        "bai/gpt-6.1-sol": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "bai/gpt-image-2": [
           "json",
           "tools",
@@ -18239,6 +18701,7 @@
         "xkiro/anthropic/claude-sonnet-4.5": "exploratory",
         "xkiro/anthropic/claude-sonnet-4.6": "exploratory",
         "xkiro/anthropic/claude-sonnet-5": "exploratory",
+        "xkiro/apodex/apodex-1.1-mini:free": "exploratory",
         "xkiro/cohere/aya-expanse-32b": "standard",
         "xkiro/cohere/aya-vision-32b": "standard",
         "xkiro/cohere/command-a": "exploratory",
@@ -18302,7 +18765,9 @@
         "xkiro/moonshotai/kimi-k2.5": "exploratory",
         "xkiro/moonshotai/kimi-k2.6": "exploratory",
         "xkiro/moonshotai/kimi-k2.7-code": "exploratory",
+        "xkiro/moonshotai/kimi-k2.8-preview-agent": "exploratory",
         "xkiro/moonshotai/kimi-k3": "exploratory",
+        "xkiro/moonshotai/kimi-k3-agent": "exploratory",
         "xkiro/nvidia/llama-3.3-nemotron-super-49b": "standard",
         "xkiro/nvidia/nemotron-3-nano": "exploratory",
         "xkiro/nvidia/nemotron-3-nano-omni": "exploratory",
@@ -18318,6 +18783,7 @@
         "xkiro/openai/gpt-6-astra": "exploratory",
         "xkiro/openai/gpt-6-luna": "exploratory",
         "xkiro/openai/gpt-6-sol": "exploratory",
+        "xkiro/openai/gpt-6.1-sol": "exploratory",
         "xkiro/qwen/qwen-plus-2025-07-28:free": "exploratory",
         "xkiro/qwen/qwen3-coder-plus:free": "exploratory",
         "xkiro/qwen/qwen3-max:free": "exploratory",
@@ -18457,6 +18923,11 @@
           "reasoning",
           "tools",
           "vision"
+        ],
+        "xkiro/apodex/apodex-1.1-mini:free": [
+          "json",
+          "reasoning",
+          "tools"
         ],
         "xkiro/cohere/command-a": [
           "json",
@@ -18743,11 +19214,19 @@
           "tools",
           "vision"
         ],
+        "xkiro/moonshotai/kimi-k2.8-preview-agent": [
+          "tools"
+        ],
         "xkiro/moonshotai/kimi-k3": [
           "json",
           "reasoning",
           "tools",
           "vision"
+        ],
+        "xkiro/moonshotai/kimi-k3-agent": [
+          "json",
+          "reasoning",
+          "tools"
         ],
         "xkiro/nvidia/llama-3.3-nemotron-super-49b": [
           "json"
@@ -18822,6 +19301,12 @@
           "tools",
           "vision"
         ],
+        "xkiro/openai/gpt-6.1-sol": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "xkiro/qwen/qwen-plus-2025-07-28:free": [
           "json",
           "tools"
@@ -18836,13 +19321,10 @@
           "tools"
         ],
         "xkiro/qwen/qwen3-omni-flash:free": [
-          "tools",
-          "vision"
+          "tools"
         ],
         "xkiro/qwen/qwen3-vl-plus:free": [
-          "reasoning",
-          "tools",
-          "vision"
+          "tools"
         ],
         "xkiro/qwen/qwen3.5-397b-a17b:free": [
           "json",
@@ -19155,6 +19637,7 @@
         "teamorouter/claude-opus-5-5": "exploratory",
         "teamorouter/claude-sonnet-4-6": "exploratory",
         "teamorouter/claude-sonnet-5": "exploratory",
+        "teamorouter/claude-sonnet-5-5": "exploratory",
         "teamorouter/deepseek-flash": "exploratory",
         "teamorouter/deepseek-flash-free": "exploratory",
         "teamorouter/deepseek-v4-flash": "standard",
@@ -19182,6 +19665,7 @@
         "teamorouter/gpt-6-astra": "exploratory",
         "teamorouter/gpt-6-luna": "exploratory",
         "teamorouter/gpt-6-sol": "exploratory",
+        "teamorouter/gpt-6.1-sol": "exploratory",
         "teamorouter/gpt-image-2": "exploratory",
         "teamorouter/gpt-image-2.5-flare": "exploratory",
         "teamorouter/gpt-image-2.5-sunburst": "exploratory",
@@ -19252,6 +19736,12 @@
           "vision"
         ],
         "teamorouter/claude-sonnet-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "teamorouter/claude-sonnet-5-5": [
           "json",
           "reasoning",
           "tools",
@@ -19412,6 +19902,12 @@
           "tools",
           "vision"
         ],
+        "teamorouter/gpt-6.1-sol": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "teamorouter/gpt-image-2": [
           "json",
           "tools",
@@ -19464,6 +19960,7 @@
         "tokenharbor/claude-opus-5.5-fast": "exploratory",
         "tokenharbor/claude-sonnet-4.6": "exploratory",
         "tokenharbor/claude-sonnet-5": "exploratory",
+        "tokenharbor/claude-sonnet-5.5": "exploratory",
         "tokenharbor/deepseek-v3.2": "exploratory",
         "tokenharbor/deepseek-v4-flash": "standard",
         "tokenharbor/deepseek-v4-flash:free": "standard",
@@ -19492,6 +19989,8 @@
         "tokenharbor/gpt-6-luna-fast": "exploratory",
         "tokenharbor/gpt-6-sol": "exploratory",
         "tokenharbor/gpt-6-sol-fast": "exploratory",
+        "tokenharbor/gpt-6.1-sol": "exploratory",
+        "tokenharbor/gpt-6.1-sol-fast": "exploratory",
         "tokenharbor/grok-4.5": "exploratory",
         "tokenharbor/grok-4.6": "exploratory",
         "tokenharbor/grok-4.7": "exploratory",
@@ -19504,6 +20003,7 @@
         "tokenharbor/mimo-v2.6-flash": "exploratory",
         "tokenharbor/mimo-v2.6-flash:free": "exploratory",
         "tokenharbor/mimo-v2.6-pro": "exploratory",
+        "tokenharbor/mistral-large-2512": "standard",
         "tokenharbor/muse-spark-1-3": "exploratory",
         "tokenharbor/muse-spark-1.1": "exploratory",
         "tokenharbor/muse-spark-1.2": "exploratory",
@@ -19557,6 +20057,7 @@
           "vision"
         ],
         "tokenharbor/claude-opus-5.5-fast": [
+          "json",
           "reasoning",
           "tools",
           "vision"
@@ -19568,6 +20069,12 @@
           "vision"
         ],
         "tokenharbor/claude-sonnet-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenharbor/claude-sonnet-5.5": [
           "json",
           "reasoning",
           "tools",
@@ -19733,6 +20240,18 @@
           "tools",
           "vision"
         ],
+        "tokenharbor/gpt-6.1-sol": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenharbor/gpt-6.1-sol-fast": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "tokenharbor/grok-4.5": [
           "json",
           "reasoning",
@@ -19801,6 +20320,11 @@
         "tokenharbor/mimo-v2.6-pro": [
           "json",
           "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenharbor/mistral-large-2512": [
+          "json",
           "tools",
           "vision"
         ],
@@ -19889,11 +20413,808 @@
         "tokenrouter/stealth/union-alpha"
       ],
       "model_reasoning": {
+        "tokenrouter/anthropic/claude-fable-5": "exploratory",
+        "tokenrouter/anthropic/claude-fable-5.1": "exploratory",
+        "tokenrouter/anthropic/claude-haiku-4.5": "exploratory",
+        "tokenrouter/anthropic/claude-opus-4.5": "exploratory",
+        "tokenrouter/anthropic/claude-opus-4.6": "exploratory",
+        "tokenrouter/anthropic/claude-opus-4.7": "exploratory",
+        "tokenrouter/anthropic/claude-opus-4.8": "exploratory",
+        "tokenrouter/anthropic/claude-opus-4.8-fast": "exploratory",
+        "tokenrouter/anthropic/claude-opus-5": "exploratory",
+        "tokenrouter/anthropic/claude-opus-5.5": "exploratory",
+        "tokenrouter/anthropic/claude-sonnet-4": "exploratory",
+        "tokenrouter/anthropic/claude-sonnet-4.5": "exploratory",
+        "tokenrouter/anthropic/claude-sonnet-4.6": "exploratory",
+        "tokenrouter/anthropic/claude-sonnet-5": "exploratory",
+        "tokenrouter/anthropic/claude-sonnet-5.5": "exploratory",
+        "tokenrouter/bytedance-seed/seedream-4.5": "exploratory",
+        "tokenrouter/bytedance-seed/seedream-5.0-lite": "exploratory",
+        "tokenrouter/bytedance-seed/seedream-5.0-pro": "exploratory",
+        "tokenrouter/deepseek/deepseek-v3.2": "exploratory",
+        "tokenrouter/deepseek/deepseek-v4-flash": "standard",
+        "tokenrouter/deepseek/deepseek-v4-flash-0731": "exploratory",
+        "tokenrouter/deepseek/deepseek-v4-flash-vision-exp": "exploratory",
+        "tokenrouter/deepseek/deepseek-v4-pro": "exploratory",
+        "tokenrouter/deepseek/deepseek-v4-pro-0813": "exploratory",
+        "tokenrouter/deepseek/deepseek-v4.1-flash": "exploratory",
+        "tokenrouter/ex/gpt-5.4": "exploratory",
+        "tokenrouter/google/gemini-2.5-flash-image": "exploratory",
+        "tokenrouter/google/gemini-3-flash-preview": "standard",
+        "tokenrouter/google/gemini-3-pro-image-preview": "exploratory",
+        "tokenrouter/google/gemini-3.1-flash-image-preview": "exploratory",
+        "tokenrouter/google/gemini-3.1-flash-lite-image": "exploratory",
+        "tokenrouter/google/gemini-3.1-pro-preview": "exploratory",
+        "tokenrouter/google/gemini-3.5-flash": "exploratory",
+        "tokenrouter/google/gemini-3.5-flash-lite": "exploratory",
+        "tokenrouter/google/gemini-3.6-flash": "exploratory",
+        "tokenrouter/google/gemini-3.7-flash": "exploratory",
+        "tokenrouter/google/gemini-3.8-flash": "exploratory",
+        "tokenrouter/google/gemma-4-26b-a4b-it": "standard",
+        "tokenrouter/happyhorse-1.0-t2v": "exploratory",
+        "tokenrouter/minimax-m3": "exploratory",
+        "tokenrouter/minimax/minimax-m2-her": "exploratory",
+        "tokenrouter/minimax/minimax-m2.1": "exploratory",
+        "tokenrouter/minimax/minimax-m2.1-highspeed": "exploratory",
+        "tokenrouter/minimax/minimax-m2.5": "standard",
+        "tokenrouter/minimax/minimax-m2.7": "exploratory",
+        "tokenrouter/minimax/minimax-m2.7-highspeed": "exploratory",
+        "tokenrouter/mistralai/devstral-2512": "exploratory",
+        "tokenrouter/mistralai/mistral-medium-3-5": "standard",
+        "tokenrouter/mistralai/mistral-small-2603": "exploratory",
+        "tokenrouter/mistralai/voxtral-small-24b-2507": "standard",
+        "tokenrouter/moonshotai/kimi-k2.5": "exploratory",
+        "tokenrouter/moonshotai/kimi-k2.6": "exploratory",
+        "tokenrouter/moonshotai/kimi-k2.7-code": "exploratory",
+        "tokenrouter/moonshotai/kimi-k3": "exploratory",
         "tokenrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": "deep",
+        "tokenrouter/nvidia/nemotron-3-super-120b-a12b": "deep",
+        "tokenrouter/nvidia/nemotron-3.5-lightning": "exploratory",
+        "tokenrouter/openai/gpt-4o-mini": "exploratory",
+        "tokenrouter/openai/gpt-5": "exploratory",
+        "tokenrouter/openai/gpt-5-image": "exploratory",
+        "tokenrouter/openai/gpt-5-image-mini": "exploratory",
+        "tokenrouter/openai/gpt-5-mini": "exploratory",
+        "tokenrouter/openai/gpt-5.2": "exploratory",
+        "tokenrouter/openai/gpt-5.4": "exploratory",
+        "tokenrouter/openai/gpt-5.4-image-2": "exploratory",
+        "tokenrouter/openai/gpt-5.4-mini": "exploratory",
+        "tokenrouter/openai/gpt-5.4-nano": "exploratory",
+        "tokenrouter/openai/gpt-5.4-pro": "exploratory",
+        "tokenrouter/openai/gpt-5.5": "exploratory",
+        "tokenrouter/openai/gpt-5.5-pro": "exploratory",
+        "tokenrouter/openai/gpt-5.6-luna": "exploratory",
+        "tokenrouter/openai/gpt-5.6-sol": "exploratory",
+        "tokenrouter/openai/gpt-5.6-terra": "exploratory",
+        "tokenrouter/openai/gpt-6-astra": "exploratory",
+        "tokenrouter/openai/gpt-6-luna": "exploratory",
+        "tokenrouter/openai/gpt-6-sol": "exploratory",
+        "tokenrouter/openai/gpt-6.1-sol": "exploratory",
+        "tokenrouter/openai/gpt-audio": "exploratory",
+        "tokenrouter/openai/gpt-audio-mini": "exploratory",
+        "tokenrouter/openai/gpt-image-2.5-flare": "exploratory",
+        "tokenrouter/openai/gpt-image-2.5-sunburst": "exploratory",
+        "tokenrouter/openai/gpt-oss-120b": "deep",
+        "tokenrouter/qwen/qwen3-coder-next": "exploratory",
+        "tokenrouter/qwen/qwen3.5-122b-a10b": "deep",
+        "tokenrouter/qwen/qwen3.5-35b-a3b": "standard",
+        "tokenrouter/qwen/qwen3.5-397b-a17b": "deep",
+        "tokenrouter/qwen/qwen3.5-9b": "exploratory",
+        "tokenrouter/qwen/qwen3.5-flash": "exploratory",
+        "tokenrouter/qwen/qwen3.5-plus-02-15": "exploratory",
+        "tokenrouter/qwen/qwen3.6-plus": "exploratory",
+        "tokenrouter/qwen/qwen3.7-max": "exploratory",
+        "tokenrouter/qwen/qwen3.7-plus": "exploratory",
+        "tokenrouter/qwen/qwen3.8-flash": "exploratory",
+        "tokenrouter/qwen/qwen3.8-max": "exploratory",
+        "tokenrouter/qwen3.5-omni-plus": "exploratory",
+        "tokenrouter/qwen3.6-flash": "exploratory",
+        "tokenrouter/sakana/fugu-ultra": "exploratory",
         "tokenrouter/stealth/ox-alpha": "exploratory",
-        "tokenrouter/stealth/union-alpha": "exploratory"
+        "tokenrouter/stealth/union-alpha": "exploratory",
+        "tokenrouter/stepfun/step-3.5-flash": "exploratory",
+        "tokenrouter/stepfun/step-3.7-flash": "exploratory",
+        "tokenrouter/tencent/hy3-preview": "exploratory",
+        "tokenrouter/tencent/hy4-preview": "exploratory",
+        "tokenrouter/x-ai/grok-4.3": "exploratory",
+        "tokenrouter/x-ai/grok-4.5": "exploratory",
+        "tokenrouter/x-ai/grok-4.6": "exploratory",
+        "tokenrouter/x-ai/grok-4.7": "exploratory",
+        "tokenrouter/x-ai/grok-build-0.1": "exploratory",
+        "tokenrouter/xiaomi/mimo-v2.5": "exploratory",
+        "tokenrouter/xiaomi/mimo-v2.5-pro": "exploratory",
+        "tokenrouter/xiaomi/mimo-v2.6-flash": "exploratory",
+        "tokenrouter/xiaomi/mimo-v2.6-pro": "exploratory",
+        "tokenrouter/xiaomi/mimo-v2.6-pro-ultraspeed": "exploratory",
+        "tokenrouter/z-ai/glm-4.5-air": "standard",
+        "tokenrouter/z-ai/glm-4.6": "exploratory",
+        "tokenrouter/z-ai/glm-4.6v": "exploratory",
+        "tokenrouter/z-ai/glm-4.7": "exploratory",
+        "tokenrouter/z-ai/glm-5": "exploratory",
+        "tokenrouter/z-ai/glm-5-turbo": "exploratory",
+        "tokenrouter/z-ai/glm-5.1": "exploratory",
+        "tokenrouter/z-ai/glm-5.2": "exploratory",
+        "tokenrouter/z-ai/glm-5.3": "exploratory",
+        "tokenrouter/z-ai/glm-5.3-fast": "exploratory",
+        "tokenrouter/z-ai/glm-5.3-flash": "exploratory",
+        "tokenrouter/z-ai/glm-5.3-flashx": "exploratory"
       },
-      "model_capabilities": {},
+      "model_capabilities": {
+        "tokenrouter/anthropic/claude-fable-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-fable-5.1": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-haiku-4.5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-opus-4.5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-opus-4.6": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-opus-4.7": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-opus-4.8": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-opus-4.8-fast": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-opus-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-opus-5.5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-sonnet-4": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-sonnet-4.5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-sonnet-4.6": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-sonnet-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-sonnet-5.5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/bytedance-seed/seedream-4.5": [
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/bytedance-seed/seedream-5.0-lite": [
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/bytedance-seed/seedream-5.0-pro": [
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/deepseek/deepseek-v3.2": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/deepseek/deepseek-v4-flash": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/deepseek/deepseek-v4-flash-0731": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/deepseek/deepseek-v4-flash-vision-exp": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/deepseek/deepseek-v4-pro": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/deepseek/deepseek-v4-pro-0813": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/deepseek/deepseek-v4.1-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/ex/gpt-5.4": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/google/gemini-2.5-flash-image": [
+          "json",
+          "reasoning",
+          "vision"
+        ],
+        "tokenrouter/google/gemini-3-flash-preview": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/google/gemini-3-pro-image-preview": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/google/gemini-3.1-flash-image-preview": [
+          "json",
+          "reasoning",
+          "vision"
+        ],
+        "tokenrouter/google/gemini-3.1-flash-lite-image": [
+          "json",
+          "reasoning",
+          "vision"
+        ],
+        "tokenrouter/google/gemini-3.1-pro-preview": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/google/gemini-3.5-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/google/gemini-3.5-flash-lite": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/google/gemini-3.6-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/google/gemini-3.7-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/google/gemini-3.8-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/google/gemma-4-26b-a4b-it": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/minimax-m3": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/minimax/minimax-m2.1": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/minimax/minimax-m2.1-highspeed": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/minimax/minimax-m2.5": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/minimax/minimax-m2.7": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/minimax/minimax-m2.7-highspeed": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/mistralai/devstral-2512": [
+          "json",
+          "tools"
+        ],
+        "tokenrouter/mistralai/mistral-medium-3-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/mistralai/mistral-small-2603": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/mistralai/voxtral-small-24b-2507": [
+          "json",
+          "tools"
+        ],
+        "tokenrouter/moonshotai/kimi-k2.5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/moonshotai/kimi-k2.6": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/moonshotai/kimi-k2.7-code": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/moonshotai/kimi-k3": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": [
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/nvidia/nemotron-3-super-120b-a12b": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/nvidia/nemotron-3.5-lightning": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/openai/gpt-4o-mini": [
+          "json",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5-image": [
+          "json",
+          "reasoning",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5-image-mini": [
+          "json",
+          "reasoning",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5-mini": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5.2": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5.4": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5.4-image-2": [
+          "json",
+          "reasoning",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5.4-mini": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5.4-nano": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5.4-pro": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5.5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5.5-pro": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5.6-luna": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5.6-sol": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-5.6-terra": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-6-astra": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-6-luna": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-6-sol": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-6.1-sol": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-audio": [
+          "json",
+          "tools"
+        ],
+        "tokenrouter/openai/gpt-audio-mini": [
+          "json",
+          "tools"
+        ],
+        "tokenrouter/openai/gpt-image-2.5-flare": [
+          "json",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-image-2.5-sunburst": [
+          "json",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-oss-120b": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/qwen/qwen3-coder-next": [
+          "json",
+          "tools"
+        ],
+        "tokenrouter/qwen/qwen3.5-122b-a10b": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/qwen/qwen3.5-35b-a3b": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/qwen/qwen3.5-397b-a17b": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/qwen/qwen3.5-9b": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/qwen/qwen3.5-flash": [
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/qwen/qwen3.5-plus-02-15": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/qwen/qwen3.6-plus": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/qwen/qwen3.7-max": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/qwen/qwen3.7-plus": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/qwen/qwen3.8-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/qwen/qwen3.8-max": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/qwen3.5-omni-plus": [
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/qwen3.6-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/sakana/fugu-ultra": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/stepfun/step-3.5-flash": [
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/stepfun/step-3.7-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/tencent/hy3-preview": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/tencent/hy4-preview": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/x-ai/grok-4.3": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/x-ai/grok-4.5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/x-ai/grok-4.6": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/x-ai/grok-4.7": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/x-ai/grok-build-0.1": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/xiaomi/mimo-v2.5": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/xiaomi/mimo-v2.5-pro": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/xiaomi/mimo-v2.6-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/xiaomi/mimo-v2.6-pro": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/xiaomi/mimo-v2.6-pro-ultraspeed": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/z-ai/glm-4.5-air": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/z-ai/glm-4.6": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/z-ai/glm-4.6v": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/z-ai/glm-4.7": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/z-ai/glm-5": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/z-ai/glm-5-turbo": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/z-ai/glm-5.1": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/z-ai/glm-5.2": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/z-ai/glm-5.3": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/z-ai/glm-5.3-fast": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "tokenrouter/z-ai/glm-5.3-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/z-ai/glm-5.3-flashx": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ]
+      },
       "free_limits": {}
     },
     "opencode-zen": {
@@ -20274,6 +21595,12 @@
           "tools",
           "vision"
         ],
+        "together/deepseek-ai/deepseek-coder-33b-instruct": [
+          "tools"
+        ],
+        "together/deepseek-ai/deepseek-ocr-2": [
+          "tools"
+        ],
         "together/deepseek-ai/deepseek-r1-0528": [
           "json",
           "reasoning",
@@ -20283,13 +21610,13 @@
           "reasoning"
         ],
         "together/deepseek-ai/deepseek-r1-distill-qwen-1.5b": [
-          "reasoning"
+          "tools"
         ],
         "together/deepseek-ai/deepseek-r1-distill-qwen-14b": [
-          "reasoning"
+          "tools"
         ],
         "together/deepseek-ai/deepseek-r1-distill-qwen-7b": [
-          "reasoning"
+          "tools"
         ],
         "together/deepseek-ai/deepseek-v3.1": [
           "json",
@@ -21041,8 +22368,6 @@
           "tools"
         ],
         "fireworks/accounts/fireworks/models/deepseek-v4p1-flash": [
-          "json",
-          "reasoning",
           "tools"
         ],
         "fireworks/accounts/fireworks/models/ember-1": [
@@ -21258,6 +22583,7 @@
         "gmi/openai/gpt-6-astra": "exploratory",
         "gmi/openai/gpt-6-luna": "exploratory",
         "gmi/openai/gpt-6-sol": "exploratory",
+        "gmi/openai/gpt-6.1-sol": "exploratory",
         "gmi/openai/gpt-oss-120b": "deep",
         "gmi/qwen/qwen3-235b-a22b-instruct-2507-fp8": "deep",
         "gmi/qwen/qwen3-235b-a22b-thinking-2507-fp8": "deep",
@@ -21530,6 +22856,12 @@
           "vision"
         ],
         "gmi/openai/gpt-6-sol": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "gmi/openai/gpt-6.1-sol": [
           "json",
           "reasoning",
           "tools",
