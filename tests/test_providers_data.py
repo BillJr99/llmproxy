@@ -10,8 +10,10 @@ from __future__ import annotations
 import pytest
 
 from llmproxy.providers import FREE_LIMIT_KEYS, VALID_REASONING_LEVELS, load_data
+from scripts.update_free_models import load_review_overrides
 
 SIDE = load_data()
+_OVERRIDES = load_review_overrides()
 
 
 def test_top_level_keys():
@@ -163,10 +165,13 @@ def test_template_required_fields(pkey):
 # These tables are that missing record. A refresh that reasserts a reviewed
 # correction now fails CI here, with the reason, instead of quietly undoing it.
 #
-# To retire an entry, delete it and say why in the commit message. Note this
-# guards the repo only: to stop a deployment from re-proposing a fact, clear it
-# in that deployment's routing_metadata.json as well (admin UI -> routing
-# metadata), or the next auto-PR arrives carrying it again.
+# The tables live in llmproxy/review_overrides.json. To retire an entry, delete
+# it there and say why in the commit message. The scraper and the deployment PR
+# flow apply the same file (scripts.update_free_models.apply_review_overrides),
+# so a deployment that re-proposes a held fact has it held back and listed in
+# the PR body rather than failing CI here. Clearing the fact in that
+# deployment's routing_metadata.json (admin UI -> routing metadata) is still the
+# way to stop it being proposed at all.
 
 # Cost observations a review found unproven, and the evidence that would settle
 # each one.
@@ -202,18 +207,26 @@ def test_template_required_fields(pkey):
 # The warning line ends in `source=<...>`. Check the account's billing page for
 # the same period as a second signal. If both say a real charge, the entry below
 # is wrong and should go.
-_COST_OBSERVATIONS_NEEDING_CORROBORATION: dict[str, dict[str, str]] = {
-    # PR #148 (2026-09). Proposed by a deployment whose Groq key is on the free
-    # tier, where Groq serves both models at no charge. Groq does not report
-    # usage.cost, and both models are in the litellm cost map, so every call
-    # prices as source="computed" -- the false-alarm signature exactly. Not
-    # re-checked against a billing statement, so this is unproven rather than
-    # disproven: corroborate per above before accepting a re-proposal.
-    "groq": {
-        "groq/llama-3.3-70b-versatile": "free-tier key; cost was computed, not billed",
-        "groq/openai/gpt-oss-120b": "free-tier key; cost was computed, not billed",
-    },
-}
+# Entries live in llmproxy/review_overrides.json, which the refresh and the
+# deployment PR flow also apply (scripts.update_free_models.apply_review_overrides),
+# so a re-proposal is held back before it reaches a PR and this test is the
+# backstop rather than the first line.
+#
+# groq (PR #148, 2026-09). Proposed by a deployment whose Groq key is on the free
+# tier, where Groq serves both models at no charge. Groq does not report
+# usage.cost, and both models are in the litellm cost map, so every call prices
+# as source="computed" -- the false-alarm signature exactly. Not re-checked
+# against a billing statement, so this is unproven rather than disproven:
+# corroborate per above before accepting a re-proposal.
+_COST_OBSERVATIONS_NEEDING_CORROBORATION: dict[str, dict[str, str]] = \
+    _OVERRIDES["cost_observations_needing_corroboration"]
+
+
+def test_review_overrides_file_is_loaded():
+    """GUARD: an unreadable overrides file degrades to empty tables at runtime,
+    which would turn both checks below into silent no-ops."""
+    assert _COST_OBSERVATIONS_NEEDING_CORROBORATION
+    assert _REQUIRED_CAPABILITIES
 
 
 @pytest.mark.parametrize("pkey", sorted(_COST_OBSERVATIONS_NEEDING_CORROBORATION))
@@ -253,16 +266,15 @@ def test_uncorroborated_cost_observations_are_not_merged(pkey):
 # one-image request and see whether it answers or 400s. A provider that has
 # genuinely dropped a modality is evidence; inference from the model id is not,
 # and inference is what dropped these.
+# Entries live in llmproxy/review_overrides.json (see above).
+#
+# xkiro (PR #148, 2026-09). Inference stripped `vision` from two models that are
+# vision-capable by name -- "-vl-" is Qwen's vision-language line, "-omni-" its
+# multimodal one -- while leaving the tag on their own siblings, which is the
+# tell that this was a naming heuristic misfiring rather than a catalog change.
 _REQUIRED_CAPABILITIES: dict[str, dict[str, set[str]]] = {
-    # PR #148 (2026-09). Inference stripped `vision` from two models that are
-    # vision-capable by name -- "-vl-" is Qwen's vision-language line, "-omni-"
-    # its multimodal one -- while leaving the tag on their own siblings, which
-    # is the tell that this was a naming heuristic misfiring rather than a
-    # catalog change. Restored to the values curated before the refresh.
-    "xkiro": {
-        "xkiro/qwen/qwen3-vl-plus:free": {"vision"},
-        "xkiro/qwen/qwen3-omni-flash:free": {"vision"},
-    },
+    pkey: {mid: set(tags) for mid, tags in models.items()}
+    for pkey, models in _OVERRIDES["required_capabilities"].items()
 }
 
 

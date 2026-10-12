@@ -1105,3 +1105,88 @@ def test_a_curated_entry_is_qualified_exactly_once(monkeypatch, tmp_path):
     groq = json.loads(s._promote_sidecar_to_providers(_providers_text())[0])["providers"]["groq"]
     assert "groq/llama-3.3-70b" in groq["cost_observed_free_tier"]
     assert "groq/groq/llama-3.3-70b" not in groq["cost_observed_free_tier"]
+
+
+# ── reviewed corrections are held back before they reach a PR ───────────────
+#
+# PRs #148, #157 and #159 each re-proposed the same two corrections a reviewer
+# had already made, and each failed CI on tests/test_providers_data.py only
+# after the PR was open. Promotion now applies llmproxy/review_overrides.json
+# itself, so the deployment's PR arrives already consistent with the review.
+
+def _held_and_required():
+    from scripts.update_free_models import load_review_overrides
+    o = load_review_overrides()
+    pkey, held = next(iter(o["cost_observations_needing_corroboration"].items()))
+    rkey, required = next(iter(o["required_capabilities"].items()))
+    return pkey, sorted(held), rkey, required
+
+
+def test_a_held_cost_observation_is_not_promoted(monkeypatch, tmp_path):
+    pkey, held, _, _ = _held_and_required()
+    bare = [m.split("/", 1)[1] for m in held]
+    s = _promotion_server(monkeypatch, tmp_path, {
+        "by_provider": {pkey: {"cost_observed_free_tier": bare + ["other-model"]}},
+    }, [])
+
+    text, report = s._promote_sidecar_to_providers(_providers_text())
+    observed = json.loads(text)["providers"][pkey].get("cost_observed_free_tier", [])
+    assert not set(held) & set(observed)
+    assert f"{pkey}/other-model" in observed, "only the held ids are suppressed"
+    assert sorted(report["review_overrides"]["held_back"][pkey]) == held
+
+
+def test_a_dropped_required_tag_is_restored(monkeypatch, tmp_path):
+    _, _, rkey, required = _held_and_required()
+    mid, tags = next(iter(required.items()))
+    upstream = mid.split("/", 1)[1]
+    from llmproxy.flagship import normalize_model_id
+    s = _promotion_server(monkeypatch, tmp_path, {
+        "by_model": {normalize_model_id(upstream): {
+            "capabilities": ["tools"], "capabilities_source": "inferred"}},
+    }, [(rkey, upstream)])
+
+    text, report = s._promote_sidecar_to_providers(_providers_text())
+    caps = json.loads(text)["providers"][rkey]["model_capabilities"][mid]
+    assert set(tags) <= set(caps)
+    assert "tools" in caps
+    assert mid in report["review_overrides"]["restored"][rkey]
+
+
+def test_the_pr_body_lists_what_was_held_back(monkeypatch, tmp_path):
+    pkey, held, _, _ = _held_and_required()
+    s = _promotion_server(monkeypatch, tmp_path, {
+        "by_provider": {pkey: {"cost_observed_free_tier": [held[0].split("/", 1)[1]]}},
+    }, [])
+
+    body = s._promotion_body(s._promote_sidecar_to_providers(_providers_text())[1])
+    assert "Held back by review overrides" in body
+    assert held[0] in body
+
+
+def test_an_unreadable_overrides_file_does_not_break_promotion(monkeypatch, tmp_path):
+    import scripts.update_free_models as ufm
+    bad = tmp_path / "bad_overrides.json"
+    bad.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(ufm, "REVIEW_OVERRIDES_PATH", bad)
+    s = _promotion_server(monkeypatch, tmp_path, {
+        "by_provider": {"groq": {"cost_observed_free_tier": ["llama-3.3-70b"]}},
+    }, [("groq", "llama-3.3-70b")])
+
+    text, _ = s._promote_sidecar_to_providers(_providers_text())
+    assert "groq/llama-3.3-70b" in json.loads(text)["providers"]["groq"]["cost_observed_free_tier"]
+
+
+def test_the_scraper_applies_the_same_overrides():
+    """The Actions refresh writes through apply_review_overrides too."""
+    from scripts.update_free_models import apply_review_overrides
+    pkey, held, rkey, required = _held_and_required()
+    mid = next(iter(required))
+    sidecar = {"providers": {
+        pkey: {"cost_observed_free_tier": list(held)},
+        rkey: {"model_capabilities": {mid: ["tools"]}},
+    }}
+    report = apply_review_overrides(sidecar)
+    assert "cost_observed_free_tier" not in sidecar["providers"][pkey]
+    assert set(required[mid]) <= set(sidecar["providers"][rkey]["model_capabilities"][mid])
+    assert report["held_back"] and report["restored"]

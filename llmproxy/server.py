@@ -4282,6 +4282,20 @@ def _promote_sidecar_to_providers(
                 changed = True
                 _bump(provider_name, "observed")
 
+    # Reviewed corrections win over anything promoted above. Without this, a
+    # deployment re-proposes a fact a reviewer already rejected on every PR, and
+    # CI (tests/test_providers_data.py) fails it after the fact.
+    try:
+        from scripts.update_free_models import apply_review_overrides
+        corrections = apply_review_overrides(data)
+    except Exception as e:  # noqa: BLE001 — never break the PR over the overrides
+        print(f"[server:_promote_sidecar_to_providers] {e}")
+        traceback.print_exc()
+        corrections = {"held_back": {}, "restored": {}}
+    if corrections["held_back"] or corrections["restored"]:
+        report["review_overrides"] = corrections
+        changed = True
+
     if not changed:
         return providers_text, report
     try:
@@ -4304,8 +4318,24 @@ def _promotion_body(report: dict) -> str:
     at a glance which is which — that visibility is what makes promoting a guess
     reasonable rather than reckless.
     """
+    overrides = report.get("review_overrides") or {}
+    override_lines: list[str] = []
+    if overrides.get("held_back") or overrides.get("restored"):
+        override_lines += ["", "### Held back by review overrides", "",
+                           "These facts contradict a correction recorded in "
+                           "`llmproxy/review_overrides.json` and were not proposed. "
+                           "Clear them in this deployment's routing metadata, or "
+                           "retire the override with evidence."]
+        for provider, ids in sorted((overrides.get("held_back") or {}).items()):
+            for mid in ids:
+                override_lines.append(f"* `{mid}`: kept out of "
+                                      f"`{provider}.cost_observed_free_tier`.")
+        for _provider, models in sorted((overrides.get("restored") or {}).items()):
+            for mid, tags in sorted(models.items()):
+                override_lines.append(f"* `{mid}`: restored "
+                                      + ", ".join(f"`{t}`" for t in tags) + ".")
     if not report.get("total"):
-        return ""
+        return "\n".join(override_lines)
     order = ("curated", "observed", "family", "inferred")
     meaning = {
         "curated": "set by hand in the admin UI",
@@ -4355,7 +4385,7 @@ def _promotion_body(report: dict) -> str:
         lines.append("Not promoted, because they are not providers this repo ships: "
                      + ", ".join(f"`{p}`" for p in sorted(report["skipped_providers"]))
                      + ".")
-    return "\n".join(lines)
+    return "\n".join(lines + override_lines)
 
 
 def _maybe_open_providers_pr(config: dict, providers_text: str, example_text: str | None = None) -> None:
