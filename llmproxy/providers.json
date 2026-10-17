@@ -9,7 +9,6 @@
   ],
   "provider_order": [
     "openai",
-    "openai-responses",
     "nous",
     "nvidia",
     "google",
@@ -71,23 +70,12 @@
       "key_hint": "Get your API key at platform.openai.com/api-keys (paid \u2014 no free tier)",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {}
-    },
-    "openai-responses": {
-      "display": "OpenAI (Responses API)",
-      "base_url": "https://api.openai.com/v1",
-      "key_required": true,
-      "key_hint": "Get your API key at platform.openai.com/api-keys (paid \u2014 no free tier). The same key as the 'openai' provider works.",
-      "protocol": "responses",
-      "_note": "The same OpenAI account as the 'openai' provider, reached over the Responses API (POST /v1/responses) instead of chat/completions. Use it for the OpenAI models that answer only there: the -pro reasoning models (gpt-5.5-pro, gpt-5.4-pro, gpt-5.2-pro) and the Codex-tuned *-codex line, which OpenAI's model list marks deprecated as of October 2026. Everything else is better served by the plain 'openai' entry. llmproxy translates chat \u21c4 Responses (function tools, images, reasoning_effort, response_format) and sends store=false, because it carries the whole transcript itself. GET /v1/models works with the Bearer key, so discovery runs and model_filter narrows the full OpenAI catalog to the Responses-only models.",
-      "example_model_filter": [
-        "gpt-5.5-pro",
-        "gpt-5.4-pro",
-        "gpt-5.2-pro"
+      "free_limits": {},
+      "protocol_choices": [
+        "responses",
+        "openai"
       ],
-      "believed_free": [],
-      "model_reasoning": {},
-      "free_limits": {}
+      "_note": "One entry for OpenAI, reached over either API the same key serves. 'responses' (the default) sends POST /v1/responses, which every current OpenAI chat model answers, and is the only API the -pro reasoning models (gpt-5.5-pro, gpt-5.4-pro, gpt-5.2-pro) and the deprecated *-codex line accept; 'openai' sends chat/completions instead. llmproxy translates chat \u21c4 Responses (function tools, images, reasoning_effort, response_format, streaming) and sends store=false, since it carries the whole transcript itself; embeddings and other non-chat endpoints are forwarded unchanged under either protocol. The setup wizard and the admin page ask which one to use; add a second entry under another name if you want both at once."
     },
     "nous": {
       "display": "Nous Research (Hermes)",
@@ -23097,7 +23085,7 @@
       "key_required": true,
       "key_hint": "Get your API key at console.anthropic.com (paid \u2014 no free tier)",
       "protocol": "anthropic",
-      "_note": "Reached over Anthropic's native Messages API (x-api-key + anthropic-version). llmproxy translates OpenAI \u21c4 Anthropic, so OpenAI clients can call Claude and Anthropic clients (/v1/messages) can call any provider. Models are advertised from model_filter (no OpenAI-shaped /models endpoint).",
+      "_note": "Reached over Anthropic's native Messages API (x-api-key + anthropic-version). llmproxy translates OpenAI \u21c4 Anthropic, so OpenAI clients can call Claude and Anthropic clients (/v1/messages) can call any provider. Models are discovered from GET /v1/models, which llmproxy calls with x-api-key + anthropic-version (it rejects a Bearer key), so model_filter is optional: leave it null to list every Claude model the key can reach, or keep a list to pin a subset.",
       "example_model_filter": [
         "claude-opus-5-5",
         "claude-sonnet-5-5",

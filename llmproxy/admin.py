@@ -882,8 +882,17 @@ def api_provider_from_template():
             cfg[field] = _substitute_placeholders(template[field], subs)
     # Native (non-OpenAI) upstreams carry a protocol so the proxy translates for
     # them — without this, an Anthropic/Gemini template would be saved as openai.
-    if template.get("protocol") and template["protocol"] != "openai":
-        cfg["protocol"] = template["protocol"]
+    protocol = template.get("protocol")
+    choices = template.get("protocol_choices") or []
+    requested = (payload.get("protocol") or "").strip().lower()
+    if requested:
+        # A template offering several protocols (OpenAI: chat/completions or
+        # Responses) lets the caller pick one; any other template keeps its own.
+        if requested not in (choices or [protocol or "openai"]):
+            return _err(f"protocol must be one of {choices or [protocol or 'openai']} for this template.")
+        protocol = requested
+    if protocol and protocol != "openai":
+        cfg["protocol"] = protocol
     # Same reason the wizard copies it: the loadbalanced virtual reads
     # free_allowance off the provider block, not off the template sidecar.
     if template.get("free_allowance"):

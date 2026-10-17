@@ -113,6 +113,7 @@ from .config import (
 )
 from .dialects import get_inbound, get_outbound
 from .dialects import typesafe as typesafe_dialect
+from .dialects.anthropic import ANTHROPIC_VERSION
 from .dialects.responses import UnknownPreviousResponse
 from .providers import (
     OVERLAY_REASONING_LEVELS,
@@ -2216,7 +2217,17 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
     headers = {"Content-Type": "application/json",
                "User-Agent": _configured_user_agent()}
     api_key = provider_api_key(provider_cfg)
-    if api_key:
+    if str(provider_cfg.get("protocol") or "").lower() == "anthropic":
+        # Anthropic's GET /v1/models answers 401 to a Bearer API key; it takes
+        # the same x-api-key + anthropic-version pair as /v1/messages. Its
+        # {"data": [{"id": ...}]} body is already the OpenAI shape, but it pages
+        # 20 at a time by default, so ask for the whole catalog in one page.
+        if api_key:
+            headers["x-api-key"] = api_key
+        headers["anthropic-version"] = ANTHROPIC_VERSION
+        if not provider_cfg.get("models_url"):
+            url = f"{base_url}/models?limit=1000"
+    elif api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
     resp = None

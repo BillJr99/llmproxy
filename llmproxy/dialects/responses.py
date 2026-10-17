@@ -947,13 +947,7 @@ def _canonical_tool_choice_to_responses(choice):
 
 def _canonical_to_responses_request(payload: dict) -> dict:
     """Canonical OpenAI chat request -> a ``POST /v1/responses`` body."""
-    messages = payload.get("messages")
-    if messages is None and "prompt" in payload:
-        # The legacy /v1/completions route probes the native endpoint with the
-        # raw legacy body; a Responses upstream has none, so treat it as chat.
-        prompt = payload.get("prompt")
-        messages = [{"role": "user", "content": prompt if isinstance(prompt, str) else str(prompt)}]
-    instructions, items = _canonical_messages_to_input(messages)
+    instructions, items = _canonical_messages_to_input(payload.get("messages"))
     body: dict = {k: payload[k] for k in _OUTBOUND_PASSTHROUGH_KEYS if k in payload}
     body["input"] = items
     if instructions:
@@ -1063,25 +1057,37 @@ def _chunk(model: str, delta: dict, finish=None) -> dict:
 
 
 class ResponsesOutbound(OutboundAdapter):
-    """Canonical OpenAI chat out to a ``POST {base_url}/responses`` upstream."""
+    """Canonical OpenAI chat out to a ``POST {base_url}/responses`` upstream.
+
+    Only chat is rewritten. A Responses upstream is still an OpenAI-shaped API,
+    so every other endpoint (``embeddings``, the legacy ``completions`` probe)
+    is forwarded to ``{base_url}/{endpoint}`` untouched, exactly as the
+    ``openai`` protocol would, and its reply is left as is. That is what lets a
+    single ``openai`` provider set ``"protocol": "responses"`` without losing
+    embeddings.
+    """
 
     name = "responses"
 
     def build_request(self, endpoint, base_url, provider_cfg, payload, *, stream, forwarded_headers):
-        url = f"{base_url}/responses"
         headers = {"Content-Type": "application/json", **(forwarded_headers or {})}
         api_key = provider_api_key(provider_cfg)
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        return url, headers, _canonical_to_responses_request(payload)
+        if endpoint != "chat/completions":
+            return f"{base_url}/{endpoint}", headers, payload
+        return f"{base_url}/responses", headers, _canonical_to_responses_request(payload)
 
     def translate_response(self, content: bytes) -> bytes:
         try:
             data = json.loads(content)
         except (ValueError, TypeError):
             return content
-        if not isinstance(data, dict) or (data.get("error") and not data.get("output")):
-            return content  # leave upstream error bodies intact
+        # Only a Response object is translated. Error bodies, and the replies
+        # of endpoints forwarded untouched (an embeddings list, a legacy
+        # text_completion), carry no ``output`` array and pass through as is.
+        if not isinstance(data, dict) or not isinstance(data.get("output"), list):
+            return content
         return json.dumps(_responses_response_to_canonical(data)).encode("utf-8")
 
     def parse_stream(self, byte_iter: Iterable[bytes]) -> Iterator[dict | None]:

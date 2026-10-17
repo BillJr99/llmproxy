@@ -188,9 +188,71 @@ def test_stream_failure_surfaces_an_error_chunk():
     assert chunks[-1] is None
 
 
-def test_templates_carry_responses_and_jetstream():
+def test_non_chat_endpoints_pass_through_untouched():
+    """One openai provider on "responses" must keep embeddings working."""
+    out = get_outbound("responses")
+    payload = {"model": "text-embedding-3-small", "input": "hi"}
+    url, headers, body = out.build_request(
+        "embeddings", "https://api.openai.com/v1", {"api_key": "k"}, payload,
+        stream=False, forwarded_headers={},
+    )
+    assert url == "https://api.openai.com/v1/embeddings"
+    assert headers["Authorization"] == "Bearer k"
+    assert body is payload
+    reply = json.dumps({"object": "list", "data": [{"embedding": [0.1]}]}).encode()
+    assert out.translate_response(reply) == reply
+
+
+def test_openai_template_offers_responses_and_chat():
     by_key = {t["key"]: t for t in get_provider_templates()}
-    assert by_key["openai-responses"]["protocol"] == "responses"
-    assert by_key["openai-responses"]["base_url"] == "https://api.openai.com/v1"
+    assert by_key["openai"]["protocol_choices"] == ["responses", "openai"]
+    assert "openai-responses" not in by_key
     assert "protocol" not in by_key["jetstream2"]
     assert by_key["jetstream2"]["base_url"] == "https://llm.jetstream-cloud.org/api"
+
+
+def test_wizard_asks_for_the_protocol(monkeypatch):
+    from llmproxy import setup_wizard as W
+
+    idx = next(i for i, t in enumerate(W.PROVIDER_TEMPLATES) if t["key"] == "openai")
+    picks = iter([idx, 1])  # template, then the second protocol choice ("openai")
+    monkeypatch.setattr(W, "_pick", lambda *a, **k: next(picks))
+    monkeypatch.setattr(W, "_prompt", lambda label, default=None, **k: default)
+    monkeypatch.setattr(W.getpass, "getpass", lambda *a, **k: "sk-x")
+    _key, cfg = W._setup_from_template({})
+    assert "protocol" not in cfg  # chat/completions is the implicit default
+
+    picks = iter([idx, None])  # Enter takes the first choice
+    monkeypatch.setattr(W, "_pick", lambda *a, **k: next(picks))
+    _key, cfg = W._setup_from_template({})
+    assert cfg["protocol"] == "responses"
+
+
+def test_anthropic_discovery_uses_x_api_key(monkeypatch):
+    import llmproxy.server as S
+
+    seen = {}
+
+    class _Resp:
+        status_code = 200
+        headers = {"Content-Type": "application/json"}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": [{"id": "claude-opus-5-5", "type": "model"}], "has_more": False}
+
+    def fake_get(url, headers=None, timeout=None):
+        seen["url"], seen["headers"] = url, headers
+        return _Resp()
+
+    monkeypatch.setattr(S.requests, "get", fake_get)
+    cfg = {"base_url": "https://api.anthropic.com/v1", "api_key": "sk-ant",
+           "protocol": "anthropic", "model_filter": None}
+    models = S._fetch_provider_models("anthropic", cfg, 5)
+    assert [m["_route"] for m in models] == [("anthropic", "claude-opus-5-5")]
+    assert seen["url"] == "https://api.anthropic.com/v1/models?limit=1000"
+    assert seen["headers"]["x-api-key"] == "sk-ant"
+    assert seen["headers"]["anthropic-version"]
+    assert "Authorization" not in seen["headers"]
