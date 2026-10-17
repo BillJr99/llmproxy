@@ -775,6 +775,11 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
                       "protocol", "free_allowance"):
             if prov.get(field):
                 block[field] = prov[field]
+        # A provider offering a protocol choice shows its default (the first
+        # choice), which is what the wizard writes when Enter is pressed.
+        choices = prov.get("protocol_choices") or []
+        if not prov.get("protocol") and choices and choices[0] != "openai":
+            block["protocol"] = choices[0]
         # A per-provider note (e.g. auth/credential gotchas) surfaces in the
         # example as a leading "_note" key, mirroring the top-level convention.
         if prov.get("_note"):

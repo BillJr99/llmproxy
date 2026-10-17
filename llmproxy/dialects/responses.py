@@ -35,9 +35,17 @@ import json
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 
-from .base import InboundAdapter, register_inbound, sse_event
+from ..config import provider_api_key
+from .base import (
+    InboundAdapter,
+    OutboundAdapter,
+    iter_sse_events,
+    register_inbound,
+    register_outbound,
+    sse_event,
+)
 
 # How many conversations the store keeps is a property of the storage now, and
 # lives with it in state.py as MAX_STORED_RESPONSES, so the cap and the thing it
@@ -811,3 +819,333 @@ class ResponsesInbound(InboundAdapter):
 
 
 register_inbound(ResponsesInbound())
+
+
+# ---------------------------------------------------------------------------
+# Outbound: canonical OpenAI chat  ->  a Responses-API upstream
+# ---------------------------------------------------------------------------
+#
+# The reverse of everything above. Some upstream models answer only on
+# ``POST /v1/responses`` (OpenAI's -pro reasoning models and its *-codex line),
+# so a provider with ``"protocol": "responses"``
+# gets its canonical chat request rewritten into a Response request, and the
+# Response (or its typed event stream) parsed back into canonical chat. The
+# request is sent with ``store: false``: llmproxy already carries the full
+# transcript in every request, so nothing needs to live upstream.
+
+# Canonical keys that carry over to a Responses request unchanged.
+_OUTBOUND_PASSTHROUGH_KEYS = (
+    "model", "temperature", "top_p", "parallel_tool_calls", "user", "metadata",
+    "service_tier", "prompt_cache_key", "safety_identifier", "top_logprobs",
+)
+
+
+def _canonical_content_to_input_parts(content, role: str):
+    """Canonical chat content -> Responses message content.
+
+    Plain text stays a string (the "easy" input message form, valid for every
+    role). A parts list keeps images: ``image_url`` parts become
+    ``input_image`` and text parts ``input_text`` (``output_text`` for an
+    assistant turn, which is the only part type the API accepts there).
+    """
+    if not isinstance(content, list):
+        return "" if content is None else (content if isinstance(content, str) else str(content))
+    text_type = "output_text" if role == "assistant" else "input_text"
+    parts: list[dict] = []
+    for part in content:
+        if isinstance(part, str):
+            parts.append({"type": text_type, "text": part})
+            continue
+        if not isinstance(part, dict):
+            continue
+        ptype = part.get("type")
+        if ptype == "image_url" or "image_url" in part:
+            image = part.get("image_url")
+            url = image.get("url") if isinstance(image, dict) else image
+            item: dict = {"type": "input_image", "image_url": url or ""}
+            if isinstance(image, dict) and image.get("detail"):
+                item["detail"] = image["detail"]
+            parts.append(item)
+        elif ptype in ("text", "input_text", "output_text"):
+            parts.append({"type": text_type, "text": part.get("text", "")})
+    if all(p.get("type") == text_type for p in parts):
+        return "".join(p.get("text", "") for p in parts)
+    return parts
+
+
+def _canonical_messages_to_input(messages) -> tuple[str, list[dict]]:
+    """Canonical chat ``messages`` -> ``(instructions, input items)``.
+
+    System and developer turns are joined into ``instructions``; assistant tool
+    calls become ``function_call`` items and ``tool`` turns become
+    ``function_call_output`` items, keyed by the same call id.
+    """
+    instructions: list[str] = []
+    items: list[dict] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        content = msg.get("content")
+        if role in ("system", "developer"):
+            text = _content_to_text(content) if isinstance(content, list) else (content or "")
+            if text:
+                instructions.append(text)
+        elif role == "tool":
+            output = content if isinstance(content, str) else _content_to_text(content)
+            items.append({
+                "type": "function_call_output",
+                "call_id": msg.get("tool_call_id", ""),
+                "output": output or "",
+            })
+        elif role == "assistant":
+            converted = _canonical_content_to_input_parts(content, "assistant")
+            if converted:
+                items.append({"role": "assistant", "content": converted})
+            for call in msg.get("tool_calls") or []:
+                if not isinstance(call, dict):
+                    continue
+                fn = call.get("function") or {}
+                items.append({
+                    "type": "function_call",
+                    "call_id": call.get("id", ""),
+                    "name": fn.get("name", ""),
+                    "arguments": fn.get("arguments") or "{}",
+                })
+        else:
+            items.append({
+                "role": "user",
+                "content": _canonical_content_to_input_parts(content, "user"),
+            })
+    return "\n\n".join(instructions), items
+
+
+def _canonical_tools_to_responses(tools) -> list[dict]:
+    """Chat ``{type: function, function: {...}}`` tools -> flat Responses tools."""
+    out: list[dict] = []
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
+            fn = tool["function"]
+            flat: dict = {"type": "function", "name": fn.get("name", "")}
+            for key in ("description", "parameters", "strict"):
+                if key in fn:
+                    flat[key] = fn[key]
+            out.append(flat)
+        else:
+            out.append(tool)  # already Responses-shaped (or a built-in tool)
+    return out
+
+
+def _canonical_tool_choice_to_responses(choice):
+    if isinstance(choice, dict) and choice.get("type") == "function":
+        name = (choice.get("function") or {}).get("name") or choice.get("name", "")
+        return {"type": "function", "name": name}
+    return choice
+
+
+def _canonical_to_responses_request(payload: dict) -> dict:
+    """Canonical OpenAI chat request -> a ``POST /v1/responses`` body."""
+    instructions, items = _canonical_messages_to_input(payload.get("messages"))
+    body: dict = {k: payload[k] for k in _OUTBOUND_PASSTHROUGH_KEYS if k in payload}
+    body["input"] = items
+    if instructions:
+        body["instructions"] = instructions
+    body["store"] = False
+    if payload.get("stream"):
+        body["stream"] = True
+    max_out = payload.get("max_completion_tokens", payload.get("max_tokens"))
+    if max_out is not None:
+        body["max_output_tokens"] = max_out
+    if payload.get("reasoning_effort"):
+        body["reasoning"] = {"effort": payload["reasoning_effort"]}
+    elif isinstance(payload.get("reasoning"), dict):
+        body["reasoning"] = payload["reasoning"]
+    if payload.get("tools"):
+        body["tools"] = _canonical_tools_to_responses(payload["tools"])
+    if "tool_choice" in payload:
+        body["tool_choice"] = _canonical_tool_choice_to_responses(payload["tool_choice"])
+    rf = payload.get("response_format")
+    if isinstance(rf, dict):
+        if rf.get("type") == "json_schema" and isinstance(rf.get("json_schema"), dict):
+            body["text"] = {"format": {"type": "json_schema", **rf["json_schema"]}}
+        elif rf.get("type") in ("json_object", "text"):
+            body["text"] = {"format": {"type": rf["type"]}}
+    return body
+
+
+def _responses_usage_to_canonical(usage) -> dict | None:
+    """Responses counter names -> chat usage."""
+    if not isinstance(usage, dict):
+        return None
+    prompt = usage.get("input_tokens", 0) or 0
+    completion = usage.get("output_tokens", 0) or 0
+    out: dict = {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": usage.get("total_tokens") or prompt + completion,
+    }
+    details = usage.get("input_tokens_details")
+    if isinstance(details, dict) and details.get("cached_tokens") is not None:
+        out["prompt_tokens_details"] = {"cached_tokens": details["cached_tokens"]}
+    out_details = usage.get("output_tokens_details")
+    if isinstance(out_details, dict) and out_details.get("reasoning_tokens") is not None:
+        out["completion_tokens_details"] = {"reasoning_tokens": out_details["reasoning_tokens"]}
+    return out
+
+
+def _responses_finish_reason(data: dict, has_calls: bool) -> str:
+    if has_calls:
+        return "tool_calls"
+    if data.get("status") == "incomplete":
+        reason = (data.get("incomplete_details") or {}).get("reason")
+        return "content_filter" if reason == "content_filter" else "length"
+    return "stop"
+
+
+def _responses_response_to_canonical(data: dict) -> dict:
+    """A Response object -> a canonical chat completion."""
+    text_parts: list[str] = []
+    refusal: list[str] = []
+    calls: list[dict] = []
+    for item in data.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        itype = item.get("type")
+        if itype == "message":
+            for part in item.get("content") or []:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "output_text":
+                    text_parts.append(part.get("text", ""))
+                elif part.get("type") == "refusal":
+                    refusal.append(part.get("refusal", ""))
+        elif itype == "function_call":
+            calls.append({
+                "id": item.get("call_id") or item.get("id", ""),
+                "type": "function",
+                "function": {"name": item.get("name", ""),
+                             "arguments": item.get("arguments") or "{}"},
+            })
+        # reasoning items carry no user-visible text in the chat schema
+    message: dict = {"role": "assistant", "content": "".join(text_parts) or None}
+    if calls:
+        message["tool_calls"] = calls
+    if refusal:
+        message["refusal"] = "".join(refusal)
+    out: dict = {
+        "id": data.get("id", _new_id("resp")),
+        "object": "chat.completion",
+        "created": data.get("created_at") or int(time.time()),
+        "model": data.get("model", ""),
+        "choices": [{
+            "index": 0,
+            "message": message,
+            "finish_reason": _responses_finish_reason(data, bool(calls)),
+        }],
+    }
+    usage = _responses_usage_to_canonical(data.get("usage"))
+    if usage:
+        out["usage"] = usage
+    return out
+
+
+def _chunk(model: str, delta: dict, finish=None) -> dict:
+    return {"object": "chat.completion.chunk", "model": model,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+
+
+class ResponsesOutbound(OutboundAdapter):
+    """Canonical OpenAI chat out to a ``POST {base_url}/responses`` upstream.
+
+    Only chat is rewritten. A Responses upstream is still an OpenAI-shaped API,
+    so every other endpoint (``embeddings``, the legacy ``completions`` probe)
+    is forwarded to ``{base_url}/{endpoint}`` untouched, exactly as the
+    ``openai`` protocol would, and its reply is left as is. That is what lets a
+    single ``openai`` provider set ``"protocol": "responses"`` without losing
+    embeddings.
+    """
+
+    name = "responses"
+
+    def build_request(self, endpoint, base_url, provider_cfg, payload, *, stream, forwarded_headers):
+        headers = {"Content-Type": "application/json", **(forwarded_headers or {})}
+        api_key = provider_api_key(provider_cfg)
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if endpoint != "chat/completions":
+            return f"{base_url}/{endpoint}", headers, payload
+        return f"{base_url}/responses", headers, _canonical_to_responses_request(payload)
+
+    def translate_response(self, content: bytes) -> bytes:
+        try:
+            data = json.loads(content)
+        except (ValueError, TypeError):
+            return content
+        # Only a Response object is translated. Error bodies, and the replies
+        # of endpoints forwarded untouched (an embeddings list, a legacy
+        # text_completion), carry no ``output`` array and pass through as is.
+        if not isinstance(data, dict) or not isinstance(data.get("output"), list):
+            return content
+        return json.dumps(_responses_response_to_canonical(data)).encode("utf-8")
+
+    def parse_stream(self, byte_iter: Iterable[bytes]) -> Iterator[dict | None]:
+        model = ""
+        started = False
+        item_tool: dict[int, int] = {}   # Responses output_index -> chat tool index
+        final: dict | None = None
+        for event, data in iter_sse_events(byte_iter):
+            try:
+                obj = json.loads(data)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(obj, dict):
+                continue
+            etype = obj.get("type") or event
+            if etype in ("response.created", "response.in_progress"):
+                model = (obj.get("response") or {}).get("model", model) or model
+                if not started:
+                    started = True
+                    yield _chunk(model, {"role": "assistant"})
+            elif etype == "response.output_text.delta":
+                yield _chunk(model, {"content": obj.get("delta", "")})
+            elif etype == "response.refusal.delta":
+                yield _chunk(model, {"refusal": obj.get("delta", "")})
+            elif etype == "response.output_item.added":
+                item = obj.get("item") or {}
+                if item.get("type") == "function_call":
+                    idx = len(item_tool)
+                    item_tool[obj.get("output_index", idx)] = idx
+                    yield _chunk(model, {"tool_calls": [{
+                        "index": idx,
+                        "id": item.get("call_id") or item.get("id", ""),
+                        "type": "function",
+                        "function": {"name": item.get("name", ""),
+                                     "arguments": item.get("arguments") or ""},
+                    }]})
+            elif etype == "response.function_call_arguments.delta":
+                idx = item_tool.get(obj.get("output_index", 0), 0)
+                yield _chunk(model, {"tool_calls": [{
+                    "index": idx, "function": {"arguments": obj.get("delta", "")}}]})
+            elif etype in ("response.completed", "response.incomplete"):
+                final = obj.get("response") or {}
+                break
+            elif etype in ("response.failed", "error"):
+                err = (obj.get("response") or {}).get("error") or obj.get("error") or obj
+                message = err.get("message") if isinstance(err, dict) else None
+                yield {"error": {"message": message or "Upstream Responses stream failed.",
+                                 "type": "upstream_error"}}
+                final = obj.get("response") or {}
+                break
+        final = final or {}
+        model = final.get("model") or model
+        last = _chunk(model, {}, _responses_finish_reason(final, bool(item_tool)))
+        usage = _responses_usage_to_canonical(final.get("usage"))
+        if usage:
+            last["usage"] = usage
+        yield last
+        yield None
+
+
+register_outbound(ResponsesOutbound())

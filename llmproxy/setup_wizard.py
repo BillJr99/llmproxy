@@ -427,8 +427,16 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
         cfg["models_keep_task"] = tmpl["models_keep_task"]
     # Non-OpenAI upstreams (native Anthropic Messages, Gemini generateContent)
     # carry a protocol so the proxy translates requests/responses for them.
-    if tmpl.get("protocol") and tmpl["protocol"] != "openai":
-        cfg["protocol"] = tmpl["protocol"]
+    protocol = tmpl.get("protocol")
+    choices = tmpl.get("protocol_choices") or []
+    if len(choices) > 1:
+        # One provider, several APIs on the same key (OpenAI: chat/completions
+        # or Responses): ask once instead of shipping a template per protocol.
+        print()
+        idx = _pick(choices, label=f"Protocol (Enter for {choices[0]})")
+        protocol = choices[idx] if idx is not None else choices[0]
+    if protocol and protocol != "openai":
+        cfg["protocol"] = protocol
     # A provider-wide free quota only counts once it is on the config entry,
     # which is where the loadbalanced virtual looks for it.
     if tmpl.get("free_allowance"):

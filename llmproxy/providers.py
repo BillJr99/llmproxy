@@ -44,6 +44,11 @@ _TEMPLATE_FIELDS = frozenset({
     "models_keep_task",
     # Upstream dialect for non-OpenAI-compatible providers (anthropic/gemini).
     "protocol",
+    # Protocols a provider can be reached over, offered as a choice when it is
+    # added (OpenAI: chat/completions or the Responses API, same key). The
+    # first entry is the default; it never lands on the config entry itself,
+    # only the protocol picked from it does.
+    "protocol_choices",
     # Provider-wide free quota. It is a template field rather than free-tier
     # metadata because it has to reach the config entry to do anything: the
     # loadbalanced virtual reads it off the provider block, not off this file.

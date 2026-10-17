@@ -59,7 +59,8 @@
     "chutes",
     "meta-llama",
     "anthropic",
-    "gemini"
+    "gemini",
+    "jetstream2"
   ],
   "providers": {
     "openai": {
@@ -69,7 +70,12 @@
       "key_hint": "Get your API key at platform.openai.com/api-keys (paid \u2014 no free tier)",
       "believed_free": [],
       "model_reasoning": {},
-      "free_limits": {}
+      "free_limits": {},
+      "protocol_choices": [
+        "responses",
+        "openai"
+      ],
+      "_note": "One entry for OpenAI, reached over either API the same key serves. 'responses' (the default) sends POST /v1/responses, which every current OpenAI chat model answers, and is the only API the -pro reasoning models (gpt-5.5-pro, gpt-5.4-pro, gpt-5.2-pro) and the deprecated *-codex line accept; 'openai' sends chat/completions instead. llmproxy translates chat \u21c4 Responses (function tools, images, reasoning_effort, response_format, streaming) and sends store=false, since it carries the whole transcript itself; embeddings and other non-chat endpoints are forwarded unchanged under either protocol. The setup wizard and the admin page ask which one to use; add a second entry under another name if you want both at once."
     },
     "nous": {
       "display": "Nous Research (Hermes)",
@@ -23079,12 +23085,12 @@
       "key_required": true,
       "key_hint": "Get your API key at console.anthropic.com (paid \u2014 no free tier)",
       "protocol": "anthropic",
-      "_note": "Reached over Anthropic's native Messages API (x-api-key + anthropic-version). llmproxy translates OpenAI \u21c4 Anthropic, so OpenAI clients can call Claude and Anthropic clients (/v1/messages) can call any provider. Models are advertised from model_filter (no OpenAI-shaped /models endpoint).",
+      "_note": "Reached over Anthropic's native Messages API (x-api-key + anthropic-version). llmproxy translates OpenAI \u21c4 Anthropic, so OpenAI clients can call Claude and Anthropic clients (/v1/messages) can call any provider. Models are discovered from GET /v1/models, which llmproxy calls with x-api-key + anthropic-version (it rejects a Bearer key), so model_filter is optional: leave it null to list every Claude model the key can reach, or keep a list to pin a subset.",
       "example_model_filter": [
-        "claude-opus-4-8",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5",
-        "claude-fable-5"
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
+        "claude-haiku-5-5",
+        "claude-fable-5-1"
       ],
       "believed_free": [],
       "model_reasoning": {},
@@ -23100,6 +23106,22 @@
       "example_model_filter": [
         "gemini-2.5-pro",
         "gemini-2.5-flash"
+      ],
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {}
+    },
+    "jetstream2": {
+      "display": "Jetstream2 Inference Service (IU / NSF ACCESS)",
+      "base_url": "https://llm.jetstream-cloud.org/api",
+      "key_required": true,
+      "key_hint": "Sign in to llm.jetstream-cloud.org with your ACCESS account, then your name (lower left) \u2192 Settings \u2192 Account \u2192 API keys \u2192 create a secret key",
+      "_note": "The Open WebUI proxy in front of Jetstream2's hosted models, which is the route reachable from the open internet: chat at /api/chat/completions and the catalog at /api/models (Open WebUI's {\"data\": [...]} shape), with Authorization: Bearer <Open WebUI key>. The per-model vLLM/SGLang routes (https://llm.jetstream-cloud.org/<model>/v1) need no key but answer 401 'Access restricted to Jetstream2 and IU Research Cloud networks' from anywhere else; use one of those as base_url only from a Jetstream2 instance or through a tunnel. Models documented October 2026 (docs.jetstream-cloud.org/inference-service): gpt-oss-120b (128K), muse-glimmer (512K), qwen-3.8-27b (256K), gemma-4-31b-it (256K). The service is free to anyone with an ACCESS account, but no published rate limits were found, so nothing is claimed in believed_free or free_limits. The model_filter pins the four documented models because Open WebUI's catalog can also list workspace presets and pipes that are not plain models.",
+      "example_model_filter": [
+        "gpt-oss-120b",
+        "muse-glimmer",
+        "qwen-3.8-27b",
+        "gemma-4-31b-it"
       ],
       "believed_free": [],
       "model_reasoning": {},

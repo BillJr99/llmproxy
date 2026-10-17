@@ -360,6 +360,7 @@ function renderTemplateExtra() {
   if (!t) return;
   if (t.account_id_required) box.innerHTML += `<label>${esc(t.account_id_label || "Account ID")}</label><input type="text" id="tpl-account_id" placeholder="${esc(t.account_id_hint||"")}" />`;
   if (t.gateway_id_required) box.innerHTML += `<label>${esc(t.gateway_id_label || "Gateway ID")}</label><input type="text" id="tpl-gateway_id" placeholder="${esc(t.gateway_id_hint||"")}" />`;
+  if (Array.isArray(t.protocol_choices) && t.protocol_choices.length > 1) box.innerHTML += `<label>Protocol</label><select id="tpl-protocol">${t.protocol_choices.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>`;
   if (t.key_hint) box.innerHTML += `<p class="muted">${esc(t.key_hint)}</p>`;
 }
 $("#tpl-select").addEventListener("change", renderTemplateExtra);
@@ -368,6 +369,7 @@ $("#tpl-add").addEventListener("click", async () => {
   const body = { template_key: t.key, name: $("#tpl-name").value.trim(), api_key: $("#tpl-key").value.trim() };
   if (t.account_id_required) body.account_id = ($("#tpl-account_id")||{}).value || "";
   if (t.gateway_id_required) body.gateway_id = ($("#tpl-gateway_id")||{}).value || "";
+  if ($("#tpl-protocol")) body.protocol = $("#tpl-protocol").value;
   try { await api("/providers/from-template", { method: "POST", body: JSON.stringify(body) }); toast("Provider added"); $("#tpl-name").value=""; $("#tpl-key").value=""; loadProviders(); }
   catch (e) { toast(e.message, true); }
 });
@@ -415,6 +417,7 @@ function renderProviderCard(name, p, isNew) {
       <option value="anthropic" ${proto==="anthropic"?"selected":""}>anthropic — native Messages API</option>
       <option value="gemini" ${proto==="gemini"?"selected":""}>gemini — native generateContent</option>
       <option value="typesafe" ${proto==="typesafe"?"selected":""}>typesafe — Jev decisions for structured chat</option>
+      <option value="responses" ${proto==="responses"?"selected":""}>responses — OpenAI Responses API (/v1/responses)</option>
     </select>
     <label class="switch" style="margin-top:12px"><input type="checkbox" data-f="expose_to_virtual_models" ${p.expose_to_virtual_models===false?"":"checked"} /> Expose to virtual endpoints</label>
     <div class="actions">

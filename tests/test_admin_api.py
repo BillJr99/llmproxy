@@ -586,3 +586,23 @@ def test_put_maintenance_token_env_ref_flagged(client):
     resp = client.put("/admin/api/maintenance", json={"pr_providers_token": "${GH_PR_TOKEN}"})
     m = resp.get_json()["maintenance"]
     assert m["pr_providers_token_is_env"] is True
+
+
+def test_from_template_takes_a_protocol_choice(client, cfg_path):
+    resp = client.post("/admin/api/providers/from-template", json={
+        "template_key": "openai", "name": "oai-chat", "api_key": "k", "protocol": "openai",
+    })
+    assert resp.status_code == 201
+    assert "protocol" not in _read_config(cfg_path)["providers"]["oai-chat"]
+    resp = client.post("/admin/api/providers/from-template", json={
+        "template_key": "openai", "name": "oai-resp", "api_key": "k", "protocol": "responses",
+    })
+    assert resp.status_code == 201
+    assert _read_config(cfg_path)["providers"]["oai-resp"]["protocol"] == "responses"
+
+
+def test_from_template_rejects_a_protocol_the_template_does_not_offer(client):
+    resp = client.post("/admin/api/providers/from-template", json={
+        "template_key": "openai", "name": "oai-bad", "api_key": "k", "protocol": "gemini",
+    })
+    assert resp.status_code == 400
