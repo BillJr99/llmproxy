@@ -6,6 +6,17 @@
       "api_key": "sk-...",
       "model_filter": null
     },
+    "openai-responses": {
+      "_note": "The same OpenAI account as the 'openai' provider, reached over the Responses API (POST /v1/responses) instead of chat/completions. Use it for the OpenAI models that answer only there: the -pro reasoning models (gpt-5.5-pro, gpt-5.4-pro, gpt-5.2-pro) and the Codex-tuned *-codex line, which OpenAI's model list marks deprecated as of October 2026. Everything else is better served by the plain 'openai' entry. llmproxy translates chat \u21c4 Responses (function tools, images, reasoning_effort, response_format) and sends store=false, because it carries the whole transcript itself. GET /v1/models works with the Bearer key, so discovery runs and model_filter narrows the full OpenAI catalog to the Responses-only models.",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "...",
+      "model_filter": [
+        "gpt-5.5-pro",
+        "gpt-5.4-pro",
+        "gpt-5.2-pro"
+      ],
+      "protocol": "responses"
+    },
     "nous": {
       "base_url": "https://inference-api.nousresearch.com/v1",
       "api_key": "...",
@@ -286,10 +297,10 @@
       "base_url": "https://api.anthropic.com/v1",
       "api_key": "...",
       "model_filter": [
-        "claude-opus-4-8",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5",
-        "claude-fable-5"
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
+        "claude-haiku-5-5",
+        "claude-fable-5-1"
       ],
       "protocol": "anthropic"
     },
@@ -302,6 +313,17 @@
         "gemini-2.5-flash"
       ],
       "protocol": "gemini"
+    },
+    "jetstream2": {
+      "_note": "The Open WebUI proxy in front of Jetstream2's hosted models, which is the route reachable from the open internet: chat at /api/chat/completions and the catalog at /api/models (Open WebUI's {\"data\": [...]} shape), with Authorization: Bearer <Open WebUI key>. The per-model vLLM/SGLang routes (https://llm.jetstream-cloud.org/<model>/v1) need no key but answer 401 'Access restricted to Jetstream2 and IU Research Cloud networks' from anywhere else; use one of those as base_url only from a Jetstream2 instance or through a tunnel. Models documented October 2026 (docs.jetstream-cloud.org/inference-service): gpt-oss-120b (128K), muse-glimmer (512K), qwen-3.8-27b (256K), gemma-4-31b-it (256K). The service is free to anyone with an ACCESS account, but no published rate limits were found, so nothing is claimed in believed_free or free_limits. The model_filter pins the four documented models because Open WebUI's catalog can also list workspace presets and pipes that are not plain models.",
+      "base_url": "https://llm.jetstream-cloud.org/api",
+      "api_key": "...",
+      "model_filter": [
+        "gpt-oss-120b",
+        "muse-glimmer",
+        "qwen-3.8-27b",
+        "gemma-4-31b-it"
+      ]
     },
     "ollama": {
       "base_url": "http://localhost:11434/v1",
