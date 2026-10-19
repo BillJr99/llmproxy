@@ -348,7 +348,8 @@ eligible backend is available.
 `llmproxy/local` (also accepted: the `llmproxy/local` slash form) pools every model whose provider
 `base_url` hostname is a loopback address (`localhost`, `127.x.x.x`, `::1`,
 `0.0.0.0`), an mDNS name (`*.local`), or a Docker host-gateway alias
-(`host.docker.internal`, `gateway.docker.internal`). It uses random-start cycling
+(`host.docker.internal`, `gateway.docker.internal`, `model-runner.docker.internal`).
+It uses random-start cycling
 with the [shared failover rules](#how-cycling--failover-works) — useful for clients
 that want whichever local model (Ollama, LM Studio, llama.cpp, etc.) happens to be
 running without hard-coding a name.
@@ -375,6 +376,28 @@ successfully.
 > `routing_metadata.json`, not to `config.json`. If you want a local model to
 > also appear under `llmproxy/free`, add it to `believed_free` by hand, through
 > the admin UI.
+
+#### Docker Model Runner
+
+`llmproxy --setup` → **Quick setup from template** → **Docker Model Runner
+(local)** asks for the base URL (Enter keeps `http://localhost:12434/engines/v1`)
+and an optional API key (Enter for none). Enable the runner's host port and pull
+a model first:
+
+```bash
+docker desktop enable model-runner --tcp 12434   # Docker Desktop
+# Docker Engine on Linux: install the docker-model-plugin package instead
+docker model pull ai/llama3.2
+curl http://localhost:12434/engines/v1/models
+```
+
+When llmproxy itself runs in a container (`docker-compose`), use
+`http://model-runner.docker.internal/engines/v1` as the base URL. Docker names
+its models with a namespace (`ai/llama3.2`, `hf.co/...`); those namespaces count
+as locally served, so the models are tagged with a reasoning level and join the
+`llmproxy/<level>__local` families as well as `llmproxy/local`. Other `/` ids a
+local server lists (an OpenWebUI passthrough such as `openai/gpt-4o`) are still
+skipped.
 
 ### Request-fit triage (every `*/free` and `*/local` virtual)
 
@@ -4036,6 +4059,7 @@ The wizard currently offers ready-made templates for these providers:
 | Meta Llama API                             | `meta-llama`            | `https://api.llama.com/compat/v1`                                              |
 | Anthropic (Claude, native Messages API)    | `anthropic`             | `https://api.anthropic.com/v1`                                                 |
 | Google Gemini (native generateContent)     | `gemini`                | `https://generativelanguage.googleapis.com/v1beta`                             |
+| Docker Model Runner (local)                | `docker-model-runner`   | `http://localhost:12434/engines/v1` (editable)                                 |
 
 > **API keys.** Most providers in this table require an API key, and the setup
 > wizard displays a hint showing where to obtain each one. The exceptions are
@@ -4043,9 +4067,11 @@ The wizard currently offers ready-made templates for these providers:
 > anonymous tier — leave the key blank (OVHcloud accepts an optional key for
 > higher limits). **Anthropic** and **Google Gemini (native)** are not
 > OpenAI-compatible; their templates set `protocol` so llmproxy translates to
-> the upstream Messages / generateContent API. For keyless local access (e.g. a
-> local Ollama instance), use the manual "Add / edit a provider" option in the
-> wizard.
+> the upstream Messages / generateContent API. **Docker Model Runner** is local:
+> the wizard asks for its base URL (Enter keeps the localhost default) and an
+> optional key (Enter for none); see [Docker Model Runner](#docker-model-runner)
+> for enabling it. For other keyless local servers (e.g. a local Ollama
+> instance), use the manual "Add / edit a provider" option in the wizard.
 
 > **Retired providers.** **GitHub Models** (`github`,
 > `https://models.github.ai/inference`) was retired by GitHub on 30 July 2026 and

@@ -74,3 +74,21 @@ def test_unreachable_provider_returns_false():
 
     assert changed is False
     assert config == {"believed_free": [], "model_reasoning": {}}
+
+
+def test_docker_namespaced_models_are_registered():
+    """Docker Model Runner lists every model under a namespace (ai/...,
+    hf.co/...); those are served locally and must be registered, while a
+    vendor-prefixed passthrough on the same listing is still skipped."""
+    config: dict = {"believed_free": [], "model_reasoning": {}}
+    provider_cfg = {"base_url": "http://localhost:12434/engines/v1", "api_key": ""}
+
+    with patch("llmproxy.setup_wizard._requests.get",
+               return_value=_fake_models_response(
+                   ["ai/llama3.2", "hf.co/bartowski/qwen", "openai/gpt-4o"])):
+        _auto_register_local_models("docker-model-runner", provider_cfg, config)
+
+    assert "docker-model-runner/ai/llama3.2" in config["model_reasoning"]
+    assert "docker-model-runner/hf.co/bartowski/qwen" in config["model_reasoning"]
+    assert "docker-model-runner/openai/gpt-4o" not in config["model_reasoning"]
+    assert config["believed_free"] == []

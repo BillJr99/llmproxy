@@ -29,6 +29,7 @@ from .providers import (
 from .providers import (
     get_provider_free_info,
     get_provider_templates,
+    is_local_native_model_id,
 )
 from .providers import (
     infer_reasoning_level as _infer_reasoning_level,
@@ -60,6 +61,7 @@ def _is_local_url(base_url: str) -> bool:
       - loopback: localhost, 127.x.x.x, ::1, 0.0.0.0
       - mDNS / Bonjour: *.local
       - Docker host routing: host.docker.internal, gateway.docker.internal
+      - Docker Model Runner from a container: model-runner.docker.internal
     """
     import urllib.parse
     try:
@@ -69,7 +71,8 @@ def _is_local_url(base_url: str) -> bool:
     hostname = hostname.strip("[]").lower()
     return (
         hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0",
-                     "host.docker.internal", "gateway.docker.internal")
+                     "host.docker.internal", "gateway.docker.internal",
+                     "model-runner.docker.internal")
         or hostname.startswith("127.")
         or hostname.endswith(".local")
     )
@@ -352,6 +355,11 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
             return None
 
     base_url = tmpl["base_url"]
+
+    # Servers whose address depends on the install (Docker Model Runner on the
+    # host vs. inside a container) offer the template URL as an editable default.
+    if tmpl.get("url_prompt"):
+        base_url = _prompt("Base URL", default=base_url) or base_url
 
     # Some templates require an account ID to be substituted into the URL.
     if tmpl.get("account_id_required"):
@@ -849,8 +857,9 @@ def _auto_register_local_models(provider_key: str, provider_cfg: dict, config: d
     the provider's base_url hostname, so the "free" axis is irrelevant for
     them.  See README → "The `local` virtual model".
 
-    Only models whose ID contains no '/' are considered locally-native.
-    Models with '/' (e.g. openai/gpt-4o piped through OpenWebUI) are skipped.
+    Only locally-native models are considered: unprefixed IDs, or a runner
+    namespace such as Docker Model Runner's ai/llama3.2. Other '/' IDs (e.g.
+    openai/gpt-4o piped through OpenWebUI) are skipped.
     Returns True if the config was modified.
     """
     base_url = provider_cfg.get("base_url", "").rstrip("/")
@@ -872,7 +881,7 @@ def _auto_register_local_models(provider_key: str, provider_cfg: dict, config: d
 
     added_reasoning = 0
     for model_id in raw_models:
-        if not model_id or "/" in model_id:
+        if not is_local_native_model_id(model_id):
             continue
         qualified = f"{provider_key}/{model_id}"
         if qualified not in existing_mr:

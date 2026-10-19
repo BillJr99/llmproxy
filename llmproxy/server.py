@@ -120,6 +120,7 @@ from .providers import (
     REASONING_LEVELS,
     capabilities_from_listing,
     get_provider_free_info,
+    is_local_native_model_id,
 )
 from .signals import (
     SOURCE_NEUTRAL,
@@ -2582,7 +2583,8 @@ def _sync_local_provider_models_once() -> None:
 
     Behaviour:
       - Models with "/" in their ID are skipped (they are externally namespaced
-        passthroughs like 'openai/gpt-4o' piped through OpenWebUI).
+        passthroughs like 'openai/gpt-4o' piped through OpenWebUI), unless the
+        prefix is a local runner namespace (Docker Model Runner's 'ai/...').
       - Models no longer returned by a local provider are pruned from
         model_reasoning.
       - As a one-time cleanup, any pre-existing believed_free / free_limits
@@ -2649,9 +2651,9 @@ def _sync_local_provider_models_once() -> None:
                 logger.warning("[local-sync] Could not reach '%s': %s", provider_key, exc)
                 continue
 
-            # Compute expected set for this provider (unprefixed only)
+            # Compute expected set for this provider (locally-native ids only)
             prefix = f"{provider_key}/"
-            expected = {f"{prefix}{mid}" for mid in live_ids if mid and "/" not in mid}
+            expected = {f"{prefix}{mid}" for mid in live_ids if is_local_native_model_id(mid)}
 
             # Prune ALL believed_free entries for this provider — local models
             # never belong here (one-time cleanup for historically polluted configs).
@@ -9220,6 +9222,7 @@ def _is_local_url(base_url: str) -> bool:
       - loopback: localhost, 127.x.x.x, ::1, 0.0.0.0
       - mDNS / Bonjour: *.local
       - Docker host routing: host.docker.internal, gateway.docker.internal
+      - Docker Model Runner from a container: model-runner.docker.internal
     """
     try:
         hostname = urllib.parse.urlparse(base_url).hostname or ""
@@ -9228,7 +9231,8 @@ def _is_local_url(base_url: str) -> bool:
     hostname = hostname.strip("[]").lower()
     return (
         hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0",
-                     "host.docker.internal", "gateway.docker.internal")
+                     "host.docker.internal", "gateway.docker.internal",
+                     "model-runner.docker.internal")
         or hostname.startswith("127.")
         or hostname.endswith(".local")
     )

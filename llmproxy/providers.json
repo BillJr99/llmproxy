@@ -60,7 +60,8 @@
     "meta-llama",
     "anthropic",
     "gemini",
-    "jetstream2"
+    "jetstream2",
+    "docker-model-runner"
   ],
   "providers": {
     "openai": {
@@ -23123,6 +23124,16 @@
         "qwen-3.8-27b",
         "gemma-4-31b-it"
       ],
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {}
+    },
+    "docker-model-runner": {
+      "display": "Docker Model Runner (local)",
+      "base_url": "http://localhost:12434/engines/v1",
+      "key_required": false,
+      "key_hint": "Leave blank for a default install. Enable the runner's host port first: docker desktop enable model-runner --tcp 12434 (Docker Engine on Linux: install docker-model-plugin). Inside a container, use http://model-runner.docker.internal/engines/v1.",
+      "url_prompt": true,
       "believed_free": [],
       "model_reasoning": {},
       "free_limits": {}
