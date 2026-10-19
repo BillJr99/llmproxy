@@ -4059,6 +4059,7 @@ The wizard currently offers ready-made templates for these providers:
 | Meta Llama API                             | `meta-llama`            | `https://api.llama.com/compat/v1`                                              |
 | Anthropic (Claude, native Messages API)    | `anthropic`             | `https://api.anthropic.com/v1`                                                 |
 | Google Gemini (native generateContent)     | `gemini`                | `https://generativelanguage.googleapis.com/v1beta`                             |
+| Docker Model Runner (local)                | `docker-model-runner`   | `http://localhost:12434/engines/v1` (editable)                                 |
 
 > **API keys.** Most providers in this table require an API key, and the setup
 > wizard displays a hint showing where to obtain each one. The exceptions are
@@ -4066,9 +4067,11 @@ The wizard currently offers ready-made templates for these providers:
 > anonymous tier — leave the key blank (OVHcloud accepts an optional key for
 > higher limits). **Anthropic** and **Google Gemini (native)** are not
 > OpenAI-compatible; their templates set `protocol` so llmproxy translates to
-> the upstream Messages / generateContent API. For keyless local access (e.g. a
-> local Ollama instance), use the manual "Add / edit a provider" option in the
-> wizard.
+> the upstream Messages / generateContent API. **Docker Model Runner** is local:
+> the wizard asks for its base URL (Enter keeps the localhost default) and an
+> optional key (Enter for none); see [Docker Model Runner](#docker-model-runner)
+> for enabling it. For other keyless local servers (e.g. a local Ollama
+> instance), use the manual "Add / edit a provider" option in the wizard.
 
 > **Retired providers.** **GitHub Models** (`github`,
 > `https://models.github.ai/inference`) was retired by GitHub on 30 July 2026 and

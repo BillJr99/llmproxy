@@ -29,11 +29,11 @@ from .providers import (
 from .providers import (
     get_provider_free_info,
     get_provider_templates,
+    is_local_native_model_id,
 )
 from .providers import (
     infer_reasoning_level as _infer_reasoning_level,
 )
-from .providers import is_local_native_model_id
 
 # ---------------------------------------------------------------------------
 # Provider templates and free-tier metadata
