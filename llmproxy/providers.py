@@ -58,6 +58,9 @@ _TEMPLATE_FIELDS = frozenset({
     # Same reason as free_allowance: it is only worth anything once it lands
     # on the config entry as model_filter.
     "example_model_filter",
+    # Ask for the base URL in the wizard, offering base_url as the default, for
+    # servers whose address varies by install (Docker Model Runner).
+    "url_prompt",
 })
 
 # Fields that belong to the free-tier metadata view.
@@ -184,6 +187,25 @@ _DEEP_KEYWORDS = (
 )
 
 _STANDARD_KEYWORDS = ("large", "medium", "mixtral", "70", "72", "32")
+
+
+# Namespaces a local runner uses for models it serves itself, as opposed to the
+# vendor-prefixed passthroughs a gateway such as OpenWebUI lists
+# (openai/gpt-4o). Docker Model Runner names every model this way
+# (ai/llama3.2, hf.co/bartowski/..., docker.io/ai/...).
+_LOCAL_MODEL_NAMESPACES = ("ai/", "hf.co/", "docker.io/")
+
+
+def is_local_native_model_id(model_id: str) -> bool:
+    """True when a model listed by a local provider is served by that provider.
+
+    Unprefixed ids (Ollama's llama3) always are; a '/' id is only when it
+    carries one of the runner namespaces above, since otherwise it is an
+    externally namespaced passthrough that is cloud-backed.
+    """
+    if not model_id:
+        return False
+    return "/" not in model_id or model_id.lower().startswith(_LOCAL_MODEL_NAMESPACES)
 
 
 def infer_reasoning_level(model_id: str) -> str:

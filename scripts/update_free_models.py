@@ -120,6 +120,7 @@ _PLACEHOLDER_KEYS: dict[str, str] = {
     "vercel": "vercel-...",
     "openrouter": "sk-or-...",
     "ollama": "ollama",
+    "docker-model-runner": "",
     "deepseek": "sk-...",
     "opencode-zen": "opencode-...",
     "together": "tgp_...",

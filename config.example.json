@@ -316,6 +316,11 @@
         "gemma-4-31b-it"
       ]
     },
+    "docker-model-runner": {
+      "base_url": "http://localhost:12434/engines/v1",
+      "api_key": "",
+      "model_filter": null
+    },
     "ollama": {
       "base_url": "http://localhost:11434/v1",
       "api_key": "ollama",

@@ -37,3 +37,28 @@ def test_account_id_required_templates_use_placeholder():
             assert "{account_id}" in t["base_url"]
         if t.get("gateway_id_required"):
             assert "{gateway_id}" in t["base_url"]
+
+
+def test_docker_model_runner_template_prompts_for_url_and_optional_key():
+    from llmproxy.setup_wizard import PROVIDER_TEMPLATES, _is_local_url
+    tmpl = next(t for t in PROVIDER_TEMPLATES if t["key"] == "docker-model-runner")
+    assert tmpl["base_url"] == "http://localhost:12434/engines/v1"
+    assert tmpl["url_prompt"] is True
+    assert not tmpl.get("key_required")
+    assert _is_local_url(tmpl["base_url"])
+    assert _is_local_url("http://model-runner.docker.internal/engines/v1")
+
+
+def test_url_prompt_template_takes_entered_url_and_blank_key(monkeypatch):
+    from llmproxy import setup_wizard as sw
+    idx = next(i for i, t in enumerate(sw.PROVIDER_TEMPLATES)
+               if t["key"] == "docker-model-runner")
+    answers = iter(["", "http://model-runner.docker.internal/engines/v1/"])
+    monkeypatch.setattr(sw, "_pick", lambda *a, **k: idx)
+    monkeypatch.setattr(sw, "_prompt", lambda label, default=None, secret=False:
+                        next(answers) or (default or ""))
+    monkeypatch.setattr(sw.getpass, "getpass", lambda *a, **k: "")
+    key, cfg = sw._setup_from_template({})
+    assert key == "docker-model-runner"
+    assert cfg["base_url"] == "http://model-runner.docker.internal/engines/v1"
+    assert cfg["api_key"] == ""
