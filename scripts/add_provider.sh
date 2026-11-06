@@ -111,6 +111,12 @@ BUILTIN = OrderedDict([
         "key_required": True,
         "key_hint": "Create an API key in the Xiaomi MiMo API Open Platform console at platform.xiaomimimo.com → API Keys (docs: mimo.mi.com/docs)",
     }),
+    ("openmathmodel", {
+        "display": "Open Math Model (Open Math OS)",
+        "base_url": "https://os.openmathmodel.org/v1",
+        "key_required": True,
+        "key_hint": "Use a team API key from Open Math OS at os.openmathmodel.org; keys look like nuc_ak_... and are issued per team (teams by application at openmathmodel.org).",
+    }),
 ])
 
 # Fields the wizard copies from a template onto the config entry.
