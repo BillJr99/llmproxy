@@ -193,6 +193,12 @@
       "api_key": "...",
       "model_filter": null
     },
+    "openmathmodel": {
+      "_note": "OpenAI-compatible API of Open Math OS (SAIR Foundation). GET /v1/models is key-gated: without a key it answers 401 JSON 'unauthenticated' ('Authentication token required'), and POST /v1/chat/completions without a key answers 401 asking for a team nuc_ak_ key, so default discovery with Bearer auth works and no models_url override is needed (verified November 2026). No model_filter is set because the live id list could not be confirmed without a key, and a filter that misses would register nothing.",
+      "base_url": "https://os.openmathmodel.org/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
     "huggingface": {
       "base_url": "https://router.huggingface.co/v1",
       "api_key": "hf_...",

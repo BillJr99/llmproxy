@@ -41,6 +41,7 @@
     "aion-labs",
     "agnes-ai",
     "xiaomi-mimo",
+    "openmathmodel",
     "huggingface",
     "xai",
     "cloudflare-ai-gateway",
@@ -10136,6 +10137,17 @@
           "vision"
         ]
       },
+      "free_limits": {}
+    },
+    "openmathmodel": {
+      "display": "Open Math Model (Open Math OS)",
+      "base_url": "https://os.openmathmodel.org/v1",
+      "key_required": true,
+      "key_hint": "Use a team API key from Open Math OS at os.openmathmodel.org; keys look like nuc_ak_... and are issued per team (teams by application at openmathmodel.org).",
+      "_note": "OpenAI-compatible API of Open Math OS (SAIR Foundation). GET /v1/models is key-gated: without a key it answers 401 JSON 'unauthenticated' ('Authentication token required'), and POST /v1/chat/completions without a key answers 401 asking for a team nuc_ak_ key, so default discovery with Bearer auth works and no models_url override is needed (verified November 2026). No model_filter is set because the live id list could not be confirmed without a key, and a filter that misses would register nothing.",
+      "believed_free": [],
+      "model_reasoning": {},
+      "model_capabilities": {},
       "free_limits": {}
     },
     "huggingface": {
