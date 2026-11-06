@@ -519,6 +519,28 @@ def test_provider_models_discovery(monkeypatch, cfg_path):
     assert resp.get_json()["models"] == ["openai__gpt-4o", "openai__gpt-4o-mini"]
 
 
+def test_test_connection_with_no_models_is_not_an_error(monkeypatch, cfg_path):
+    """Connected but empty is OK with a warning, not a failure."""
+    server_mod = _make_server(monkeypatch, cfg_path, dict(BASE_CONFIG))
+    monkeypatch.setattr(server_mod, "_fetch_provider_models_with_status",
+                        lambda name, cfg, timeout: ([], True, None))
+    resp = server_mod.app.test_client().post("/admin/api/providers/openai/test")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True and body["reachable"] is True
+    assert body["model_count"] == 0
+    assert "_warning" in body and "error" not in body
+
+
+def test_test_connection_unreachable_is_an_error(monkeypatch, cfg_path):
+    server_mod = _make_server(monkeypatch, cfg_path, dict(BASE_CONFIG))
+    monkeypatch.setattr(server_mod, "_fetch_provider_models_with_status",
+                        lambda name, cfg, timeout: ([], False, "ConnectionError: boom"))
+    body = server_mod.app.test_client().post("/admin/api/providers/openai/test").get_json()
+    assert body["ok"] is False and body["reachable"] is False
+    assert body["error"] == "ConnectionError: boom"
+
+
 # --------------------------------------------------------------------------- #
 # Maintenance / automation settings
 

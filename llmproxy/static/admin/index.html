@@ -451,7 +451,9 @@ function renderProviderCard(name, p, isNew) {
   card.querySelector('[data-act="test"]').addEventListener("click", async () => {
     if (isNew) { toast("Save the provider first", true); return; }
     try { const r = await api("/providers/"+encodeURIComponent(name)+"/test", { method: "POST" });
-      toast(r.ok ? `OK — ${r.model_count} models` : "No models discovered", !r.ok); }
+      if (!r.ok) toast("Connection failed" + (r.error ? ": " + r.error : ""), true);
+      else if (r.model_count === 0) toast("Connected — no models found");
+      else toast(`OK — ${r.model_count} models`); }
     catch (e) { toast(e.message, true); }
   });
   card.querySelector('[data-act="delete"]').addEventListener("click", async () => {

@@ -952,13 +952,24 @@ def api_test_provider(name: str):
     cfg = get_provider(config, name)
     if not cfg:
         return _err(f"Unknown provider '{name}'.", 404)
-    ids = _discover(name, cfg, 15)
-    return jsonify({
-        "ok": bool(ids),
-        "model_count": len(ids),
+    from . import server  # lazy import avoids any import-cycle fragility
+    models, reachable, error = server._fetch_provider_models_with_status(name, cfg, 15)
+    # A provider that answers with an empty catalog is connected, not broken:
+    # report it as OK with a warning. Only a failed fetch is an error, unless
+    # model_filter let discovery fall back to a synthesized list.
+    body: dict = {
+        "ok": bool(reachable or models),
+        "reachable": bool(reachable),
+        "model_count": len(models),
         "base_url": provider_base_url(cfg),
         "api_key_resolved": bool(provider_api_key(cfg)),
-    })
+    }
+    if not reachable and error:
+        body["error"] = error
+    if reachable and not models:
+        body["_warning"] = ("Connected, but the provider lists no models "
+                            "(check model_filter / models_keep_task).")
+    return jsonify(body)
 
 
 # ---------------------------------------------------------------------------
