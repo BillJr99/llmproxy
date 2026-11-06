@@ -2195,6 +2195,25 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
 
     Returns an empty list on any failure so that one bad provider does not
     prevent the aggregate response from including all healthy providers.
+    Callers that must tell "unreachable" apart from "reachable but lists no
+    models" use ``_fetch_provider_models_with_status`` instead.
+    """
+    return _fetch_provider_models_with_status(provider_name, provider_cfg, timeout)[0]
+
+
+def _fetch_provider_models_with_status(
+    provider_name: str, provider_cfg: dict, timeout: int,
+) -> tuple[list[dict], bool, str | None]:
+    """
+    Same fetch as ``_fetch_provider_models``, but also report whether the
+    provider answered.
+
+    Returns ``(models, reachable, error)``. ``reachable`` is True when the
+    catalog request succeeded and its payload parsed, even if it listed no
+    models or every model was filtered out: a connected provider with an empty
+    catalog is not a failure. ``error`` is a short "<Type>: <message>" string
+    when the fetch failed, else None. On failure ``models`` may still be
+    non-empty, synthesized from ``model_filter``.
     """
     base_url = provider_base_url(provider_cfg)
     # Most providers list models at <base_url>/models. A few expose the catalog
@@ -2232,6 +2251,8 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         headers["Authorization"] = f"Bearer {api_key}"
 
     resp = None
+    reachable = True
+    fetch_error: str | None = None
     try:
         resp = requests.get(url, headers=headers, timeout=timeout)
         resp.raise_for_status()
@@ -2274,9 +2295,11 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
             e,
             _describe_fetch_failure(url, resp),
         )
+        reachable = False
+        fetch_error = f"{type(e).__name__}: {e}"
         model_filter = provider_cfg.get("model_filter")
         if not model_filter:
-            return []
+            return [], reachable, fetch_error
         logger.info(
             "[server:_fetch_provider_models] provider=%s: /models unavailable; "
             "synthesizing %d model(s) from model_filter",
@@ -2380,7 +2403,7 @@ def _fetch_provider_models(provider_name: str, provider_cfg: dict, timeout: int)
         "[server:_fetch_provider_models] provider=%s: %d/%d models kept (%s)",
         provider_name, len(result), len(raw_models), filter_desc,
     )
-    return result
+    return result, reachable, fetch_error
 
 
 def _rebuild_route_cache(providers_cfg: dict, timeout: int,

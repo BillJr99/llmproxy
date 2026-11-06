@@ -161,3 +161,22 @@ def test_an_empty_data_still_wins_over_models(monkeypatch):
         {"data": [], "models": [{"id": "ghost"}]}))
     cfg = {"base_url": "https://api.example/v1", "api_key": "k"}
     assert S._fetch_provider_models("example", cfg, 5) == []
+
+
+def test_an_empty_catalog_is_reachable_not_a_failure(monkeypatch):
+    """A provider that answers with no models is connected; only a failed fetch
+    reports unreachable. The admin "Test connection" button relies on this."""
+    monkeypatch.setattr(S.requests, "get", lambda *a, **k: _Resp({"data": []}))
+    models, reachable, error = S._fetch_provider_models_with_status(
+        "unbiased-ai", dict(UNBIASED), 5)
+    assert (models, reachable, error) == ([], True, None)
+
+
+def test_a_failed_fetch_reports_unreachable_with_the_error(monkeypatch):
+    def boom(*a, **k):
+        raise requests.exceptions.ConnectionError("no route to host")
+    monkeypatch.setattr(S.requests, "get", boom)
+    models, reachable, error = S._fetch_provider_models_with_status(
+        "unbiased-ai", dict(UNBIASED), 5)
+    assert models == [] and reachable is False
+    assert error.startswith("ConnectionError")
