@@ -117,6 +117,12 @@ BUILTIN = OrderedDict([
         "key_required": True,
         "key_hint": "Use a team API key from Open Math OS at os.openmathmodel.org; keys look like nuc_ak_... and are issued per team (teams by application at openmathmodel.org).",
     }),
+    ("demonroute", {
+        "display": "Demon Route",
+        "base_url": "https://api.demonroute.com/v1",
+        "key_required": True,
+        "key_hint": "Create an API key at demonroute.com (Console → Keys)",
+    }),
 ])
 
 # Fields the wizard copies from a template onto the config entry.

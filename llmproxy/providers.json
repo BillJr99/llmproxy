@@ -24,6 +24,7 @@
     "deepseek",
     "cohere",
     "openrouter",
+    "demonroute",
     "requesty",
     "bai",
     "xkiro",
@@ -7459,6 +7460,17 @@
         "openrouter/minimax/minimax-m1",
         "openrouter/z-ai/glm-4.5-air"
       ]
+    },
+    "demonroute": {
+      "display": "Demon Route",
+      "base_url": "https://api.demonroute.com/v1",
+      "key_required": true,
+      "key_hint": "Create an API key at demonroute.com (Console \u2192 Keys)",
+      "_note": "OpenAI-compatible gateway. GET /v1/models is key-gated: without a key it answers 401 JSON 'Invalid token' (type new_api_error), and POST /v1/chat/completions without a key answers the same 401, so default discovery with Bearer auth works and no models_url override is needed (verified November 2026). No model_filter is set because the live id list could not be confirmed without a key, and a filter that misses would register nothing.",
+      "believed_free": [],
+      "model_reasoning": {},
+      "model_capabilities": {},
+      "free_limits": {}
     },
     "ollama-cloud": {
       "display": "Ollama Cloud",

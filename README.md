@@ -4024,6 +4024,7 @@ The wizard currently offers ready-made templates for these providers:
 | DeepSeek                                   | `deepseek`              | `https://api.deepseek.com/v1`                                                  |
 | Cohere                                     | `cohere`                | `https://api.cohere.com/compatibility/v1`                                      |
 | OpenRouter                                 | `openrouter`            | `https://openrouter.ai/api/v1`                                                 |
+| Demon Route                                | `demonroute`            | `https://api.demonroute.com/v1`                                                |
 | Requesty (LLM router)                      | `requesty`              | `https://router.requesty.ai/v1`                                                |
 | B.AI (unified LLM API)                     | `bai`                   | `https://api.b.ai/v1`                                                          |
 | xKiro (multi-vendor gateway)               | `xkiro`                 | `https://api.xkiro.com/v1`                                                     |
