@@ -188,6 +188,29 @@ def test_supported_parameters_from_config(server):
     assert server._supported_parameters("p", "m3", cfg) == []
 
 
+def test_reasoning_models_advertise_a_ladder(server):
+    """Clients such as Oh My Pi read supported_reasoning_levels, not supported_parameters."""
+    m = {"id": "p__m"}
+    server._advertise_reasoning(m, ["tools", "tool_choice", "reasoning"])
+    assert m["reasoning"] is True
+    assert m["supported_reasoning_levels"] == ["low", "medium", "high"]
+    assert m["default_reasoning_level"] == "medium"
+
+
+def test_an_upstream_ladder_is_kept(server):
+    m = {"id": "p__m", "supported_reasoning_levels": ["low", "high", "xhigh"], "default_reasoning_level": "high"}
+    server._advertise_reasoning(m, ["reasoning"])
+    assert m["supported_reasoning_levels"] == ["low", "high", "xhigh"]
+    assert m["default_reasoning_level"] == "high"
+
+
+def test_non_reasoning_rows_stay_silent(server):
+    """No reasoning: false either: silence leaves a client's own catalog in charge."""
+    m = {"id": "p__m"}
+    server._advertise_reasoning(m, ["tools", "tool_choice"])
+    assert "reasoning" not in m and "supported_reasoning_levels" not in m
+
+
 def test_a_reasoning_tier_alone_does_not_advertise_reasoning(server):
     """A model_reasoning tier is a routing quality label, not a capability.
 

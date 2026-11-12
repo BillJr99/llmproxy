@@ -2149,6 +2149,36 @@ def _supported_parameters(
     return params
 
 
+# What a reasoning-capable model accepts as ``reasoning_effort`` when its upstream
+# listing says nothing more specific.
+_DEFAULT_REASONING_LADDER = ("low", "medium", "high")
+
+
+def _advertise_reasoning(model: dict, params: "list[str]") -> None:
+    """Add the reasoning fields clients read from a ``/v1/models`` row.
+
+    ``supported_parameters`` says *whether* a model reasons, but several clients
+    read the reasoning surface from other keys: Oh My Pi (and codex-lb style
+    gateways) read ``supported_reasoning_levels`` and ``default_reasoning_level``
+    and never look at ``supported_parameters``; pi-openai-compat also reads a
+    plain ``reasoning: true``. Without them a client falls back to guessing from
+    the model id, and llmproxy's ``provider__model`` ids match no client catalog,
+    so every model looked non-reasoning.
+
+    Only rows already advertised with ``"reasoning"`` (the reasoning capability,
+    never the routing tier) get the fields. An upstream's own ladder or default
+    is kept. Nothing is added for other rows: silence means "unknown", and an
+    explicit ``reasoning: false`` would wrongly overrule a client's own catalog.
+    """
+    if "reasoning" not in params:
+        return
+    model.setdefault("reasoning", True)
+    levels = model.get("supported_reasoning_levels")
+    if not isinstance(levels, list) or not levels:
+        model["supported_reasoning_levels"] = list(_DEFAULT_REASONING_LADDER)
+    model.setdefault("default_reasoning_level", "medium")
+
+
 def _describe_fetch_failure(url: str, resp: "requests.Response | None") -> str:
     """
     Build a secret-free diagnostic suffix for a failed /models fetch.
@@ -4935,6 +4965,7 @@ def _build_models_list(providers: dict, config: dict, timeout: int, models_ttl: 
         )
         if params:
             model["supported_parameters"] = params
+            _advertise_reasoning(model, params)
 
     # Enrich synthetic virtual models with the same classification fields so
     # clients can type them too (these are the entries clients most want to
@@ -4952,6 +4983,7 @@ def _build_models_list(providers: dict, config: dict, timeout: int, models_ttl: 
             vparams.append("reasoning")
         if vparams:
             vmodel["supported_parameters"] = vparams
+            _advertise_reasoning(vmodel, vparams)
 
     full_list = synthetic + all_models
 
@@ -5064,6 +5096,7 @@ def get_model(model_id: str) -> Response:
             params = _supported_parameters(provider_name, upstream_model, config)
             if params:
                 m["supported_parameters"] = params
+                _advertise_reasoning(m, params)
             return jsonify(m)
 
     # The model passed the filter check but was not returned by the upstream

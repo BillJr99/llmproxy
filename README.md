@@ -127,6 +127,7 @@ fields so clients can infer a model's type without a separate probe:
 
 - `architecture` — `{ "input_modalities": [...], "output_modalities": [...], "modality": "text+image->text" }`, derived from the upstream's modalities (text-only fallback when the upstream doesn't report them).
 - `supported_parameters` — surfaces what llmproxy already tracks: `["tools", "tool_choice"]` for tool-capable models and `["reasoning"]` for models with the `reasoning` capability (tagged in `model_capabilities`, reported by the upstream listing, or learned). A `model_reasoning` tier alone does not add it: the tier is a routing quality label, and clients read `"reasoning"` as "accepts `reasoning_effort`".
+- `reasoning`, `supported_reasoning_levels` and `default_reasoning_level`: added to the same reasoning-capable rows (`true`, `["low", "medium", "high"]`, `"medium"`, unless the upstream listing already gives its own), because some clients read these instead of `supported_parameters` (Oh My Pi, codex-lb style gateways, pi-openai-compat). Rows that are not known to reason get none of them, rather than `reasoning: false`.
 - `context_length` — normalized from the upstream when available.
 
 These are additive — strict OpenAI clients ignore the extra keys, while clients that
