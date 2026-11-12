@@ -126,7 +126,7 @@ Beyond the OpenAI-standard `id` / `object` / `owned_by` / `created`, each entry 
 fields so clients can infer a model's type without a separate probe:
 
 - `architecture` — `{ "input_modalities": [...], "output_modalities": [...], "modality": "text+image->text" }`, derived from the upstream's modalities (text-only fallback when the upstream doesn't report them).
-- `supported_parameters` — surfaces what llmproxy already tracks: `["tools", "tool_choice"]` for tool-capable models and `["reasoning"]` for models tagged in `model_reasoning`.
+- `supported_parameters` — surfaces what llmproxy already tracks: `["tools", "tool_choice"]` for tool-capable models and `["reasoning"]` for models with the `reasoning` capability (tagged in `model_capabilities`, reported by the upstream listing, or learned). A `model_reasoning` tier alone does not add it: the tier is a routing quality label, and clients read `"reasoning"` as "accepts `reasoning_effort`".
 - `context_length` — normalized from the upstream when available.
 
 These are additive — strict OpenAI clients ignore the extra keys, while clients that
