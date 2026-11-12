@@ -12,7 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        # 3.12 only: it is what the Docker image runs (python:3.12-slim), and a
+        # second interpreter doubled the longest CI job for no deployed target.
+        python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
 

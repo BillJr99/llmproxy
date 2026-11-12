@@ -4527,7 +4527,7 @@ because each was written around a failure mode rather than around a function:
 
 CI runs the same checks on every push and pull request — see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml). It runs:
-- `pytest` across Python 3.11 and 3.12 (new files under `tests/` are collected
+- `pytest` on Python 3.12, the version the Docker image runs (new files under `tests/` are collected
   automatically via the `testpaths` setting in `pyproject.toml`),
 - `ruff` lint,
 - `bash -n test.sh`, since that script ships with the repo and is a documented
