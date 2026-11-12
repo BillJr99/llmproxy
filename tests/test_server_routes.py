@@ -180,12 +180,23 @@ def test_startup_sidecar_sync_no_longer_rewrites_the_user_config(
 def test_supported_parameters_from_config(server):
     """_supported_parameters surfaces tool/reasoning capabilities from config."""
     cfg = {
-        "model_capabilities": {"p/m1": ["tools"]},
+        "model_capabilities": {"p/m1": ["tools"], "p/m4": ["reasoning", "tools"]},
         "model_reasoning": {"p/m2": "deep"},
     }
     assert server._supported_parameters("p", "m1", cfg) == ["tools", "tool_choice"]
-    assert server._supported_parameters("p", "m2", cfg) == ["reasoning"]
+    assert server._supported_parameters("p", "m4", cfg) == ["tools", "tool_choice", "reasoning"]
     assert server._supported_parameters("p", "m3", cfg) == []
+
+
+def test_a_reasoning_tier_alone_does_not_advertise_reasoning(server):
+    """A model_reasoning tier is a routing quality label, not a capability.
+
+    Advertising it as ``reasoning`` made clients send ``reasoning_effort`` to
+    models that do not accept it, so a tier on its own adds nothing.
+    """
+    for tier in ("exploratory", "standard", "deep"):
+        cfg = {"model_reasoning": {"p/m2": tier}}
+        assert server._supported_parameters("p", "m2", cfg) == []
 
 
 # --------------------------------------------------------------------------- #

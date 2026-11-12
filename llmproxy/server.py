@@ -2123,23 +2123,28 @@ def _supported_parameters(
     upstream_id: str,
     config: dict,
     cap_map: "dict[str, set[str]] | None" = None,
-    reasoning: "dict[str, str] | None" = None,
 ) -> list[str]:
     """OpenRouter-style ``supported_parameters`` derived from llmproxy config.
 
-    Surfaces the tool/reasoning capabilities llmproxy already tracks (and uses
-    for capability/reasoning virtual models) so clients can classify a model
-    without a separate probe. ``cap_map``/``reasoning`` may be passed in to avoid
-    recomputing them per model when annotating a whole list.
+    Surfaces the tool/reasoning capabilities llmproxy already tracks so clients
+    can classify a model without a separate probe. ``cap_map`` may be passed in
+    to avoid recomputing it per model when annotating a whole list.
+
+    ``"reasoning"`` means what it means on OpenRouter: the model accepts a
+    reasoning request (``reasoning_effort``). It comes only from the
+    ``reasoning`` capability (tagged by hand, reported by an upstream listing,
+    or learned), never from ``model_reasoning``. That map is llmproxy's routing
+    quality tier (exploratory / standard / deep) and is inferred from model
+    names, so almost every model has one; advertising it here made clients such
+    as pi-openai-compat offer thinking levels and send ``reasoning_effort`` to
+    models that reject it.
     """
     if cap_map is None:
         cap_map = _model_capabilities(config)
-    if reasoning is None:
-        reasoning = _get_model_reasoning(config)
     params: list[str] = []
     if _model_has_capability(provider_name, upstream_id, "tools", cap_map):
         params += ["tools", "tool_choice"]
-    if _lookup_model_fact(reasoning, provider_name, upstream_id):
+    if _model_has_capability(provider_name, upstream_id, "reasoning", cap_map):
         params.append("reasoning")
     return params
 
@@ -4907,7 +4912,6 @@ def _build_models_list(providers: dict, config: dict, timeout: int, models_ttl: 
     # Annotate real models with (believed_free) and/or (local) suffixes in name,
     # and with OpenRouter-style supported_parameters so clients can classify them.
     cap_map = _model_capabilities(config)
-    reasoning = _get_model_reasoning(config)
     for model in all_models:
         route = snapshot.get(model["id"])
         if not route:
@@ -4927,7 +4931,7 @@ def _build_models_list(providers: dict, config: dict, timeout: int, models_ttl: 
         if suffixes:
             model["name"] = model["name"] + " (" + ", ".join(suffixes) + ")"
         params = _supported_parameters(
-            provider_name, upstream_id, config, cap_map=cap_map, reasoning=reasoning,
+            provider_name, upstream_id, config, cap_map=cap_map,
         )
         if params:
             model["supported_parameters"] = params
