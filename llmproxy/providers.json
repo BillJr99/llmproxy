@@ -60,6 +60,7 @@
     "llm7",
     "chutes",
     "meta-llama",
+    "meta-muse",
     "anthropic",
     "gemini",
     "jetstream2",
@@ -25396,6 +25397,60 @@
       "believed_free": [],
       "model_reasoning": {},
       "free_limits": {}
+    },
+    "meta-muse": {
+      "display": "Meta Muse (Meta Model API)",
+      "base_url": "https://api.meta.ai/v1",
+      "key_required": true,
+      "key_hint": "Create an API key in the Meta developer console at dev.meta.ai (Bearer auth; docs: dev.meta.ai/docs/models)",
+      "protocol_choices": [
+        "responses",
+        "openai"
+      ],
+      "_note": "Meta Model API. Per dev.meta.ai/docs/models (November 2026), the Muse Wonder, Spark and Ember chat models serve the Responses, Chat Completions and Messages APIs, so the template offers Responses (default) or OpenAI chat/completions with the same key. GET /v1/models also lists non-chat ids (muse-image-1.0, muse-voice-transcribe-1.0, sam-3.1), so example_model_filter pins the five chat models. The gateway authenticates before it routes (a made-up path also answers 401 invalid_api_key without a key), so routes and ids were not verified against a live key; model_filter also covers the case where discovery fails. Context window is 1,048,576 tokens for Wonder and Spark.",
+      "example_model_filter": [
+        "muse-wonder-1.0",
+        "muse-spark-1.3",
+        "muse-spark-1.2",
+        "muse-spark-1.1",
+        "muse-ember-1.0"
+      ],
+      "believed_free": [],
+      "model_reasoning": {
+        "meta-muse/muse-wonder-1.0": "deep",
+        "meta-muse/muse-spark-1.3": "standard",
+        "meta-muse/muse-spark-1.2": "standard",
+        "meta-muse/muse-spark-1.1": "standard",
+        "meta-muse/muse-ember-1.0": "standard"
+      },
+      "free_limits": {},
+      "model_capabilities": {
+        "meta-muse/muse-wonder-1.0": [
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "meta-muse/muse-spark-1.3": [
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "meta-muse/muse-spark-1.2": [
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "meta-muse/muse-spark-1.1": [
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "meta-muse/muse-ember-1.0": [
+          "reasoning",
+          "tools",
+          "vision"
+        ]
+      }
     },
     "anthropic": {
       "display": "Anthropic (Claude, native Messages API)",

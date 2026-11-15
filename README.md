@@ -4060,6 +4060,7 @@ The wizard currently offers ready-made templates for these providers:
 | LLM7 (free, no key)                        | `llm7`                  | `https://api.llm7.io/v1`                                                       |
 | Chutes AI                                  | `chutes`                | `https://llm.chutes.ai/v1`                                                     |
 | Meta Llama API                             | `meta-llama`            | `https://api.llama.com/compat/v1`                                              |
+| Meta Muse (Meta Model API)                 | `meta-muse`             | `https://api.meta.ai/v1` (Responses by default; `"protocol": "openai"` also works) |
 | Anthropic (Claude, native Messages API)    | `anthropic`             | `https://api.anthropic.com/v1`                                                 |
 | Google Gemini (native generateContent)     | `gemini`                | `https://generativelanguage.googleapis.com/v1beta`                             |
 | Docker Model Runner (local)                | `docker-model-runner`   | `http://localhost:12434/engines/v1` (editable)                                 |

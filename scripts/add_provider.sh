@@ -123,6 +123,14 @@ BUILTIN = OrderedDict([
         "key_required": True,
         "key_hint": "Create an API key at demonroute.com (Console → Keys)",
     }),
+    ("meta-muse", {
+        "display": "Meta Muse (Meta Model API)",
+        "base_url": "https://api.meta.ai/v1",
+        "key_required": True,
+        "key_hint": "Create an API key in the Meta developer console at dev.meta.ai (Bearer auth; docs: dev.meta.ai/docs/models)",
+        "protocol_choices": ["responses", "openai"],
+        "example_model_filter": ["muse-wonder-1.0", "muse-spark-1.3", "muse-spark-1.2", "muse-spark-1.1", "muse-ember-1.0"],
+    }),
 ])
 
 # Fields the wizard copies from a template onto the config entry.
@@ -225,6 +233,11 @@ def main():
         # Providers with no OpenAI-shaped catalog advertise models from
         # model_filter instead; the template carries the starting list.
         entry["model_filter"] = tpl.get("example_model_filter")
+        # A template offering several protocols defaults to its first choice,
+        # as the wizard does on Enter and as config.example.json shows.
+        choices = tpl.get("protocol_choices") or []
+        if not tpl.get("protocol") and choices and choices[0] != "openai":
+            entry["protocol"] = choices[0]
         for field in PASSTHROUGH:
             if field == "_note":
                 continue
