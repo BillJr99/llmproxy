@@ -4410,7 +4410,6 @@
         "cloudflare-workers/@cf/deepgram/aura-2-es",
         "cloudflare-workers/@cf/deepgram/flux",
         "cloudflare-workers/@cf/deepgram/nova-3",
-        "cloudflare-workers/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
         "cloudflare-workers/@cf/deepseek-ai/deepseek-v4-flash-0731",
         "cloudflare-workers/@cf/deepseek-ai/deepseek-v4-pro-0813",
         "cloudflare-workers/@cf/deepseek-ai/deepseek-v4.1-flash-1017",
@@ -4465,7 +4464,6 @@
         "cloudflare-workers/@cf/pfnet/plamo-embedding-1b",
         "cloudflare-workers/@cf/pipecat-ai/smart-turn-v2",
         "cloudflare-workers/@cf/qwen/qwen2.5-coder-32b-instruct",
-        "cloudflare-workers/@cf/qwen/qwen3-30b-a3b-fp8",
         "cloudflare-workers/@cf/qwen/qwen3-embedding-0.6b",
         "cloudflare-workers/@cf/qwen/qwen3.8-27b",
         "cloudflare-workers/@cf/qwen/qwq-32b",
@@ -4508,7 +4506,6 @@
         "cloudflare-workers/@cf/deepgram/aura-2-es": "exploratory",
         "cloudflare-workers/@cf/deepgram/flux": "exploratory",
         "cloudflare-workers/@cf/deepgram/nova-3": "exploratory",
-        "cloudflare-workers/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b": "deep",
         "cloudflare-workers/@cf/deepseek-ai/deepseek-v4-flash-0731": "exploratory",
         "cloudflare-workers/@cf/deepseek-ai/deepseek-v4-pro-0813": "exploratory",
         "cloudflare-workers/@cf/deepseek-ai/deepseek-v4.1-flash-1017": "exploratory",
@@ -4563,7 +4560,6 @@
         "cloudflare-workers/@cf/pfnet/plamo-embedding-1b": "exploratory",
         "cloudflare-workers/@cf/pipecat-ai/smart-turn-v2": "exploratory",
         "cloudflare-workers/@cf/qwen/qwen2.5-coder-32b-instruct": "standard",
-        "cloudflare-workers/@cf/qwen/qwen3-30b-a3b-fp8": "standard",
         "cloudflare-workers/@cf/qwen/qwen3-embedding-0.6b": "exploratory",
         "cloudflare-workers/@cf/qwen/qwen3.8-27b": "standard",
         "cloudflare-workers/@cf/qwen/qwq-32b": "deep",
@@ -4583,9 +4579,6 @@
         "cloudflare-workers/@hf/nousresearch/hermes-2-pro-mistral-7b": "exploratory"
       },
       "model_capabilities": {
-        "cloudflare-workers/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b": [
-          "tools"
-        ],
         "cloudflare-workers/@cf/ibm-granite/granite-4.0-h-micro": [
           "json"
         ],
@@ -4615,9 +4608,6 @@
         "cloudflare-workers/@cf/openai/gpt-oss-120b": [
           "json",
           "reasoning",
-          "tools"
-        ],
-        "cloudflare-workers/@cf/qwen/qwen3-30b-a3b-fp8": [
           "tools"
         ],
         "cloudflare-workers/@cf/zai-org/glm-4.7-flash": [

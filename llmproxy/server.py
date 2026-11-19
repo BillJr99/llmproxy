@@ -4395,8 +4395,8 @@ def _promote_sidecar_to_providers(
     except Exception as e:  # noqa: BLE001 — never break the PR over the overrides
         print(f"[server:_promote_sidecar_to_providers] {e}")
         traceback.print_exc()
-        corrections = {"held_back": {}, "restored": {}}
-    if corrections["held_back"] or corrections["restored"]:
+        corrections = {}
+    if any(corrections.values()):
         report["review_overrides"] = corrections
         changed = True
 
@@ -4424,7 +4424,7 @@ def _promotion_body(report: dict) -> str:
     """
     overrides = report.get("review_overrides") or {}
     override_lines: list[str] = []
-    if overrides.get("held_back") or overrides.get("restored"):
+    if any(overrides.values()):
         override_lines += ["", "### Held back by review overrides", "",
                            "These facts contradict a correction recorded in "
                            "`llmproxy/review_overrides.json` and were not proposed. "
@@ -4438,6 +4438,9 @@ def _promotion_body(report: dict) -> str:
             for mid, tags in sorted(models.items()):
                 override_lines.append(f"* `{mid}`: restored "
                                       + ", ".join(f"`{t}`" for t in tags) + ".")
+        for ids in sorted((overrides.get("retired") or {}).values()):
+            for mid in ids:
+                override_lines.append(f"* `{mid}`: removed because the provider retired it.")
     if not report.get("total"):
         return "\n".join(override_lines)
     order = ("curated", "observed", "family", "inferred")

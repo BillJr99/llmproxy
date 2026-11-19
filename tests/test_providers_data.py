@@ -10,10 +10,49 @@ from __future__ import annotations
 import pytest
 
 from llmproxy.providers import FREE_LIMIT_KEYS, VALID_REASONING_LEVELS, load_data
-from scripts.update_free_models import load_review_overrides
+from scripts.update_free_models import apply_review_overrides, load_review_overrides
 
 SIDE = load_data()
 _OVERRIDES = load_review_overrides()
+
+_RETIRED_CLOUDFLARE = (
+    "cloudflare-workers/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+    "cloudflare-workers/@cf/qwen/qwen3-30b-a3b-fp8",
+)
+_FIREWORKS_DISTILL = "fireworks/accounts/fireworks/models/deepseek-r1-distill-qwen-32b"
+
+
+@pytest.mark.parametrize("mid", _RETIRED_CLOUDFLARE)
+def test_retired_cloudflare_model_is_absent_from_catalog(mid):
+    provider = SIDE["providers"]["cloudflare-workers"]
+    for field in ("believed_free", "cost_observed_free_tier", "model_reasoning",
+                  "model_capabilities", "free_limits"):
+        assert mid not in provider.get(field, ()), field
+    assert mid not in SIDE["pricing"]
+
+
+def test_review_overrides_remove_stale_retired_cloudflare_models():
+    active = "cloudflare-workers/@cf/meta/llama-3.1-8b-instruct"
+    retired = _RETIRED_CLOUDFLARE
+    provider = {
+        "believed_free": [active, *retired],
+        "cost_observed_free_tier": [active, *retired],
+        "model_reasoning": dict.fromkeys((active, *retired), "standard"),
+        "model_capabilities": dict.fromkeys((active, *retired), ["tools"]),
+        "free_limits": dict.fromkeys((active, *retired), {"requests_per_day": 50}),
+    }
+    pricing = {"input_cost_per_token": 1e-7, "output_cost_per_token": 2e-7}
+    sidecar = {
+        "providers": {"cloudflare-workers": provider},
+        "pricing": dict.fromkeys((*retired, _FIREWORKS_DISTILL), pricing),
+    }
+
+    report = apply_review_overrides(sidecar)
+
+    assert report["retired"] == {"cloudflare-workers": list(retired)}
+    assert all(list(field) == [active] for field in provider.values())
+    assert sidecar["pricing"] == {_FIREWORKS_DISTILL: pricing}
+    assert not any(apply_review_overrides(sidecar).values())
 
 
 def test_top_level_keys():

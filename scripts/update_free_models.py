@@ -572,7 +572,8 @@ def load_review_overrides(path: Path | None = None) -> dict:
     Never raises: an unreadable file must not stop a refresh, and the CI guard
     still catches whatever slips through.
     """
-    empty = {"cost_observations_needing_corroboration": {}, "required_capabilities": {}}
+    empty = {"cost_observations_needing_corroboration": {}, "required_capabilities": {},
+             "retired_models": {}}
     try:
         data = json.loads(Path(path or REVIEW_OVERRIDES_PATH).read_text())
         if not isinstance(data, dict):
@@ -594,15 +595,40 @@ def apply_review_overrides(sidecar: dict, overrides: dict | None = None) -> dict
       ``model_capabilities`` entry. A missing entry is NOT recreated: the model
       may really be withdrawn, and that is for a reviewer to decide.
 
-    Returns ``{"held_back": {provider: [ids]}, "restored": {provider: {id:
-    [tags]}}}``, empty when nothing needed correcting.
+    * Retired model IDs are removed from all model metadata, even when a
+      stale source still lists them. IDs are provider-qualified.
+
+    Returns per-provider reports under ``held_back``, ``restored``, and
+    ``retired``; each is empty when nothing needed correcting.
     """
     if overrides is None:
         overrides = load_review_overrides()
-    report: dict = {"held_back": {}, "restored": {}}
+    report: dict = {"held_back": {}, "restored": {}, "retired": {}}
     providers = sidecar.get("providers")
     if not isinstance(providers, dict):
         return report
+
+    for pkey, retired in (overrides.get("retired_models") or {}).items():
+        entry = providers.get(pkey)
+        if not isinstance(entry, dict) or not isinstance(retired, dict):
+            continue
+        ids = {mid for mid in retired if mid.startswith(f"{pkey}/")}
+        removed = set()
+        for field in _SORTED_LIST_KEYS:
+            values = entry.get(field)
+            if isinstance(values, list):
+                dropped = ids.intersection(mid for mid in values if isinstance(mid, str))
+                if dropped:
+                    entry[field] = [mid for mid in values
+                                    if not isinstance(mid, str) or mid not in dropped]
+                    removed.update(dropped)
+        for values in [*(entry.get(field) for field in _SORTED_DICT_KEYS), sidecar.get("pricing")]:
+            if isinstance(values, dict):
+                for mid in ids.intersection(values):
+                    del values[mid]
+                    removed.add(mid)
+        if removed:
+            report["retired"][pkey] = sorted(removed)
 
     for pkey, held in (overrides.get("cost_observations_needing_corroboration") or {}).items():
         entry = providers.get(pkey)
@@ -1260,13 +1286,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.config:
             target = copy.deepcopy(sidecar)
             apply_updates(target, updates)
+            apply_review_overrides(target)
             _sync_user_config(target, args.config, dry_run=True)
         print(_dim("\n(dry run — no files written)"))
         return 0
 
     changed = apply_updates(sidecar, updates) or pricing_changed
     overrides = apply_review_overrides(sidecar)
-    if overrides["held_back"] or overrides["restored"]:
+    if any(overrides.values()):
         print(_dim(f"Review overrides applied: {overrides}"))
         changed = True
     if changed:
