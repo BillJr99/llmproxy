@@ -738,8 +738,9 @@
         "nous/meituan/longcat-2.5:free",
         "nous/poolside/laguna-s-2.1:free",
         "nous/poolside/laguna-xs-2.1:free",
-        "nous/reflection/beam-1.0-501b-a23b:free",
+        "nous/qwen/qwen4-max:free",
         "nous/stepfun/step-3.7-flash:free",
+        "nous/tencent/hy4-flash:free",
         "nous/upstage/solar-mini4:free",
         "nous/upstage/solar-pro4:free"
       ],
@@ -758,6 +759,8 @@
         "nous/anthropic/claude-fable-5": "exploratory",
         "nous/anthropic/claude-fable-5.1": "exploratory",
         "nous/anthropic/claude-fable-5.1:batch": "exploratory",
+        "nous/anthropic/claude-fable-5.2": "exploratory",
+        "nous/anthropic/claude-fable-5.2:batch": "exploratory",
         "nous/anthropic/claude-fable-5:batch": "exploratory",
         "nous/anthropic/claude-haiku-4.5": "exploratory",
         "nous/anthropic/claude-haiku-4.5:batch": "exploratory",
@@ -791,6 +794,7 @@
         "nous/baai/bge-base-en-v1.5": "exploratory",
         "nous/baai/bge-large-en-v1.5": "standard",
         "nous/baai/bge-m3": "exploratory",
+        "nous/baidu/ernie-light-dt-1.0-intl": "exploratory",
         "nous/bytedance-seed/seed-1.6": "exploratory",
         "nous/bytedance-seed/seed-1.6-flash": "exploratory",
         "nous/bytedance-seed/seed-2-1-turbo": "exploratory",
@@ -854,6 +858,10 @@
         "nous/google/gemini-3.8-flash:batch": "exploratory",
         "nous/google/gemini-4-argon": "exploratory",
         "nous/google/gemini-4-argon:batch": "exploratory",
+        "nous/google/gemini-4-carbon": "exploratory",
+        "nous/google/gemini-4-carbon:batch": "exploratory",
+        "nous/google/gemini-4-hydrogen": "exploratory",
+        "nous/google/gemini-4-hydrogen:batch": "exploratory",
         "nous/google/gemini-nano-banana-2.1": "exploratory",
         "nous/google/gemma-3-12b-it": "exploratory",
         "nous/google/gemma-3-27b-it": "standard",
@@ -874,9 +882,11 @@
         "nous/intfloat/e5-base-v2": "exploratory",
         "nous/intfloat/e5-large-v2": "standard",
         "nous/intfloat/multilingual-e5-large": "standard",
+        "nous/kt/midm-k-3.0-pro": "exploratory",
         "nous/kwaipilot/kat-coder-pro-v2": "exploratory",
         "nous/kwaipilot/kat-coder-pro-v2.5": "exploratory",
         "nous/liquid/lfm-2.5-24b-a2b": "standard",
+        "nous/liquid/lfm-3-1.7b": "exploratory",
         "nous/meituan/longcat-2.0": "exploratory",
         "nous/meituan/longcat-2.0:free": "exploratory",
         "nous/meituan/longcat-2.5-preview:free": "exploratory",
@@ -886,6 +896,7 @@
         "nous/meta-llama/llama-3.3-70b-instruct": "standard",
         "nous/meta-llama/llama-4-maverick": "exploratory",
         "nous/meta-llama/llama-4-scout": "exploratory",
+        "nous/meta/muse-ember": "exploratory",
         "nous/meta/muse-glimmer-30b": "standard",
         "nous/meta/muse-glimmer-30b:batch": "standard",
         "nous/meta/muse-spark-1.1": "exploratory",
@@ -939,9 +950,12 @@
         "nous/moonshotai/kimi-k2.7-code": "exploratory",
         "nous/moonshotai/kimi-k3": "exploratory",
         "nous/moonshotai/kimi-k3.1-pro": "exploratory",
+        "nous/moonshotai/kimi-k3.1-pro:batch": "exploratory",
         "nous/moonshotai/kimi-k3:batch": "exploratory",
         "nous/moonshotai/kimi-k3:us": "exploratory",
+        "nous/motif-technologies/motif-3": "exploratory",
         "nous/nex-agi/nex-n2.5-pro": "exploratory",
+        "nous/nex-agi/nex-n2.6": "exploratory",
         "nous/nvidia/nemotron-3-nano-30b-a3b": "standard",
         "nous/nvidia/nemotron-3-super-120b-a12b": "deep",
         "nous/nvidia/nemotron-3-ultra-550b-a55b": "deep",
@@ -1120,6 +1134,8 @@
         "nous/qwen/qwen3.8-max-0902:batch": "exploratory",
         "nous/qwen/qwen3.8-max-prime": "exploratory",
         "nous/qwen/qwen3.8-omni-flash": "exploratory",
+        "nous/qwen/qwen4-max": "exploratory",
+        "nous/qwen/qwen4-max:free": "exploratory",
         "nous/reflection/beam-1.0-501b-a23b": "deep",
         "nous/reflection/beam-1.0-501b-a23b:free": "deep",
         "nous/rekaai/reka-edge": "exploratory",
@@ -1144,10 +1160,12 @@
         "nous/tencent/hy3-preview": "exploratory",
         "nous/tencent/hy3:free": "exploratory",
         "nous/tencent/hy4": "exploratory",
+        "nous/tencent/hy4-flash:free": "exploratory",
         "nous/tencent/hy4-preview": "exploratory",
         "nous/thenlper/gte-base": "exploratory",
         "nous/thenlper/gte-large": "standard",
         "nous/thinkingmachines/inkling": "exploratory",
+        "nous/thinkingmachines/inkling-2-small": "exploratory",
         "nous/thinkingmachines/inkling-small": "exploratory",
         "nous/thinkingmachines/inkling-small:batch": "exploratory",
         "nous/thinkingmachines/inkling:batch": "exploratory",
@@ -1285,6 +1303,18 @@
           "vision"
         ],
         "nous/anthropic/claude-fable-5.1:batch": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "nous/anthropic/claude-fable-5.2": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "nous/anthropic/claude-fable-5.2:batch": [
           "json",
           "reasoning",
           "tools",
@@ -1467,6 +1497,11 @@
           "reasoning",
           "tools"
         ],
+        "nous/baidu/ernie-light-dt-1.0-intl": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
         "nous/bytedance-seed/seed-1.6": [
           "json",
           "reasoning",
@@ -1522,7 +1557,8 @@
           "tools"
         ],
         "nous/cohere/command-r7b-12-2024": [
-          "json"
+          "json",
+          "tools"
         ],
         "nous/deepseek/deepseek-chat": [
           "json",
@@ -1818,6 +1854,30 @@
           "tools",
           "vision"
         ],
+        "nous/google/gemini-4-carbon": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "nous/google/gemini-4-carbon:batch": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "nous/google/gemini-4-hydrogen": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "nous/google/gemini-4-hydrogen:batch": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "nous/google/gemini-nano-banana-2.1": [
           "json",
           "reasoning",
@@ -1892,11 +1952,15 @@
           "tools"
         ],
         "nous/inclusionai/ling-3.1-flash": [
-          "json",
           "reasoning",
           "tools"
         ],
         "nous/intfloat/multilingual-e5-large": [
+          "reasoning",
+          "tools"
+        ],
+        "nous/kt/midm-k-3.0-pro": [
+          "json",
           "reasoning",
           "tools"
         ],
@@ -1913,6 +1977,11 @@
           "reasoning",
           "tools"
         ],
+        "nous/liquid/lfm-3-1.7b": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
         "nous/meituan/longcat-2.0": [
           "reasoning",
           "tools"
@@ -1924,26 +1993,27 @@
           "vision"
         ],
         "nous/meta-llama/llama-3.1-70b-instruct": [
-          "reasoning",
           "tools"
         ],
         "nous/meta-llama/llama-3.1-8b-instruct": [
           "json",
-          "reasoning",
           "tools"
         ],
         "nous/meta-llama/llama-3.3-70b-instruct": [
           "json",
-          "reasoning",
           "tools"
         ],
         "nous/meta-llama/llama-4-maverick": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "nous/meta-llama/llama-4-scout": [
+          "json",
+          "tools",
+          "vision"
+        ],
+        "nous/meta/muse-ember": [
           "json",
           "reasoning",
           "tools",
@@ -2196,6 +2266,12 @@
           "tools",
           "vision"
         ],
+        "nous/moonshotai/kimi-k3.1-pro:batch": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "nous/moonshotai/kimi-k3:batch": [
           "json",
           "reasoning",
@@ -2207,7 +2283,18 @@
           "reasoning",
           "tools"
         ],
+        "nous/motif-technologies/motif-3": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
         "nous/nex-agi/nex-n2.5-pro": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "nous/nex-agi/nex-n2.6": [
           "json",
           "reasoning",
           "tools",
@@ -3175,11 +3262,6 @@
           "reasoning",
           "tools"
         ],
-        "nous/reflection/beam-1.0-501b-a23b:free": [
-          "json",
-          "reasoning",
-          "tools"
-        ],
         "nous/rekaai/reka-edge": [
           "json",
           "tools",
@@ -3191,6 +3273,7 @@
         ],
         "nous/ricursiveai/ripple-65b-preview": [
           "json",
+          "reasoning",
           "tools"
         ],
         "nous/sakana/fugu-max": [
@@ -3276,6 +3359,12 @@
           "tools",
           "vision"
         ],
+        "nous/thinkingmachines/inkling-2-small": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "nous/thinkingmachines/inkling-small": [
           "json",
           "reasoning",
@@ -3299,10 +3388,12 @@
           "vision"
         ],
         "nous/unbiased/pareto-26.10": [
+          "json",
           "tools",
           "vision"
         ],
         "nous/unbiased/pareto-26.10-preview": [
+          "json",
           "tools",
           "vision"
         ],
@@ -3708,6 +3799,7 @@
         "nvidia/mistralai/mixtral-8x22b-v0.1": "standard",
         "nvidia/moonshotai/kimi-k2.6": "exploratory",
         "nvidia/moonshotai/kimi-k3": "exploratory",
+        "nvidia/moonshotai/kimi-k3.1-pro": "exploratory",
         "nvidia/nv-mistralai/mistral-nemo-12b-instruct": "exploratory",
         "nvidia/nvidia/ai-synthetic-video-detector": "exploratory",
         "nvidia/nvidia/cosmos-reason2-8b": "exploratory",
@@ -3864,12 +3956,17 @@
           "tools",
           "vision"
         ],
+        "nvidia/moonshotai/kimi-k3.1-pro": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "nvidia/nvidia/llama-3.1-nemoguard-8b-content-safety": [
           "reasoning",
           "tools"
         ],
         "nvidia/nvidia/llama-3.1-nemoguard-8b-topic-control": [
-          "reasoning",
           "tools"
         ],
         "nvidia/nvidia/llama-3.1-nemotron-51b-instruct": [
@@ -3881,7 +3978,6 @@
           "tools"
         ],
         "nvidia/nvidia/llama-3.1-nemotron-safety-guard-8b-v3": [
-          "reasoning",
           "tools"
         ],
         "nvidia/nvidia/llama-3.1-nemotron-ultra-253b-v1": [
@@ -4401,6 +4497,7 @@
         "cloudflare-workers/@cf/black-forest-labs/flux-2-klein-9b",
         "cloudflare-workers/@cf/bytedance/stable-diffusion-xl-lightning",
         "cloudflare-workers/@cf/cloudflare/clairic",
+        "cloudflare-workers/@cf/cloudflare/clairic-flash",
         "cloudflare-workers/@cf/cloudflare/clef",
         "cloudflare-workers/@cf/cloudflare/clef-flash",
         "cloudflare-workers/@cf/cloudflare/clef-omni",
@@ -4416,6 +4513,7 @@
         "cloudflare-workers/@cf/defog/sqlcoder-7b-2",
         "cloudflare-workers/@cf/facebook/bart-large-cnn",
         "cloudflare-workers/@cf/facebook/detr-resnet-50",
+        "cloudflare-workers/@cf/google/embeddinggemma-2",
         "cloudflare-workers/@cf/google/embeddinggemma-300m",
         "cloudflare-workers/@cf/google/gemma-2b-it-lora",
         "cloudflare-workers/@cf/google/gemma-3-12b-it",
@@ -4449,8 +4547,8 @@
         "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.1",
         "cloudflare-workers/@cf/mistral/mistral-7b-instruct-v0.2-lora",
         "cloudflare-workers/@cf/mistralai/mistral-small-3.1-24b-instruct",
-        "cloudflare-workers/@cf/moondream/moondream3.1-9b-a2b",
         "cloudflare-workers/@cf/moondream/moondream3.1-9B-A2B",
+        "cloudflare-workers/@cf/moondream/moondream3.1-9b-a2b",
         "cloudflare-workers/@cf/moonshotai/kimi-k2.5",
         "cloudflare-workers/@cf/moonshotai/kimi-k2.6",
         "cloudflare-workers/@cf/moonshotai/kimi-k2.7-code",
@@ -4471,6 +4569,7 @@
         "cloudflare-workers/@cf/runwayml/stable-diffusion-v1-5-inpainting",
         "cloudflare-workers/@cf/stabilityai/stable-diffusion-xl-base-1.0",
         "cloudflare-workers/@cf/swiss-ai/apertus-v1.5-8b",
+        "cloudflare-workers/@cf/thinkingmachines/inkling-2-small",
         "cloudflare-workers/@cf/unum/uform-gen2-qwen-500m",
         "cloudflare-workers/@cf/utter-project/eurollm-9b-it",
         "cloudflare-workers/@cf/zai-org/glm-4.7-flash",
@@ -4497,6 +4596,7 @@
         "cloudflare-workers/@cf/black-forest-labs/flux-2-klein-9b": "exploratory",
         "cloudflare-workers/@cf/bytedance/stable-diffusion-xl-lightning": "exploratory",
         "cloudflare-workers/@cf/cloudflare/clairic": "exploratory",
+        "cloudflare-workers/@cf/cloudflare/clairic-flash": "exploratory",
         "cloudflare-workers/@cf/cloudflare/clef": "exploratory",
         "cloudflare-workers/@cf/cloudflare/clef-flash": "exploratory",
         "cloudflare-workers/@cf/cloudflare/clef-omni": "exploratory",
@@ -4512,6 +4612,7 @@
         "cloudflare-workers/@cf/defog/sqlcoder-7b-2": "exploratory",
         "cloudflare-workers/@cf/facebook/bart-large-cnn": "standard",
         "cloudflare-workers/@cf/facebook/detr-resnet-50": "exploratory",
+        "cloudflare-workers/@cf/google/embeddinggemma-2": "exploratory",
         "cloudflare-workers/@cf/google/embeddinggemma-300m": "exploratory",
         "cloudflare-workers/@cf/google/gemma-2b-it-lora": "exploratory",
         "cloudflare-workers/@cf/google/gemma-3-12b-it": "exploratory",
@@ -4567,6 +4668,7 @@
         "cloudflare-workers/@cf/runwayml/stable-diffusion-v1-5-inpainting": "exploratory",
         "cloudflare-workers/@cf/stabilityai/stable-diffusion-xl-base-1.0": "exploratory",
         "cloudflare-workers/@cf/swiss-ai/apertus-v1.5-8b": "exploratory",
+        "cloudflare-workers/@cf/thinkingmachines/inkling-2-small": "exploratory",
         "cloudflare-workers/@cf/unum/uform-gen2-qwen-500m": "exploratory",
         "cloudflare-workers/@cf/utter-project/eurollm-9b-it": "exploratory",
         "cloudflare-workers/@cf/zai-org/glm-4.7-flash": "exploratory",
@@ -4595,7 +4697,6 @@
         ],
         "cloudflare-workers/@cf/meta/llama-4-scout-17b-16e-instruct": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
@@ -4799,7 +4900,8 @@
           "tools"
         ],
         "cohere/command-r7b-12-2024": [
-          "json"
+          "json",
+          "tools"
         ],
         "cohere/command-r7b-arabic-02-2025": [
           "json",
@@ -4818,6 +4920,7 @@
       "key_required": true,
       "key_hint": "Get your API key at openrouter.ai/keys",
       "believed_free": [
+        "openrouter/baidu/ernie-5.5-flash-preview:free",
         "openrouter/cohere/north-mini-code:free",
         "openrouter/deepseek/deepseek-v4-flash-0731:free",
         "openrouter/dots-studio/dots-3-note-preview:free",
@@ -4828,7 +4931,9 @@
         "openrouter/inclusionai/ling-3.0-flash-fin:free",
         "openrouter/inclusionai/ling-3.0-flash-sante:free",
         "openrouter/inclusionai/ling-3.0-flash-vl:free",
+        "openrouter/inclusionai/ling-3.2-flash:free",
         "openrouter/liquid/lfm-2.5-2.6b:free",
+        "openrouter/liquid/lfm-3-1.7b:free",
         "openrouter/nex-agi/nex-n2.5-mini:free",
         "openrouter/nex-agi/nex-n2.5-pro:free",
         "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
@@ -4836,15 +4941,15 @@
         "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
         "openrouter/nvidia/nemotron-3.5-content-safety:free",
         "openrouter/nvidia/nemotron-3.5-lightning:free",
+        "openrouter/nvidia/nemotron-3.5-super-vl:free",
         "openrouter/openrouter/free",
+        "openrouter/particle-ai/particle-1:free",
         "openrouter/poolside/laguna-s-2.1:free",
         "openrouter/poolside/laguna-xs-2.1:free",
         "openrouter/qwen/qwen3.8-27b:free",
         "openrouter/recursive/flint-v1.0:free",
-        "openrouter/stealth/crouton-alpha",
         "openrouter/thinkingmachines/inkling-small:free",
         "openrouter/thinkingmachines/inkling:free",
-        "openrouter/xingchen-agi/xing4.0-29b-a4b:free",
         "openrouter/z-ai/glm-5.2:free"
       ],
       "model_reasoning": {
@@ -4863,6 +4968,8 @@
         "openrouter/anthropic/claude-fable-5": "exploratory",
         "openrouter/anthropic/claude-fable-5.1": "exploratory",
         "openrouter/anthropic/claude-fable-5.1:batch": "exploratory",
+        "openrouter/anthropic/claude-fable-5.2": "exploratory",
+        "openrouter/anthropic/claude-fable-5.2:batch": "exploratory",
         "openrouter/anthropic/claude-fable-5:batch": "exploratory",
         "openrouter/anthropic/claude-haiku-4.5": "exploratory",
         "openrouter/anthropic/claude-haiku-4.5:batch": "exploratory",
@@ -4890,10 +4997,9 @@
         "openrouter/anthropic/claude-sonnet-5.5": "exploratory",
         "openrouter/anthropic/claude-sonnet-5.5:batch": "exploratory",
         "openrouter/anthropic/claude-sonnet-5:batch": "exploratory",
-        "openrouter/bytedance-seed/seed-1.6": "exploratory",
-        "openrouter/bytedance-seed/seed-1.6-flash": "exploratory",
+        "openrouter/baidu/ernie-5.5-flash-preview:free": "exploratory",
+        "openrouter/baidu/ernie-light-dt-1.0-intl": "exploratory",
         "openrouter/bytedance-seed/seed-2-1-turbo": "exploratory",
-        "openrouter/bytedance-seed/seed-2.0-code": "exploratory",
         "openrouter/bytedance-seed/seed-2.0-lite": "exploratory",
         "openrouter/bytedance-seed/seed-2.0-mini": "exploratory",
         "openrouter/bytedance/ui-tars-1.5-7b": "exploratory",
@@ -4903,7 +5009,6 @@
         "openrouter/cohere/command-r-08-2024": "exploratory",
         "openrouter/cohere/command-r-plus-08-2024": "standard",
         "openrouter/cohere/command-r7b-12-2024": "exploratory",
-        "openrouter/cohere/north-mini-code:free": "exploratory",
         "openrouter/deepseek/deepseek-chat": "exploratory",
         "openrouter/deepseek/deepseek-chat-v3-0324": "standard",
         "openrouter/deepseek/deepseek-chat-v3.1": "deep",
@@ -4921,7 +5026,6 @@
         "openrouter/deepseek/deepseek-v4.1-flash-1017": "exploratory",
         "openrouter/deepseek/deepseek-v4.1-flash-1017:batch": "exploratory",
         "openrouter/deepseek/deepseek-v4.1-flash:batch": "exploratory",
-        "openrouter/dots-studio/dots-3-note-preview:free": "exploratory",
         "openrouter/elorian/glimpse": "exploratory",
         "openrouter/fireworks/ember-1": "exploratory",
         "openrouter/google/gemini-2.5-flash": "standard",
@@ -4954,6 +5058,10 @@
         "openrouter/google/gemini-3.8-flash:batch": "exploratory",
         "openrouter/google/gemini-4-argon": "exploratory",
         "openrouter/google/gemini-4-argon:batch": "exploratory",
+        "openrouter/google/gemini-4-carbon": "exploratory",
+        "openrouter/google/gemini-4-carbon:batch": "exploratory",
+        "openrouter/google/gemini-4-hydrogen": "exploratory",
+        "openrouter/google/gemini-4-hydrogen:batch": "exploratory",
         "openrouter/google/gemini-nano-banana-2.1": "exploratory",
         "openrouter/google/gemini-omni-1.1-flash": "exploratory",
         "openrouter/google/gemini-omni-1.2-flash": "exploratory",
@@ -4969,27 +5077,26 @@
         "openrouter/google/lyria-3-pro-preview": "exploratory",
         "openrouter/gryphe/mythomax-l2-13b": "exploratory",
         "openrouter/ibm-granite/granite-4.2-8b": "exploratory",
-        "openrouter/inception/mercury-2": "exploratory",
-        "openrouter/inception/mercury-2.5": "exploratory",
-        "openrouter/inception/mercury-3": "exploratory",
         "openrouter/inclusionai/ling-3.0-flash": "exploratory",
         "openrouter/inclusionai/ling-3.0-flash-vl": "exploratory",
         "openrouter/inclusionai/ling-3.0-tiny": "exploratory",
         "openrouter/inclusionai/ling-3.1-flash": "exploratory",
+        "openrouter/inclusionai/ling-3.2-flash:free": "exploratory",
         "openrouter/inference-net/schematron-v2-small": "exploratory",
         "openrouter/inference-net/schematron-v2-turbo": "exploratory",
-        "openrouter/liquid/lfm-2.5-2.6b:free": "exploratory",
+        "openrouter/kt/midm-k-3.0-pro": "exploratory",
         "openrouter/liquid/lfm-2.5-24b-a2b": "standard",
+        "openrouter/liquid/lfm-3-1.7b": "exploratory",
+        "openrouter/liquid/lfm-3-1.7b:free": "exploratory",
         "openrouter/mancer/weaver": "exploratory",
-        "openrouter/meituan/longcat-2.0": "exploratory",
         "openrouter/meta-llama/llama-3.1-70b-instruct": "standard",
         "openrouter/meta-llama/llama-3.1-8b-instruct": "exploratory",
-        "openrouter/meta-llama/llama-3.2-1b-instruct": "exploratory",
         "openrouter/meta-llama/llama-3.2-3b-instruct": "exploratory",
         "openrouter/meta-llama/llama-3.3-70b-instruct": "standard",
         "openrouter/meta-llama/llama-4-maverick": "exploratory",
         "openrouter/meta-llama/llama-4-scout": "exploratory",
         "openrouter/meta-llama/llama-guard-4-12b": "exploratory",
+        "openrouter/meta/muse-ember": "exploratory",
         "openrouter/meta/muse-glimmer-30b": "standard",
         "openrouter/meta/muse-glimmer-30b:batch": "standard",
         "openrouter/meta/muse-spark-1.1": "exploratory",
@@ -5000,7 +5107,6 @@
         "openrouter/meta/muse-spark-open": "exploratory",
         "openrouter/meta/muse-wonder": "exploratory",
         "openrouter/microsoft/phi-4": "exploratory",
-        "openrouter/minimax/minimax-m1": "standard",
         "openrouter/minimax/minimax-m2.5": "standard",
         "openrouter/minimax/minimax-m2.7": "exploratory",
         "openrouter/minimax/minimax-m3": "exploratory",
@@ -5043,8 +5149,10 @@
         "openrouter/morph/morph-v3-fast:batch": "exploratory",
         "openrouter/morph/morph-v3-large": "standard",
         "openrouter/morph/morph-v3-large:batch": "standard",
+        "openrouter/motif-technologies/motif-3": "exploratory",
         "openrouter/nex-agi/nex-n2.5-mini": "exploratory",
         "openrouter/nex-agi/nex-n2.5-pro": "exploratory",
+        "openrouter/nex-agi/nex-n2.6": "exploratory",
         "openrouter/nousresearch/hermes-4-405b": "deep",
         "openrouter/nvidia/nemotron-3-nano-30b-a3b": "standard",
         "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": "deep",
@@ -5163,6 +5271,7 @@
         "openrouter/openrouter/fusion": "exploratory",
         "openrouter/openrouter/pareto-code": "exploratory",
         "openrouter/particle-ai/particle-1": "exploratory",
+        "openrouter/particle-ai/particle-1:free": "exploratory",
         "openrouter/perceptron/perceptron-mk1": "exploratory",
         "openrouter/perceptron/perceptron-mk1.5": "exploratory",
         "openrouter/perplexity/sonar": "exploratory",
@@ -5173,7 +5282,6 @@
         "openrouter/prism-ml/ternary-bonsai-2-27b": "standard",
         "openrouter/prism-ml/ternary-bonsai-2-9b": "exploratory",
         "openrouter/qwen/qwen-2.5-72b-instruct": "standard",
-        "openrouter/qwen/qwen-2.5-7b-instruct": "exploratory",
         "openrouter/qwen/qwen-2.5-coder-32b-instruct": "standard",
         "openrouter/qwen/qwen-plus": "exploratory",
         "openrouter/qwen/qwen2.5-vl-72b-instruct": "standard",
@@ -5190,7 +5298,6 @@
         "openrouter/qwen/qwen3-next-80b-a3b-instruct": "standard",
         "openrouter/qwen/qwen3-vl-235b-a22b-instruct": "deep",
         "openrouter/qwen/qwen3-vl-30b-a3b-instruct": "standard",
-        "openrouter/qwen/qwen3-vl-30b-a3b-thinking": "standard",
         "openrouter/qwen/qwen3-vl-8b-instruct": "exploratory",
         "openrouter/qwen/qwen3.5-122b-a10b": "deep",
         "openrouter/qwen/qwen3.5-27b": "standard",
@@ -5216,6 +5323,7 @@
         "openrouter/qwen/qwen3.8-max-0902:batch": "exploratory",
         "openrouter/qwen/qwen3.8-max-prime": "exploratory",
         "openrouter/qwen/qwen3.8-omni-flash": "exploratory",
+        "openrouter/qwen/qwen4-max": "exploratory",
         "openrouter/recursive/flint-v1.0:free": "exploratory",
         "openrouter/reflection/beam-1.0-501b-a23b": "deep",
         "openrouter/rekaai/reka-edge": "exploratory",
@@ -5231,22 +5339,19 @@
         "openrouter/sao10k/l3.1-euryale-70b": "standard",
         "openrouter/scaledown/extract": "exploratory",
         "openrouter/scaledown/summarize": "exploratory",
-        "openrouter/stealth/crouton-alpha": "exploratory",
-        "openrouter/stepfun/step-3.5-flash": "exploratory",
         "openrouter/stepfun/step-3.7-flash": "exploratory",
         "openrouter/stepfun/step-5-preview": "exploratory",
-        "openrouter/tencent/hunyuan-a13b-instruct": "exploratory",
         "openrouter/tencent/hy-mt2-1.8b": "exploratory",
         "openrouter/tencent/hy-mt2-30b-a3b": "standard",
         "openrouter/tencent/hy-mt2-7b": "exploratory",
         "openrouter/tencent/hy3": "exploratory",
-        "openrouter/tencent/hy3-preview": "exploratory",
         "openrouter/tencent/hy4": "exploratory",
         "openrouter/tencent/hy4-preview": "exploratory",
         "openrouter/thedrummer/cydonia-24b-v4.1": "standard",
         "openrouter/thedrummer/skyfall-36b-v2": "standard",
         "openrouter/thedrummer/unslopnemo-12b": "exploratory",
         "openrouter/thinkingmachines/inkling": "exploratory",
+        "openrouter/thinkingmachines/inkling-2-small": "exploratory",
         "openrouter/thinkingmachines/inkling-small": "exploratory",
         "openrouter/thinkingmachines/inkling-small:batch": "exploratory",
         "openrouter/unbiased/pareto-26.10": "exploratory",
@@ -5265,13 +5370,11 @@
         "openrouter/x-ai/grok-4.6:batch": "exploratory",
         "openrouter/x-ai/grok-4.7": "exploratory",
         "openrouter/x-ai/grok-4.7:batch": "exploratory",
-        "openrouter/x-ai/grok-build-0.1": "exploratory",
         "openrouter/xiaomi/mimo-v2.5": "exploratory",
         "openrouter/xiaomi/mimo-v2.5-pro": "exploratory",
         "openrouter/xiaomi/mimo-v2.6-flash": "exploratory",
         "openrouter/xiaomi/mimo-v2.6-pro": "exploratory",
         "openrouter/xiaomi/mimo-v2.6-pro-ultraspeed": "exploratory",
-        "openrouter/xingchen-agi/xing4.0-29b-a4b:free": "standard",
         "openrouter/z-ai/glm-4.5": "deep",
         "openrouter/z-ai/glm-4.5-air": "standard",
         "openrouter/z-ai/glm-4.5v": "exploratory",
@@ -5283,6 +5386,7 @@
         "openrouter/z-ai/glm-5-turbo": "exploratory",
         "openrouter/z-ai/glm-5.1": "exploratory",
         "openrouter/z-ai/glm-5.2": "exploratory",
+        "openrouter/z-ai/glm-5.2:batch": "exploratory",
         "openrouter/z-ai/glm-5.3": "exploratory",
         "openrouter/z-ai/glm-5.3-flash": "exploratory",
         "openrouter/z-ai/glm-5.3-flash:batch": "exploratory",
@@ -5339,7 +5443,6 @@
           "tools"
         ],
         "openrouter/aion-labs/aion-rp-llama-3.1-8b": [
-          "reasoning",
           "tools"
         ],
         "openrouter/amazon/nova-2-lite-v1": [
@@ -5378,6 +5481,18 @@
           "vision"
         ],
         "openrouter/anthropic/claude-fable-5.1:batch": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "openrouter/anthropic/claude-fable-5.2": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "openrouter/anthropic/claude-fable-5.2:batch": [
           "json",
           "reasoning",
           "tools",
@@ -5545,25 +5660,17 @@
           "tools",
           "vision"
         ],
-        "openrouter/bytedance-seed/seed-1.6": [
+        "openrouter/baidu/ernie-5.5-flash-preview:free": [
           "json",
           "reasoning",
-          "tools",
-          "vision"
+          "tools"
         ],
-        "openrouter/bytedance-seed/seed-1.6-flash": [
+        "openrouter/baidu/ernie-light-dt-1.0-intl": [
           "json",
           "reasoning",
-          "tools",
-          "vision"
+          "tools"
         ],
         "openrouter/bytedance-seed/seed-2-1-turbo": [
-          "json",
-          "reasoning",
-          "tools",
-          "vision"
-        ],
-        "openrouter/bytedance-seed/seed-2.0-code": [
           "json",
           "reasoning",
           "tools",
@@ -5607,10 +5714,7 @@
           "tools"
         ],
         "openrouter/cohere/command-r7b-12-2024": [
-          "json"
-        ],
-        "openrouter/cohere/north-mini-code:free": [
-          "reasoning",
+          "json",
           "tools"
         ],
         "openrouter/deepseek/deepseek-chat": [
@@ -5696,12 +5800,6 @@
           "vision"
         ],
         "openrouter/deepseek/deepseek-v4.1-flash:batch": [
-          "json",
-          "reasoning",
-          "tools",
-          "vision"
-        ],
-        "openrouter/dots-studio/dots-3-note-preview:free": [
           "json",
           "reasoning",
           "tools",
@@ -5895,6 +5993,30 @@
           "tools",
           "vision"
         ],
+        "openrouter/google/gemini-4-carbon": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "openrouter/google/gemini-4-carbon:batch": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "openrouter/google/gemini-4-hydrogen": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "openrouter/google/gemini-4-hydrogen:batch": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "openrouter/google/gemini-nano-banana-2.1": [
           "json",
           "reasoning",
@@ -5966,21 +6088,6 @@
           "reasoning",
           "tools"
         ],
-        "openrouter/inception/mercury-2": [
-          "json",
-          "reasoning",
-          "tools"
-        ],
-        "openrouter/inception/mercury-2.5": [
-          "json",
-          "reasoning",
-          "tools"
-        ],
-        "openrouter/inception/mercury-3": [
-          "json",
-          "reasoning",
-          "tools"
-        ],
         "openrouter/inclusionai/ling-3.0-flash": [
           "json",
           "reasoning",
@@ -5998,9 +6105,14 @@
           "tools"
         ],
         "openrouter/inclusionai/ling-3.1-flash": [
-          "json",
           "reasoning",
           "tools"
+        ],
+        "openrouter/inclusionai/ling-3.2-flash:free": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
         ],
         "openrouter/inference-net/schematron-v2-small": [
           "json"
@@ -6008,7 +6120,22 @@
         "openrouter/inference-net/schematron-v2-turbo": [
           "json"
         ],
+        "openrouter/kt/midm-k-3.0-pro": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
         "openrouter/liquid/lfm-2.5-24b-a2b": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "openrouter/liquid/lfm-3-1.7b": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "openrouter/liquid/lfm-3-1.7b:free": [
           "json",
           "reasoning",
           "tools"
@@ -6016,43 +6143,37 @@
         "openrouter/mancer/weaver": [
           "json"
         ],
-        "openrouter/meituan/longcat-2.0": [
-          "reasoning",
-          "tools"
-        ],
         "openrouter/meta-llama/llama-3.1-70b-instruct": [
-          "reasoning",
           "tools"
         ],
         "openrouter/meta-llama/llama-3.1-8b-instruct": [
           "json",
-          "reasoning",
           "tools"
-        ],
-        "openrouter/meta-llama/llama-3.2-1b-instruct": [
-          "json"
         ],
         "openrouter/meta-llama/llama-3.2-3b-instruct": [
           "json"
         ],
         "openrouter/meta-llama/llama-3.3-70b-instruct": [
           "json",
-          "reasoning",
           "tools"
         ],
         "openrouter/meta-llama/llama-4-maverick": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "openrouter/meta-llama/llama-4-scout": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "openrouter/meta-llama/llama-guard-4-12b": [
+          "vision"
+        ],
+        "openrouter/meta/muse-ember": [
+          "json",
+          "reasoning",
+          "tools",
           "vision"
         ],
         "openrouter/meta/muse-glimmer-30b": [
@@ -6111,10 +6232,6 @@
         ],
         "openrouter/microsoft/phi-4": [
           "json"
-        ],
-        "openrouter/minimax/minimax-m1": [
-          "reasoning",
-          "tools"
         ],
         "openrouter/minimax/minimax-m2.5": [
           "json",
@@ -6317,12 +6434,23 @@
         "openrouter/morph/morph-v3-large:batch": [
           "json"
         ],
+        "openrouter/motif-technologies/motif-3": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
         "openrouter/nex-agi/nex-n2.5-mini": [
           "json",
           "reasoning",
           "vision"
         ],
         "openrouter/nex-agi/nex-n2.5-pro": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "openrouter/nex-agi/nex-n2.6": [
           "json",
           "reasoning",
           "tools",
@@ -6357,6 +6485,12 @@
           "tools"
         ],
         "openrouter/nvidia/nemotron-3.5-super-vl": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "openrouter/nvidia/nemotron-3.5-super-vl:free": [
           "json",
           "reasoning",
           "tools",
@@ -6950,6 +7084,12 @@
           "tools",
           "vision"
         ],
+        "openrouter/particle-ai/particle-1:free": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "openrouter/perceptron/perceptron-mk1": [
           "json",
           "reasoning",
@@ -6994,10 +7134,6 @@
           "vision"
         ],
         "openrouter/qwen/qwen-2.5-72b-instruct": [
-          "json",
-          "tools"
-        ],
-        "openrouter/qwen/qwen-2.5-7b-instruct": [
           "json",
           "tools"
         ],
@@ -7066,12 +7202,6 @@
         ],
         "openrouter/qwen/qwen3-vl-30b-a3b-instruct": [
           "json",
-          "tools",
-          "vision"
-        ],
-        "openrouter/qwen/qwen3-vl-30b-a3b-thinking": [
-          "json",
-          "reasoning",
           "tools",
           "vision"
         ],
@@ -7248,6 +7378,7 @@
         ],
         "openrouter/ricursiveai/ripple-65b-preview": [
           "json",
+          "reasoning",
           "tools"
         ],
         "openrouter/sakana/fugu-max": [
@@ -7286,16 +7417,6 @@
         "openrouter/scaledown/summarize": [
           "vision"
         ],
-        "openrouter/stealth/crouton-alpha": [
-          "json",
-          "reasoning",
-          "tools",
-          "vision"
-        ],
-        "openrouter/stepfun/step-3.5-flash": [
-          "reasoning",
-          "tools"
-        ],
         "openrouter/stepfun/step-3.7-flash": [
           "json",
           "reasoning",
@@ -7308,10 +7429,6 @@
           "tools",
           "vision"
         ],
-        "openrouter/tencent/hunyuan-a13b-instruct": [
-          "json",
-          "reasoning"
-        ],
         "openrouter/tencent/hy-mt2-1.8b": [
           "json"
         ],
@@ -7322,11 +7439,6 @@
           "json"
         ],
         "openrouter/tencent/hy3": [
-          "json",
-          "reasoning",
-          "tools"
-        ],
-        "openrouter/tencent/hy3-preview": [
           "json",
           "reasoning",
           "tools"
@@ -7358,6 +7470,12 @@
           "tools",
           "vision"
         ],
+        "openrouter/thinkingmachines/inkling-2-small": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "openrouter/thinkingmachines/inkling-small": [
           "json",
           "reasoning",
@@ -7371,10 +7489,12 @@
           "vision"
         ],
         "openrouter/unbiased/pareto-26.10": [
+          "json",
           "tools",
           "vision"
         ],
         "openrouter/unbiased/pareto-26.10-preview": [
+          "json",
           "tools",
           "vision"
         ],
@@ -7450,12 +7570,6 @@
           "tools",
           "vision"
         ],
-        "openrouter/x-ai/grok-build-0.1": [
-          "json",
-          "reasoning",
-          "tools",
-          "vision"
-        ],
         "openrouter/xiaomi/mimo-v2.5": [
           "json",
           "reasoning",
@@ -7484,11 +7598,6 @@
           "reasoning",
           "tools",
           "vision"
-        ],
-        "openrouter/xingchen-agi/xing4.0-29b-a4b:free": [
-          "json",
-          "reasoning",
-          "tools"
         ],
         "openrouter/z-ai/glm-4.5": [
           "json",
@@ -7543,6 +7652,11 @@
           "tools"
         ],
         "openrouter/z-ai/glm-5.2": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "openrouter/z-ai/glm-5.2:batch": [
           "json",
           "reasoning",
           "tools"
@@ -7863,12 +7977,15 @@
       "key_hint": "Create an API key at app.kilo.ai \u2192 Your Profile on your personal account (not an organization), then scroll to the bottom of the page. Requires account credits (docs: kilo.ai/docs/gateway)",
       "_note": "OpenAI-compatible multi-vendor gateway. The base path is /api/gateway, not /v1, so discovery hits /api/gateway/models; that endpoint answers 200 without a key and returns an OpenRouter-shaped {\"data\": [...]} catalog (~380 models as of September 2026, ids like anthropic/claude-sonnet-5 and kilo-auto/* router pseudo-models), so no models_url override is needed. Inference is credit-based; some catalog entries carry an isFree flag, but no free tier is asserted here because none was observed in use.",
       "believed_free": [
-        "kilo/cohere/north-mini-code:free",
-        "kilo/dots-studio/dots-3-note-preview:free",
+        "kilo/baidu/ernie-5.5-flash-preview:free",
+        "kilo/inclusionai/ling-3.2-flash:free",
+        "kilo/liquid/lfm-3-1.7b:free",
         "kilo/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
         "kilo/nvidia/nemotron-3-ultra-550b-a55b:free",
         "kilo/nvidia/nemotron-3.5-lightning:free",
-        "kilo/nvidia/nemotron-3.5-super-vl:free"
+        "kilo/nvidia/nemotron-3.5-super-vl:free",
+        "kilo/particle-ai/particle-1:free",
+        "kilo/recursive/flint-v1.0:free"
       ],
       "model_reasoning": {
         "kilo/aion-labs/aion-2.0": "exploratory",
@@ -7889,6 +8006,7 @@
         "kilo/anthropic/claude-3-haiku": "exploratory",
         "kilo/anthropic/claude-fable-5": "exploratory",
         "kilo/anthropic/claude-fable-5.1": "exploratory",
+        "kilo/anthropic/claude-fable-5.2": "exploratory",
         "kilo/anthropic/claude-haiku-4.5": "exploratory",
         "kilo/anthropic/claude-haiku-5.5": "exploratory",
         "kilo/anthropic/claude-opus-4": "exploratory",
@@ -7906,6 +8024,8 @@
         "kilo/anthropic/claude-sonnet-5.5": "exploratory",
         "kilo/arcee-ai/trinity-large-thinking": "standard",
         "kilo/baidu/ernie-4.5-vl-424b-a47b": "deep",
+        "kilo/baidu/ernie-5.5-flash-preview:free": "exploratory",
+        "kilo/baidu/ernie-light-dt-1.0-intl": "exploratory",
         "kilo/bytedance-seed/seed-1.6": "exploratory",
         "kilo/bytedance-seed/seed-1.6-flash": "exploratory",
         "kilo/bytedance-seed/seed-2-1-turbo": "exploratory",
@@ -7966,6 +8086,8 @@
         "kilo/google/gemini-3.7-flash": "exploratory",
         "kilo/google/gemini-3.8-flash": "exploratory",
         "kilo/google/gemini-4-argon": "exploratory",
+        "kilo/google/gemini-4-carbon": "exploratory",
+        "kilo/google/gemini-4-hydrogen": "exploratory",
         "kilo/google/gemini-nano-banana-2.1": "exploratory",
         "kilo/google/gemini-omni-1.1-flash": "exploratory",
         "kilo/google/gemini-omni-1.2-flash": "exploratory",
@@ -7979,6 +8101,7 @@
         "kilo/google/lyria-3-clip-preview": "exploratory",
         "kilo/google/lyria-3-pro-preview": "exploratory",
         "kilo/gryphe/mythomax-l2-13b": "exploratory",
+        "kilo/humansand/ampersand-v0.1": "exploratory",
         "kilo/ibm-granite/granite-4.0-h-micro": "exploratory",
         "kilo/ibm-granite/granite-4.2-8b": "exploratory",
         "kilo/inception/mercury-2": "exploratory",
@@ -7994,6 +8117,7 @@
         "kilo/inclusionai/ling-3.0-tiny": "exploratory",
         "kilo/inclusionai/ling-3.1-flash": "exploratory",
         "kilo/inclusionai/ling-3.1-flash-1019": "exploratory",
+        "kilo/inclusionai/ling-3.2-flash:free": "exploratory",
         "kilo/inference-net/schematron-v2-small": "exploratory",
         "kilo/inference-net/schematron-v2-turbo": "exploratory",
         "kilo/interfaze/interfaze-beta": "exploratory",
@@ -8002,11 +8126,14 @@
         "kilo/kilo-auto/free": "exploratory",
         "kilo/kilo-auto/frontier": "exploratory",
         "kilo/kilo-auto/small": "exploratory",
+        "kilo/kt/midm-k-3.0-pro": "exploratory",
         "kilo/kwaipilot/kat-coder-pro-v2": "exploratory",
         "kilo/kwaipilot/kat-coder-pro-v2.5": "exploratory",
         "kilo/liquid/lfm-2.5-2.6b": "exploratory",
         "kilo/liquid/lfm-2.5-2.6b:free": "exploratory",
         "kilo/liquid/lfm-2.5-24b-a2b": "standard",
+        "kilo/liquid/lfm-3-1.7b": "exploratory",
+        "kilo/liquid/lfm-3-1.7b:free": "exploratory",
         "kilo/mancer/weaver": "exploratory",
         "kilo/meituan/longcat-2.0": "exploratory",
         "kilo/meituan/longcat-2.5": "exploratory",
@@ -8018,6 +8145,7 @@
         "kilo/meta-llama/llama-4-maverick": "exploratory",
         "kilo/meta-llama/llama-4-scout": "exploratory",
         "kilo/meta-llama/llama-guard-4-12b": "exploratory",
+        "kilo/meta/muse-ember": "exploratory",
         "kilo/meta/muse-glimmer-30b": "standard",
         "kilo/meta/muse-spark-1.1": "exploratory",
         "kilo/meta/muse-spark-1.2": "exploratory",
@@ -8081,10 +8209,12 @@
         "kilo/moonshotai/kimi-k3.1-pro-highspeed": "exploratory",
         "kilo/morph/morph-v3-fast": "exploratory",
         "kilo/morph/morph-v3-large": "standard",
+        "kilo/motif-technologies/motif-3": "exploratory",
         "kilo/nex-agi/nex-n2.5-mini": "exploratory",
         "kilo/nex-agi/nex-n2.5-mini:free": "exploratory",
         "kilo/nex-agi/nex-n2.5-pro": "exploratory",
         "kilo/nex-agi/nex-n2.5-pro:free": "exploratory",
+        "kilo/nex-agi/nex-n2.6": "exploratory",
         "kilo/nousresearch/hermes-3-llama-3.1-405b": "deep",
         "kilo/nousresearch/hermes-3-llama-3.1-70b": "standard",
         "kilo/nousresearch/hermes-4-405b": "deep",
@@ -8278,6 +8408,8 @@
         "kilo/qwen/qwen3.8-max-0902": "exploratory",
         "kilo/qwen/qwen3.8-max-prime": "exploratory",
         "kilo/qwen/qwen3.8-omni-flash": "exploratory",
+        "kilo/qwen/qwen4-max": "exploratory",
+        "kilo/recursive/flint-v1.0": "exploratory",
         "kilo/recursive/flint-v1.0:free": "exploratory",
         "kilo/reflection/beam-1.0-501b-a23b": "deep",
         "kilo/reflection/beam-free": "exploratory",
@@ -8324,6 +8456,7 @@
         "kilo/thedrummer/skyfall-36b-v2": "standard",
         "kilo/thedrummer/unslopnemo-12b": "exploratory",
         "kilo/thinkingmachines/inkling": "exploratory",
+        "kilo/thinkingmachines/inkling-2-small": "exploratory",
         "kilo/thinkingmachines/inkling-small": "exploratory",
         "kilo/thinkingmachines/inkling-small:free": "exploratory",
         "kilo/unbiased/pareto": "deep",
@@ -8421,7 +8554,6 @@
           "tools"
         ],
         "kilo/aion-labs/aion-rp-llama-3.1-8b": [
-          "reasoning",
           "tools"
         ],
         "kilo/amazon/nova-2-lite-v1": [
@@ -8472,6 +8604,12 @@
           "vision"
         ],
         "kilo/anthropic/claude-fable-5.1": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "kilo/anthropic/claude-fable-5.2": [
           "json",
           "reasoning",
           "tools",
@@ -8574,6 +8712,16 @@
           "reasoning",
           "vision"
         ],
+        "kilo/baidu/ernie-5.5-flash-preview:free": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "kilo/baidu/ernie-light-dt-1.0-intl": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
         "kilo/bytedance-seed/seed-1.6": [
           "json",
           "reasoning",
@@ -8641,10 +8789,7 @@
           "tools"
         ],
         "kilo/cohere/command-r7b-12-2024": [
-          "json"
-        ],
-        "kilo/cohere/north-mini-code:free": [
-          "reasoning",
+          "json",
           "tools"
         ],
         "kilo/deepseek/deepseek-chat": [
@@ -8738,15 +8883,10 @@
         "kilo/deepseek/deepseek-v4.1-flash-1017-ultrafast": [
           "json",
           "reasoning",
-          "tools"
-        ],
-        "kilo/deepseek/deepseek-v4.1-flash-fast": [
-          "json",
-          "reasoning",
           "tools",
           "vision"
         ],
-        "kilo/dots-studio/dots-3-note-preview:free": [
+        "kilo/deepseek/deepseek-v4.1-flash-fast": [
           "json",
           "reasoning",
           "tools",
@@ -8892,6 +9032,18 @@
           "tools",
           "vision"
         ],
+        "kilo/google/gemini-4-carbon": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "kilo/google/gemini-4-hydrogen": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "kilo/google/gemini-nano-banana-2.1": [
           "json",
           "reasoning",
@@ -8951,6 +9103,10 @@
         "kilo/gryphe/mythomax-l2-13b": [
           "json"
         ],
+        "kilo/humansand/ampersand-v0.1": [
+          "reasoning",
+          "tools"
+        ],
         "kilo/ibm-granite/granite-4.0-h-micro": [
           "json"
         ],
@@ -8980,7 +9136,6 @@
           "tools"
         ],
         "kilo/inclusionai/ling-3.0-flash-fin": [
-          "json",
           "reasoning",
           "tools"
         ],
@@ -9015,13 +9170,18 @@
           "tools"
         ],
         "kilo/inclusionai/ling-3.1-flash": [
-          "json",
           "reasoning",
           "tools"
         ],
         "kilo/inclusionai/ling-3.1-flash-1019": [
           "reasoning",
           "tools"
+        ],
+        "kilo/inclusionai/ling-3.2-flash:free": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
         ],
         "kilo/inference-net/schematron-v2-small": [
           "json"
@@ -9057,6 +9217,11 @@
           "reasoning",
           "tools"
         ],
+        "kilo/kt/midm-k-3.0-pro": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
         "kilo/kwaipilot/kat-coder-pro-v2": [
           "json",
           "tools"
@@ -9075,6 +9240,16 @@
           "reasoning",
           "tools"
         ],
+        "kilo/liquid/lfm-3-1.7b": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "kilo/liquid/lfm-3-1.7b:free": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
         "kilo/mancer/weaver": [
           "json"
         ],
@@ -9089,12 +9264,10 @@
           "vision"
         ],
         "kilo/meta-llama/llama-3.1-70b-instruct": [
-          "reasoning",
           "tools"
         ],
         "kilo/meta-llama/llama-3.1-8b-instruct": [
           "json",
-          "reasoning",
           "tools"
         ],
         "kilo/meta-llama/llama-3.2-1b-instruct": [
@@ -9105,22 +9278,25 @@
         ],
         "kilo/meta-llama/llama-3.3-70b-instruct": [
           "json",
-          "reasoning",
           "tools"
         ],
         "kilo/meta-llama/llama-4-maverick": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "kilo/meta-llama/llama-4-scout": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "kilo/meta-llama/llama-guard-4-12b": [
+          "vision"
+        ],
+        "kilo/meta/muse-ember": [
+          "json",
+          "reasoning",
+          "tools",
           "vision"
         ],
         "kilo/meta/muse-glimmer-30b": [
@@ -9425,6 +9601,11 @@
         "kilo/morph/morph-v3-large": [
           "json"
         ],
+        "kilo/motif-technologies/motif-3": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
         "kilo/nex-agi/nex-n2.5-mini": [
           "json",
           "reasoning",
@@ -9443,6 +9624,12 @@
           "vision"
         ],
         "kilo/nex-agi/nex-n2.5-pro:free": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "kilo/nex-agi/nex-n2.6": [
           "json",
           "reasoning",
           "tools",
@@ -10054,6 +10241,12 @@
           "reasoning",
           "tools"
         ],
+        "kilo/paperinstruments/ultramarine-1-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "kilo/particle-ai/particle-1": [
           "json",
           "reasoning",
@@ -10432,6 +10625,16 @@
           "tools",
           "vision"
         ],
+        "kilo/recursive/flint-v1.0": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "kilo/recursive/flint-v1.0:free": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
         "kilo/reflection/beam-1.0-501b-a23b": [
           "json",
           "reasoning",
@@ -10457,6 +10660,7 @@
         ],
         "kilo/ricursiveai/ripple-65b-preview": [
           "json",
+          "reasoning",
           "tools"
         ],
         "kilo/sakana/fugu-max": [
@@ -10627,6 +10831,12 @@
           "tools",
           "vision"
         ],
+        "kilo/thinkingmachines/inkling-2-small": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "kilo/thinkingmachines/inkling-small": [
           "json",
           "reasoning",
@@ -10645,10 +10855,12 @@
           "vision"
         ],
         "kilo/unbiased/pareto-26.10": [
+          "json",
           "tools",
           "vision"
         ],
         "kilo/unbiased/pareto-26.10-preview": [
+          "json",
           "tools",
           "vision"
         ],
@@ -10695,13 +10907,11 @@
         ],
         "kilo/x-ai/grok-4.20-non-reasoning": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "kilo/x-ai/grok-4.20-non-reasoning-beta": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
@@ -11217,7 +11427,6 @@
           "tools"
         ],
         "aion-labs/aion-labs/aion-rp-llama-3.1-8b": [
-          "reasoning",
           "tools"
         ]
       },
@@ -11357,6 +11566,7 @@
         "openmathmodel/mistralai/mistral-large-4-0": "standard",
         "openmathmodel/moonshotai/kimi-k3.1-pro": "exploratory",
         "openmathmodel/nvidia/nemotron-3-super-120b-a12b": "deep",
+        "openmathmodel/thinkingmachines/inkling-2-small": "exploratory",
         "openmathmodel/z-ai/glm-5.3": "exploratory",
         "openmathmodel/z-ai/glm-5.3-flash": "exploratory"
       },
@@ -11390,6 +11600,12 @@
           "reasoning",
           "tools"
         ],
+        "openmathmodel/thinkingmachines/inkling-2-small": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "openmathmodel/z-ai/glm-5.3": [
           "json",
           "reasoning",
@@ -11419,14 +11635,17 @@
         "huggingface/aisingapore/qwen-sea-lion-v4-32b-it": "standard",
         "huggingface/aisingapore/qwen-sea-lion-v4.5-27b-it": "standard",
         "huggingface/alpindale/wizardlm-2-8x22b": "standard",
+        "huggingface/anthracite-org/magnum-v4-72b": "standard",
         "huggingface/baidu/ernie-4.5-vl-424b-a47b-base-pt": "deep",
         "huggingface/bsc-lt/alia-40b-instruct-2606": "standard",
+        "huggingface/bytedance-seed/ui-tars-1.5-7b": "exploratory",
         "huggingface/coherelabs/aya-expanse-32b": "standard",
         "huggingface/coherelabs/aya-vision-32b": "standard",
         "huggingface/coherelabs/c4ai-command-a-03-2025": "exploratory",
         "huggingface/coherelabs/c4ai-command-r-08-2024": "exploratory",
         "huggingface/coherelabs/c4ai-command-r7b-12-2024": "exploratory",
         "huggingface/coherelabs/c4ai-command-r7b-arabic-02-2025": "exploratory",
+        "huggingface/coherelabs/command-a-plus-05-2026-bf16": "exploratory",
         "huggingface/coherelabs/command-a-reasoning-08-2025": "deep",
         "huggingface/coherelabs/command-a-translate-08-2025": "exploratory",
         "huggingface/coherelabs/command-a-vision-07-2025": "exploratory",
@@ -11453,11 +11672,14 @@
         "huggingface/deepseek-ai/deepseek-v4-pro-0813": "exploratory",
         "huggingface/deepseek-ai/deepseek-v4.1-flash": "exploratory",
         "huggingface/deepseek-ai/deepseek-v4.1-flash-1017": "exploratory",
+        "huggingface/dphn/dolphin-mistral-24b-venice-edition": "standard",
+        "huggingface/google/gemma-2-27b-it": "standard",
         "huggingface/google/gemma-3-12b-it": "exploratory",
         "huggingface/google/gemma-3-27b-it": "standard",
         "huggingface/google/gemma-3-4b-it": "exploratory",
         "huggingface/google/gemma-4-26b-a4b-it": "standard",
         "huggingface/google/gemma-4-31b-it": "standard",
+        "huggingface/gryphe/mythomax-l2-13b": "exploratory",
         "huggingface/ibm-granite/granite-4.2-30b": "standard",
         "huggingface/ibm-granite/granite-4.2-3b": "exploratory",
         "huggingface/ibm-granite/granite-4.2-8b": "exploratory",
@@ -11465,8 +11687,13 @@
         "huggingface/inclusionai/ling-3.0-flash-fin": "exploratory",
         "huggingface/inclusionai/ling-3.0-flash-vl": "exploratory",
         "huggingface/inclusionai/ling-3.1-flash": "exploratory",
+        "huggingface/liquidai/lfm2.5-24b-a2b": "standard",
+        "huggingface/liquidai/lfm3-1.7b": "exploratory",
+        "huggingface/meta-llama/llama-3.1-70b-instruct": "standard",
         "huggingface/meta-llama/llama-3.1-8b-instruct": "exploratory",
+        "huggingface/meta-llama/llama-3.2-3b-instruct": "exploratory",
         "huggingface/meta-llama/llama-3.3-70b-instruct": "standard",
+        "huggingface/meta-llama/llama-4-maverick-17b-128e-instruct": "standard",
         "huggingface/meta-llama/llama-4-maverick-17b-128e-instruct-fp8": "standard",
         "huggingface/meta-llama/llama-4-scout-17b-16e-instruct": "standard",
         "huggingface/meta-llama/llama-guard-4-12b": "exploratory",
@@ -11480,6 +11707,9 @@
         "huggingface/minimaxai/minimax-m2.7": "exploratory",
         "huggingface/minimaxai/minimax-m3": "exploratory",
         "huggingface/minimaxai/minimax-m3.1-flash": "exploratory",
+        "huggingface/mistralai/mistral-large-4-1t-a52b": "standard",
+        "huggingface/moondream/moondream3-preview": "exploratory",
+        "huggingface/moondream/moondream3.1-9b-a2b": "exploratory",
         "huggingface/moonshotai/kimi-k2-instruct": "deep",
         "huggingface/moonshotai/kimi-k2-instruct-0905": "exploratory",
         "huggingface/moonshotai/kimi-k2.5": "exploratory",
@@ -11488,9 +11718,13 @@
         "huggingface/moonshotai/kimi-k3": "exploratory",
         "huggingface/moonshotai/kimi-k3.1-pro": "exploratory",
         "huggingface/nousresearch/hermes-3-llama-3.1-70b": "standard",
+        "huggingface/nousresearch/hermes-4-405b": "deep",
+        "huggingface/nvidia/nvidia-nemotron-3-nano-30b-a3b-bf16": "standard",
+        "huggingface/nvidia/nvidia-nemotron-3-super-120b-a12b-fp8": "deep",
         "huggingface/nvidia/nvidia-nemotron-3-ultra-550b-a55b-bf16": "deep",
         "huggingface/nvidia/nvidia-nemotron-3-ultra-550b-a55b-nvfp4": "deep",
         "huggingface/nvidia/nvidia-nemotron-3.5-lightning-30b-a3b-bf16": "standard",
+        "huggingface/nvidia/nvidia-nemotron-3.5-super-vl-120b-a12b-bf16": "deep",
         "huggingface/nvidia/nvidia-nemotron-3.5-super-vl-120b-a12b-nvfp4": "deep",
         "huggingface/openai/gpt-oss-120b": "deep",
         "huggingface/openai/gpt-oss-20b": "standard",
@@ -11507,6 +11741,7 @@
         "huggingface/qwen/qwen3-235b-a22b-instruct-2507": "deep",
         "huggingface/qwen/qwen3-235b-a22b-thinking-2507": "deep",
         "huggingface/qwen/qwen3-30b-a3b": "standard",
+        "huggingface/qwen/qwen3-30b-a3b-instruct-2507": "standard",
         "huggingface/qwen/qwen3-32b": "standard",
         "huggingface/qwen/qwen3-4b-instruct-2507": "exploratory",
         "huggingface/qwen/qwen3-4b-thinking-2507": "exploratory",
@@ -11518,6 +11753,7 @@
         "huggingface/qwen/qwen3-vl-235b-a22b-instruct": "deep",
         "huggingface/qwen/qwen3-vl-235b-a22b-thinking": "deep",
         "huggingface/qwen/qwen3-vl-30b-a3b-instruct": "standard",
+        "huggingface/qwen/qwen3-vl-8b-instruct": "exploratory",
         "huggingface/qwen/qwen3.5-122b-a10b": "deep",
         "huggingface/qwen/qwen3.5-27b": "standard",
         "huggingface/qwen/qwen3.5-35b-a3b": "standard",
@@ -11539,9 +11775,12 @@
         "huggingface/swiss-ai/apertus-v1.5-70b": "standard",
         "huggingface/swiss-ai/apertus-v1.5-8b": "exploratory",
         "huggingface/tencent/hy3": "exploratory",
+        "huggingface/tencent/hy4": "exploratory",
         "huggingface/tencent/hy4-preview": "exploratory",
         "huggingface/thinkingmachines/inkling": "exploratory",
+        "huggingface/thinkingmachines/inkling-2-small": "exploratory",
         "huggingface/thinkingmachines/inkling-small": "exploratory",
+        "huggingface/undi95/remm-slerp-l2-13b": "exploratory",
         "huggingface/xiaomimimo/mimo-v2.5": "exploratory",
         "huggingface/xiaomimimo/mimo-v2.5-pro": "exploratory",
         "huggingface/xiaomimimo/mimo-v2.6-flash-rl": "exploratory",
@@ -11584,6 +11823,13 @@
         "huggingface/alpindale/wizardlm-2-8x22b": [
           "json"
         ],
+        "huggingface/anthracite-org/magnum-v4-72b": [
+          "json"
+        ],
+        "huggingface/bytedance-seed/ui-tars-1.5-7b": [
+          "json",
+          "vision"
+        ],
         "huggingface/coherelabs/c4ai-command-a-03-2025": [
           "json",
           "tools"
@@ -11597,6 +11843,10 @@
           "tools"
         ],
         "huggingface/coherelabs/c4ai-command-r7b-arabic-02-2025": [
+          "json",
+          "tools"
+        ],
+        "huggingface/coherelabs/command-a-plus-05-2026-bf16": [
           "json",
           "tools"
         ],
@@ -11701,6 +11951,12 @@
           "tools",
           "vision"
         ],
+        "huggingface/dphn/dolphin-mistral-24b-venice-edition": [
+          "json"
+        ],
+        "huggingface/google/gemma-2-27b-it": [
+          "json"
+        ],
         "huggingface/google/gemma-3-12b-it": [
           "json",
           "tools",
@@ -11727,6 +11983,9 @@
           "tools",
           "vision"
         ],
+        "huggingface/gryphe/mythomax-l2-13b": [
+          "json"
+        ],
         "huggingface/ibm-granite/granite-4.2-30b": [
           "json"
         ],
@@ -11744,7 +12003,6 @@
           "tools"
         ],
         "huggingface/inclusionai/ling-3.0-flash-fin": [
-          "json",
           "reasoning",
           "tools"
         ],
@@ -11755,18 +12013,31 @@
           "vision"
         ],
         "huggingface/inclusionai/ling-3.1-flash": [
+          "reasoning",
+          "tools"
+        ],
+        "huggingface/liquidai/lfm2.5-24b-a2b": [
           "json",
           "reasoning",
+          "tools"
+        ],
+        "huggingface/liquidai/lfm3-1.7b": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "huggingface/meta-llama/llama-3.1-70b-instruct": [
           "tools"
         ],
         "huggingface/meta-llama/llama-3.1-8b-instruct": [
           "json",
-          "reasoning",
           "tools"
+        ],
+        "huggingface/meta-llama/llama-3.2-3b-instruct": [
+          "json"
         ],
         "huggingface/meta-llama/llama-3.3-70b-instruct": [
           "json",
-          "reasoning",
           "tools"
         ],
         "huggingface/meta-llama/llama-4-maverick-17b-128e-instruct-fp8": [
@@ -11777,7 +12048,6 @@
         ],
         "huggingface/meta-llama/llama-4-scout-17b-16e-instruct": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
@@ -11831,6 +12101,18 @@
           "tools",
           "vision"
         ],
+        "huggingface/mistralai/mistral-large-4-1t-a52b": [
+          "json",
+          "tools"
+        ],
+        "huggingface/moondream/moondream3-preview": [
+          "reasoning",
+          "vision"
+        ],
+        "huggingface/moondream/moondream3.1-9b-a2b": [
+          "reasoning",
+          "vision"
+        ],
         "huggingface/moonshotai/kimi-k2-instruct": [
           "tools"
         ],
@@ -11871,6 +12153,18 @@
         "huggingface/nousresearch/hermes-3-llama-3.1-70b": [
           "json"
         ],
+        "huggingface/nousresearch/hermes-4-405b": [
+          "json",
+          "reasoning"
+        ],
+        "huggingface/nvidia/nvidia-nemotron-3-nano-30b-a3b-bf16": [
+          "reasoning",
+          "tools"
+        ],
+        "huggingface/nvidia/nvidia-nemotron-3-super-120b-a12b-fp8": [
+          "reasoning",
+          "tools"
+        ],
         "huggingface/nvidia/nvidia-nemotron-3-ultra-550b-a55b-bf16": [
           "reasoning",
           "tools"
@@ -11880,6 +12174,9 @@
           "tools"
         ],
         "huggingface/nvidia/nvidia-nemotron-3.5-lightning-30b-a3b-bf16": [
+          "reasoning"
+        ],
+        "huggingface/nvidia/nvidia-nemotron-3.5-super-vl-120b-a12b-bf16": [
           "reasoning"
         ],
         "huggingface/nvidia/nvidia-nemotron-3.5-super-vl-120b-a12b-nvfp4": [
@@ -11940,6 +12237,10 @@
           "reasoning",
           "tools"
         ],
+        "huggingface/qwen/qwen3-30b-a3b-instruct-2507": [
+          "json",
+          "tools"
+        ],
         "huggingface/qwen/qwen3-32b": [
           "json",
           "reasoning",
@@ -11983,6 +12284,11 @@
           "vision"
         ],
         "huggingface/qwen/qwen3-vl-30b-a3b-instruct": [
+          "json",
+          "tools",
+          "vision"
+        ],
+        "huggingface/qwen/qwen3-vl-8b-instruct": [
           "json",
           "tools",
           "vision"
@@ -12067,6 +12373,12 @@
           "reasoning",
           "tools"
         ],
+        "huggingface/tencent/hy4": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "huggingface/tencent/hy4-preview": [
           "json",
           "reasoning",
@@ -12079,11 +12391,20 @@
           "tools",
           "vision"
         ],
+        "huggingface/thinkingmachines/inkling-2-small": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "huggingface/thinkingmachines/inkling-small": [
           "json",
           "reasoning",
           "tools",
           "vision"
+        ],
+        "huggingface/undi95/remm-slerp-l2-13b": [
+          "json"
         ],
         "huggingface/xiaomimimo/mimo-v2.5": [
           "json",
@@ -12324,6 +12645,7 @@
         "vercel/alibaba/qwen3.8-max-0902": "exploratory",
         "vercel/alibaba/qwen3.8-max-prime": "exploratory",
         "vercel/alibaba/qwen3.8-omni-flash": "exploratory",
+        "vercel/alibaba/qwen4-max": "exploratory",
         "vercel/alibaba/wan-v2.5-t2v-preview": "exploratory",
         "vercel/alibaba/wan-v2.6-i2v": "exploratory",
         "vercel/alibaba/wan-v2.6-i2v-flash": "exploratory",
@@ -12344,6 +12666,9 @@
         "vercel/anthropic/claude-fable-5-batch": "exploratory",
         "vercel/anthropic/claude-fable-5.1": "exploratory",
         "vercel/anthropic/claude-fable-5.1-batch": "exploratory",
+        "vercel/anthropic/claude-fable-5.2": "exploratory",
+        "vercel/anthropic/claude-fable-5.2-batch": "exploratory",
+        "vercel/anthropic/claude-fable-5.2-fast": "exploratory",
         "vercel/anthropic/claude-haiku-4.5": "exploratory",
         "vercel/anthropic/claude-haiku-4.5-batch": "exploratory",
         "vercel/anthropic/claude-haiku-5.5": "exploratory",
@@ -12485,6 +12810,9 @@
         "vercel/google/gemini-3.8-live": "exploratory",
         "vercel/google/gemini-3.8-live-extended-thinking": "exploratory",
         "vercel/google/gemini-4-argon": "exploratory",
+        "vercel/google/gemini-4-carbon": "exploratory",
+        "vercel/google/gemini-4-hydrogen": "exploratory",
+        "vercel/google/gemini-decision-1": "exploratory",
         "vercel/google/gemini-embedding-001": "exploratory",
         "vercel/google/gemini-embedding-2": "exploratory",
         "vercel/google/gemini-nano-banana-2.1": "exploratory",
@@ -12500,6 +12828,7 @@
         "vercel/google/veo-3.1-generate-001": "exploratory",
         "vercel/google/veo-3.1-lite-generate-001": "exploratory",
         "vercel/heygen/heygen-video-1": "exploratory",
+        "vercel/humansand/ampersand-v0.1": "exploratory",
         "vercel/inception/mercury-2": "exploratory",
         "vercel/inception/mercury-2.5": "exploratory",
         "vercel/inception/mercury-3": "exploratory",
@@ -12535,6 +12864,7 @@
         "vercel/meta/llama-3.3-70b": "standard",
         "vercel/meta/llama-4-maverick": "exploratory",
         "vercel/meta/llama-4-scout": "exploratory",
+        "vercel/meta/muse-ember": "exploratory",
         "vercel/meta/muse-glimmer-30b": "standard",
         "vercel/meta/muse-image-1.0": "exploratory",
         "vercel/meta/muse-spark-1.1": "exploratory",
@@ -12554,6 +12884,8 @@
         "vercel/microsoft/mai-voice-2.1-flash": "exploratory",
         "vercel/microsoft/microsoft-decision-1": "exploratory",
         "vercel/minimax/minimax-h3": "exploratory",
+        "vercel/minimax/minimax-h3-image": "exploratory",
+        "vercel/minimax/minimax-h3-image-highspeed": "exploratory",
         "vercel/minimax/minimax-h3-max": "exploratory",
         "vercel/minimax/minimax-m2": "exploratory",
         "vercel/minimax/minimax-m2.1": "exploratory",
@@ -12591,6 +12923,9 @@
         "vercel/moonshotai/kimi-k3.1-pro-highspeed": "exploratory",
         "vercel/morph/morph-v3-fast": "exploratory",
         "vercel/morph/morph-v3-large": "standard",
+        "vercel/nace-ai/drex-max-finance": "exploratory",
+        "vercel/nace-ai/drex-max-v1.1": "exploratory",
+        "vercel/nace-ai/drex-v2.0": "exploratory",
         "vercel/nvidia/nemotron-3-nano-30b-a3b": "standard",
         "vercel/nvidia/nemotron-3-super-120b-a12b": "deep",
         "vercel/nvidia/nemotron-3-ultra-550b-a55b": "deep",
@@ -12712,9 +13047,12 @@
         "vercel/openai/tts-1-hd": "exploratory",
         "vercel/openai/whisper-1": "exploratory",
         "vercel/paperinstruments/ultramarine-1-flash": "exploratory",
+        "vercel/parallel/parallel-decisions-fast": "exploratory",
         "vercel/particle/particle-1": "exploratory",
         "vercel/perplexity/pplx-decider-flash-v1.2": "exploratory",
+        "vercel/perplexity/pplx-decider-flash-v1.3": "exploratory",
         "vercel/perplexity/pplx-decider-v1.2": "exploratory",
+        "vercel/perplexity/pplx-decider-v1.3": "exploratory",
         "vercel/perplexity/pplx-embed-v1-0.6b": "exploratory",
         "vercel/perplexity/pplx-embed-v1-4b": "exploratory",
         "vercel/perplexity/sonar": "exploratory",
@@ -12735,6 +13073,7 @@
         "vercel/recraft/recraft-v4.1-pro": "exploratory",
         "vercel/recraft/recraft-v4.1-utility": "exploratory",
         "vercel/recraft/recraft-v4.1-utility-pro": "exploratory",
+        "vercel/recursive/flint-v1.0": "exploratory",
         "vercel/reflection/beam": "exploratory",
         "vercel/reflection/beam-free": "exploratory",
         "vercel/sakana/fugu-max": "exploratory",
@@ -12782,6 +13121,7 @@
         "vercel/tencent/hy4": "exploratory",
         "vercel/tencent/hy4-preview": "exploratory",
         "vercel/thinkingmachines/inkling": "exploratory",
+        "vercel/thinkingmachines/inkling-2-small": "exploratory",
         "vercel/thinkingmachines/inkling-small": "exploratory",
         "vercel/topaz/proteus": "exploratory",
         "vercel/topaz/starlight-precise-2.6": "exploratory",
@@ -13086,6 +13426,24 @@
           "tools",
           "vision"
         ],
+        "vercel/anthropic/claude-fable-5.2": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "vercel/anthropic/claude-fable-5.2-batch": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "vercel/anthropic/claude-fable-5.2-fast": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "vercel/anthropic/claude-haiku-4.5": [
           "json",
           "reasoning",
@@ -13302,21 +13660,25 @@
           "vision"
         ],
         "vercel/bytedance/seedream-4.0": [
+          "json",
           "reasoning",
           "tools",
           "vision"
         ],
         "vercel/bytedance/seedream-4.5": [
+          "json",
           "reasoning",
           "tools",
           "vision"
         ],
         "vercel/bytedance/seedream-5.0-lite": [
+          "json",
           "reasoning",
           "tools",
           "vision"
         ],
         "vercel/bytedance/seedream-5.0-pro": [
+          "json",
           "reasoning",
           "tools",
           "vision"
@@ -13400,7 +13762,8 @@
         "vercel/deepseek/deepseek-v4.1-flash-1017-ultrafast": [
           "json",
           "reasoning",
-          "tools"
+          "tools",
+          "vision"
         ],
         "vercel/deepseek/deepseek-v4.1-flash-fast": [
           "json",
@@ -13606,6 +13969,21 @@
           "tools",
           "vision"
         ],
+        "vercel/google/gemini-4-carbon": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "vercel/google/gemini-4-hydrogen": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "vercel/google/gemini-decision-1": [
+          "vision"
+        ],
         "vercel/google/gemini-embedding-001": [
           "reasoning"
         ],
@@ -13646,6 +14024,10 @@
         "vercel/heygen/heygen-video-1": [
           "vision"
         ],
+        "vercel/humansand/ampersand-v0.1": [
+          "reasoning",
+          "tools"
+        ],
         "vercel/inception/mercury-2": [
           "json",
           "reasoning",
@@ -13671,7 +14053,6 @@
           "tools"
         ],
         "vercel/inclusionai/ling-3.0-flash-fin": [
-          "json",
           "reasoning",
           "tools"
         ],
@@ -13701,7 +14082,6 @@
           "vision"
         ],
         "vercel/inclusionai/ling-3.1-flash": [
-          "json",
           "reasoning",
           "tools"
         ],
@@ -13781,26 +14161,27 @@
           "vision"
         ],
         "vercel/meta/llama-3.1-70b": [
-          "reasoning",
           "tools"
         ],
         "vercel/meta/llama-3.1-8b": [
           "json",
-          "reasoning",
           "tools"
         ],
         "vercel/meta/llama-3.3-70b": [
           "json",
-          "reasoning",
           "tools"
         ],
         "vercel/meta/llama-4-maverick": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "vercel/meta/llama-4-scout": [
+          "json",
+          "tools",
+          "vision"
+        ],
+        "vercel/meta/muse-ember": [
           "json",
           "reasoning",
           "tools",
@@ -13858,6 +14239,12 @@
           "vision"
         ],
         "vercel/minimax/minimax-h3": [
+          "vision"
+        ],
+        "vercel/minimax/minimax-h3-image": [
+          "vision"
+        ],
+        "vercel/minimax/minimax-h3-image-highspeed": [
           "vision"
         ],
         "vercel/minimax/minimax-h3-max": [
@@ -14019,6 +14406,12 @@
         ],
         "vercel/morph/morph-v3-large": [
           "json"
+        ],
+        "vercel/nace-ai/drex-max-finance": [
+          "vision"
+        ],
+        "vercel/nace-ai/drex-max-v1.1": [
+          "vision"
         ],
         "vercel/nvidia/nemotron-3-nano-30b-a3b": [
           "json",
@@ -14645,6 +15038,12 @@
           "tools",
           "vision"
         ],
+        "vercel/paperinstruments/ultramarine-1-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "vercel/particle/particle-1": [
           "json",
           "reasoning",
@@ -14654,7 +15053,13 @@
         "vercel/perplexity/pplx-decider-flash-v1.2": [
           "vision"
         ],
+        "vercel/perplexity/pplx-decider-flash-v1.3": [
+          "vision"
+        ],
         "vercel/perplexity/pplx-decider-v1.2": [
+          "vision"
+        ],
+        "vercel/perplexity/pplx-decider-v1.3": [
           "vision"
         ],
         "vercel/perplexity/sonar": [
@@ -14691,6 +15096,11 @@
           "reasoning",
           "tools",
           "vision"
+        ],
+        "vercel/recursive/flint-v1.0": [
+          "json",
+          "reasoning",
+          "tools"
         ],
         "vercel/reflection/beam": [
           "json",
@@ -14761,19 +15171,16 @@
         ],
         "vercel/spacexai/grok-4.20-non-reasoning": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "vercel/spacexai/grok-4.20-non-reasoning-batch": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "vercel/spacexai/grok-4.20-non-reasoning-beta": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
@@ -14833,43 +15240,36 @@
         ],
         "vercel/spacexai/grok-imagine-image": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "vercel/spacexai/grok-imagine-image-2.0": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "vercel/spacexai/grok-imagine-video": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "vercel/spacexai/grok-imagine-video-1.5": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "vercel/spacexai/grok-imagine-video-1.5-lite": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "vercel/spacexai/grok-stt": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "vercel/spacexai/grok-tts": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
@@ -14931,6 +15331,12 @@
           "vision"
         ],
         "vercel/thinkingmachines/inkling": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "vercel/thinkingmachines/inkling-2-small": [
           "json",
           "reasoning",
           "tools",
@@ -15086,6 +15492,7 @@
         "venice/aion-labs-aion-3-5-mini": "exploratory",
         "venice/claude-fable-5": "exploratory",
         "venice/claude-fable-5-1": "exploratory",
+        "venice/claude-fable-5-2": "exploratory",
         "venice/claude-haiku-5-5": "exploratory",
         "venice/claude-opus-4-5": "exploratory",
         "venice/claude-opus-4-6": "exploratory",
@@ -15132,6 +15539,8 @@
         "venice/gemini-3-8-flash": "exploratory",
         "venice/gemini-3-flash-preview": "standard",
         "venice/gemini-4-argon": "exploratory",
+        "venice/gemini-4-carbon": "exploratory",
+        "venice/gemini-4-hydrogen": "exploratory",
         "venice/gemma-4-uncensored": "exploratory",
         "venice/google-gemma-3-27b-it": "standard",
         "venice/google-gemma-4-26b-a4b-it": "standard",
@@ -15200,6 +15609,7 @@
         "venice/qwen-3-8-27b": "standard",
         "venice/qwen-3-8-flash": "exploratory",
         "venice/qwen-3-8-max": "exploratory",
+        "venice/qwen-4-max": "exploratory",
         "venice/qwen3-235b-a22b-instruct-2507": "deep",
         "venice/qwen3-235b-a22b-thinking-2507": "deep",
         "venice/qwen3-5-35b-a3b": "standard",
@@ -15255,6 +15665,12 @@
           "vision"
         ],
         "venice/claude-fable-5-1": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "venice/claude-fable-5-2": [
           "json",
           "reasoning",
           "tools",
@@ -15364,7 +15780,8 @@
         "venice/deepseek-v4-1-flash-1017-ultrafast": [
           "json",
           "reasoning",
-          "tools"
+          "tools",
+          "vision"
         ],
         "venice/deepseek-v4-1-flash-1017-uncensored": [
           "json",
@@ -15511,6 +15928,18 @@
           "tools",
           "vision"
         ],
+        "venice/gemini-4-carbon": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "venice/gemini-4-hydrogen": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "venice/gemma-4-uncensored": [
           "json",
           "reasoning",
@@ -15635,7 +16064,6 @@
         ],
         "venice/llama-3.3-70b": [
           "json",
-          "reasoning",
           "tools"
         ],
         "venice/mercury-2": [
@@ -16016,6 +16444,7 @@
         "requesty/alibaba/qwen3.8-max": "exploratory",
         "requesty/anthropic/claude-fable-5": "exploratory",
         "requesty/anthropic/claude-fable-5.1": "exploratory",
+        "requesty/anthropic/claude-fable-5.2": "exploratory",
         "requesty/anthropic/claude-haiku-4-5": "exploratory",
         "requesty/anthropic/claude-haiku-5-5": "exploratory",
         "requesty/anthropic/claude-opus-4-5": "exploratory",
@@ -16424,6 +16853,8 @@
         "requesty/google/gemini-3.5-flash:flex": "exploratory",
         "requesty/google/gemini-3.6-flash": "exploratory",
         "requesty/google/gemini-3.6-flash:flex": "exploratory",
+        "requesty/google/gemini-4-hydrogen": "exploratory",
+        "requesty/google/gemini-4-hydrogen:flex": "exploratory",
         "requesty/google/gemma-4-31b-it": "standard",
         "requesty/groq/openai/gpt-oss-120b": "deep",
         "requesty/groq/openai/gpt-oss-20b": "standard",
@@ -16437,6 +16868,7 @@
         "requesty/lyceum/glm-5.3": "exploratory",
         "requesty/lyceum/glm-5.3-flash": "exploratory",
         "requesty/lyceum/kimi-k3": "exploratory",
+        "requesty/lyceum/kimi-k3.1-pro": "exploratory",
         "requesty/melious/clef": "exploratory",
         "requesty/melious/clef-flash": "exploratory",
         "requesty/melious/deepseek-v4-flash-0731": "exploratory",
@@ -16473,13 +16905,24 @@
         "requesty/moonshot/kimi-k3": "exploratory",
         "requesty/moonshot/kimi-k3.1-pro": "exploratory",
         "requesty/moonshot/kimi-k3.1-pro-highspeed": "exploratory",
+        "requesty/nebius/beam-1.0-501b-a23b": "deep",
         "requesty/nebius/deepseek-v4-pro-0424": "exploratory",
+        "requesty/nebius/deepseek-v4-pro-0813": "exploratory",
+        "requesty/nebius/deepseek-v4.1-flash-1017": "exploratory",
         "requesty/nebius/glm-5.2": "exploratory",
+        "requesty/nebius/glm-5.3": "exploratory",
+        "requesty/nebius/glm-5.3-flash": "exploratory",
         "requesty/nebius/google/gemma-3-27b-it": "standard",
+        "requesty/nebius/inkling-2-small": "exploratory",
         "requesty/nebius/kimi-k3": "exploratory",
+        "requesty/nebius/kimi-k3.1-pro": "exploratory",
         "requesty/nebius/meta-llama/llama-3.3-70b-instruct": "standard",
+        "requesty/nebius/minimax-m3.1-flash": "exploratory",
         "requesty/nebius/minimaxi/minimax-m2.5": "standard",
         "requesty/nebius/moonshotai/kimi-k2.6": "exploratory",
+        "requesty/nebius/muse-spark-open": "exploratory",
+        "requesty/nebius/nemotron-3.5-lightning-30b-a3b": "standard",
+        "requesty/nebius/nemotron-3.5-super-vl": "exploratory",
         "requesty/nebius/nousresearch/hermes-4-405b": "deep",
         "requesty/nebius/nousresearch/hermes-4-70b": "standard",
         "requesty/nebius/nvidia/nemotron-3-nano-omni": "exploratory",
@@ -16490,9 +16933,11 @@
         "requesty/nebius/qwen/qwen3-32b": "standard",
         "requesty/nebius/qwen/qwen3-next-80b-a3b-thinking": "standard",
         "requesty/nebius/qwen/qwen3.5-397b-a17b": "deep",
+        "requesty/nebius/qwen3.8-27b": "standard",
         "requesty/nebius/zai-org/glm-5.1": "exploratory",
         "requesty/novita/baichuan/baichuan-m2-32b": "standard",
         "requesty/novita/deepseek-v4.1-flash": "exploratory",
+        "requesty/novita/deepseek-v4.1-flash-1017": "exploratory",
         "requesty/novita/deepseek/deepseek-r1": "deep",
         "requesty/novita/deepseek/deepseek-r1-distill-llama-70b": "deep",
         "requesty/novita/deepseek/deepseek-r1-turbo": "deep",
@@ -16504,13 +16949,16 @@
         "requesty/novita/deepseek/deepseek_v3": "exploratory",
         "requesty/novita/glm-5": "exploratory",
         "requesty/novita/glm-5.3-flash": "exploratory",
+        "requesty/novita/glm-5.3-flashx": "exploratory",
         "requesty/novita/google/gemma-4-26b-a4b-it": "standard",
         "requesty/novita/gryphe/mythomax-l2-13b": "exploratory",
+        "requesty/novita/hy4": "exploratory",
         "requesty/novita/inclusionai/ling-2.6-1t": "exploratory",
         "requesty/novita/inclusionai/ling-2.6-flash": "exploratory",
         "requesty/novita/inclusionai/ling-3.0-tiny": "exploratory",
         "requesty/novita/inclusionai/ring-2.6-1t": "exploratory",
         "requesty/novita/kimi-k3.1-pro": "exploratory",
+        "requesty/novita/kimi-k3.1-pro-highspeed": "exploratory",
         "requesty/novita/kwaipilot/kat-coder-pro": "exploratory",
         "requesty/novita/ling-3.1-flash": "exploratory",
         "requesty/novita/meta-llama/llama-3.1-8b-instruct": "exploratory",
@@ -16525,9 +16973,12 @@
         "requesty/novita/qwen/qwen3-235b-a22b-fp8": "deep",
         "requesty/novita/qwen/qwen3.5-397b-a17b": "deep",
         "requesty/novita/qwen/qwen3.8-max": "exploratory",
+        "requesty/novita/qwen3-vl-plus": "exploratory",
+        "requesty/novita/qwen4-max": "exploratory",
         "requesty/novita/sao10k/l3-8b-lunaris": "exploratory",
         "requesty/novita/sao10k/l3-8b-stheno-v3.2": "exploratory",
         "requesty/novita/sao10k/l31-70b-euryale-v2.2": "standard",
+        "requesty/novita/step-5-preview": "exploratory",
         "requesty/novita/stepfun/step-3.7-flash": "exploratory",
         "requesty/novita/tencent/hy3": "exploratory",
         "requesty/novita/zai-org/glm-4.6": "exploratory",
@@ -16615,6 +17066,11 @@
         "requesty/perplexity/sonar-reasoning-pro": "deep",
         "requesty/poolside/laguna-m.1": "exploratory",
         "requesty/poolside/laguna-xs.2": "exploratory",
+        "requesty/relace/deepseek-v4-pro-0424": "exploratory",
+        "requesty/relace/deepseek-v4-pro-0813": "exploratory",
+        "requesty/relace/deepseek-v4.1-flash": "exploratory",
+        "requesty/relace/deepseek-v4.1-flash-1017": "exploratory",
+        "requesty/relace/glm-5.3": "exploratory",
         "requesty/runware/deepseek-v4-flash-0731": "exploratory",
         "requesty/runware/deepseek-v4.1-flash": "exploratory",
         "requesty/runware/deepseek-v4.1-flash-1017": "exploratory",
@@ -16649,6 +17105,7 @@
         "requesty/tencent/glm-5.3-flash": "exploratory",
         "requesty/tencent/glm-5.3-flashx": "exploratory",
         "requesty/tencent/hy3": "exploratory",
+        "requesty/tencent/hy4": "exploratory",
         "requesty/tencent/hy4-preview": "exploratory",
         "requesty/tencent/kimi-k2.7-code": "exploratory",
         "requesty/tencent/kimi-k2.7-code-highspeed": "exploratory",
@@ -16806,6 +17263,12 @@
         "requesty/vertex/gemini-3.8-flash@eu": "exploratory",
         "requesty/vertex/gemini-4-argon": "exploratory",
         "requesty/vertex/gemini-4-argon@eu": "exploratory",
+        "requesty/vertex/gemini-4-carbon": "exploratory",
+        "requesty/vertex/gemini-4-carbon@eu": "exploratory",
+        "requesty/vertex/gemini-4-carbon@us": "exploratory",
+        "requesty/vertex/gemini-4-hydrogen": "exploratory",
+        "requesty/vertex/gemini-4-hydrogen@eu": "exploratory",
+        "requesty/vertex/gemini-4-hydrogen@us": "exploratory",
         "requesty/vertex/kimi-k2": "deep",
         "requesty/xai/grok-3": "deep",
         "requesty/xai/grok-3-mini": "standard",
@@ -16895,6 +17358,12 @@
           "vision"
         ],
         "requesty/anthropic/claude-fable-5.1": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/anthropic/claude-fable-5.2": [
           "json",
           "reasoning",
           "tools",
@@ -18483,7 +18952,6 @@
         ],
         "requesty/deepinfra/meta-llama/llama-3.3-70b-instruct": [
           "json",
-          "reasoning",
           "tools"
         ],
         "requesty/deepinfra/meta-llama/llama-3.3-70b-instruct-turbo": [
@@ -18493,15 +18961,12 @@
           "json"
         ],
         "requesty/deepinfra/meta-llama/meta-llama-3.1-405b-instruct": [
-          "reasoning",
           "tools"
         ],
         "requesty/deepinfra/meta-llama/meta-llama-3.1-70b-instruct": [
-          "reasoning",
           "tools"
         ],
         "requesty/deepinfra/meta-llama/meta-llama-3.1-8b-instruct-turbo": [
-          "reasoning",
           "tools"
         ],
         "requesty/deepinfra/microsoft/phi-4": [
@@ -18879,6 +19344,12 @@
           "tools",
           "vision"
         ],
+        "requesty/fireworks/ultramarine-1-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "requesty/google/gemini-2.5-flash": [
           "json",
           "reasoning",
@@ -19007,6 +19478,18 @@
         "requesty/google/gemini-3.6-flash:flex": [
           "reasoning"
         ],
+        "requesty/google/gemini-4-hydrogen": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/google/gemini-4-hydrogen:flex": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "requesty/google/gemma-4-31b-it": [
           "json",
           "reasoning",
@@ -19073,6 +19556,12 @@
           "vision"
         ],
         "requesty/lyceum/kimi-k3": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/lyceum/kimi-k3.1-pro": [
           "json",
           "reasoning",
           "tools",
@@ -19240,22 +19729,61 @@
           "tools",
           "vision"
         ],
+        "requesty/nebius/beam-1.0-501b-a23b": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
         "requesty/nebius/deepseek-v4-pro-0424": [
           "json",
           "reasoning",
           "tools"
+        ],
+        "requesty/nebius/deepseek-v4-pro-0813": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "requesty/nebius/deepseek-v4.1-flash-1017": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
         ],
         "requesty/nebius/glm-5.2": [
           "json",
           "reasoning",
           "tools"
         ],
+        "requesty/nebius/glm-5.3": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "requesty/nebius/glm-5.3-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "requesty/nebius/google/gemma-3-27b-it": [
           "json",
           "tools",
           "vision"
         ],
+        "requesty/nebius/inkling-2-small": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "requesty/nebius/kimi-k3": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/nebius/kimi-k3.1-pro": [
           "json",
           "reasoning",
           "tools",
@@ -19266,12 +19794,33 @@
           "reasoning",
           "tools"
         ],
+        "requesty/nebius/minimax-m3.1-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "requesty/nebius/minimaxi/minimax-m2.5": [
           "json",
           "reasoning",
           "tools"
         ],
         "requesty/nebius/moonshotai/kimi-k2.6": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/nebius/muse-spark-open": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/nebius/nemotron-3.5-lightning-30b-a3b": [
+          "reasoning"
+        ],
+        "requesty/nebius/nemotron-3.5-super-vl": [
           "json",
           "reasoning",
           "tools",
@@ -19322,12 +19871,24 @@
           "tools",
           "vision"
         ],
+        "requesty/nebius/qwen3.8-27b": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "requesty/nebius/zai-org/glm-5.1": [
           "json",
           "reasoning",
           "tools"
         ],
         "requesty/novita/deepseek-v4.1-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/novita/deepseek-v4.1-flash-1017": [
           "json",
           "reasoning",
           "tools",
@@ -19380,6 +19941,12 @@
           "tools",
           "vision"
         ],
+        "requesty/novita/glm-5.3-flashx": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "requesty/novita/google/gemma-4-26b-a4b-it": [
           "json",
           "reasoning",
@@ -19388,6 +19955,12 @@
         ],
         "requesty/novita/gryphe/mythomax-l2-13b": [
           "json"
+        ],
+        "requesty/novita/hy4": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
         ],
         "requesty/novita/inclusionai/ling-2.6-1t": [
           "reasoning",
@@ -19407,28 +19980,30 @@
           "tools",
           "vision"
         ],
+        "requesty/novita/kimi-k3.1-pro-highspeed": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "requesty/novita/kwaipilot/kat-coder-pro": [
           "json",
           "tools"
         ],
         "requesty/novita/ling-3.1-flash": [
-          "json",
           "reasoning",
           "tools"
         ],
         "requesty/novita/meta-llama/llama-3.1-8b-instruct": [
           "json",
-          "reasoning",
           "tools"
         ],
         "requesty/novita/meta-llama/llama-3.3-70b-instruct": [
           "json",
-          "reasoning",
           "tools"
         ],
         "requesty/novita/meta-llama/llama-4-maverick-17b-128e-instruct-fp8": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
@@ -19466,6 +20041,15 @@
           "vision"
         ],
         "requesty/novita/qwen/qwen3.8-max": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/novita/qwen3-vl-plus": [
+          "tools"
+        ],
+        "requesty/novita/step-5-preview": [
           "json",
           "reasoning",
           "tools",
@@ -19877,6 +20461,33 @@
           "reasoning",
           "vision"
         ],
+        "requesty/relace/deepseek-v4-pro-0424": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "requesty/relace/deepseek-v4-pro-0813": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
+        "requesty/relace/deepseek-v4.1-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/relace/deepseek-v4.1-flash-1017": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/relace/glm-5.3": [
+          "json",
+          "reasoning",
+          "tools"
+        ],
         "requesty/runware/deepseek-v4-flash-0731": [
           "json",
           "reasoning",
@@ -20058,6 +20669,12 @@
           "reasoning",
           "tools"
         ],
+        "requesty/tencent/hy4": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "requesty/tencent/hy4-preview": [
           "json",
           "reasoning",
@@ -20203,8 +20820,10 @@
           "vision"
         ],
         "requesty/thinkingmachines/inkling-256k": [
+          "json",
           "reasoning",
-          "tools"
+          "tools",
+          "vision"
         ],
         "requesty/together/deepseek-v4-pro-0813": [
           "json",
@@ -20916,38 +21535,72 @@
           "vision"
         ],
         "requesty/vertex/gemini-4-argon@eu": [
-          "reasoning"
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/vertex/gemini-4-carbon": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/vertex/gemini-4-carbon@eu": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/vertex/gemini-4-carbon@us": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/vertex/gemini-4-hydrogen": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/vertex/gemini-4-hydrogen@eu": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "requesty/vertex/gemini-4-hydrogen@us": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
         ],
         "requesty/vertex/kimi-k2": [
           "tools"
         ],
         "requesty/xai/grok-3": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "requesty/xai/grok-3-mini": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "requesty/xai/grok-3-mini:high": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "requesty/xai/grok-3-mini:low": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "requesty/xai/grok-4": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
@@ -20965,19 +21618,16 @@
         ],
         "requesty/xai/grok-4-fast": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "requesty/xai/grok-4-fast-non-reasoning": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "requesty/xai/grok-4.2-beta": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
@@ -21013,7 +21663,6 @@
         ],
         "requesty/xai/grok-code-fast-1": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
@@ -21110,6 +21759,7 @@
       "model_reasoning": {
         "bai/claude-fable-5": "exploratory",
         "bai/claude-fable-5.1": "exploratory",
+        "bai/claude-fable-5.2": "exploratory",
         "bai/claude-haiku-4.5": "exploratory",
         "bai/claude-haiku-5.5": "exploratory",
         "bai/claude-opus-4.5": "exploratory",
@@ -21166,6 +21816,8 @@
         "bai/mimo-v2.5-pro": "exploratory",
         "bai/mimo-v2.6-flash": "exploratory",
         "bai/mimo-v2.6-pro": "exploratory",
+        "bai/minimax-h3-image": "exploratory",
+        "bai/minimax-h3-image-highspeed": "exploratory",
         "bai/minimax-m2.7": "exploratory",
         "bai/minimax-m3": "exploratory",
         "bai/minimax-m3.1-flash": "exploratory",
@@ -21173,6 +21825,7 @@
         "bai/qwen3.8-27b": "standard",
         "bai/qwen3.8-flash": "exploratory",
         "bai/qwen3.8-max": "exploratory",
+        "bai/qwen4-max": "exploratory",
         "bai/seedance-2.0": "exploratory",
         "bai/seedance-2.0-fast": "exploratory",
         "bai/seedance-2.0-mini": "exploratory",
@@ -21187,6 +21840,12 @@
           "vision"
         ],
         "bai/claude-fable-5.1": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "bai/claude-fable-5.2": [
           "json",
           "reasoning",
           "tools",
@@ -21518,6 +22177,12 @@
           "tools",
           "vision"
         ],
+        "bai/minimax-h3-image": [
+          "vision"
+        ],
+        "bai/minimax-h3-image-highspeed": [
+          "vision"
+        ],
         "bai/minimax-m2.7": [
           "json",
           "reasoning",
@@ -21586,6 +22251,9 @@
         "xkiro/cohere/command-a-reasoning",
         "xkiro/cohere/command-a-translate",
         "xkiro/cohere/command-a-vision",
+        "xkiro/cohere/command-r-08-2024",
+        "xkiro/cohere/command-r-plus-08-2024",
+        "xkiro/cohere/command-r7b-12-2024",
         "xkiro/cohere/north-mini-code",
         "xkiro/cohere/north-small-translate",
         "xkiro/cohere/tiny-aya-earth",
@@ -21611,8 +22279,6 @@
         "xkiro/qwen/qwen-plus-2025-07-28:free",
         "xkiro/qwen/qwen3-coder-plus:free",
         "xkiro/qwen/qwen3-max:free",
-        "xkiro/qwen/qwen3-omni-flash:free",
-        "xkiro/qwen/qwen3-vl-plus:free",
         "xkiro/qwen/qwen3.5-397b-a17b:free",
         "xkiro/qwen/qwen3.5-flash:free",
         "xkiro/qwen/qwen3.5-omni-flash:free",
@@ -21677,6 +22343,9 @@
         "xkiro/google/gemini-3.6-flash": "exploratory",
         "xkiro/google/gemini-3.7-flash": "exploratory",
         "xkiro/google/gemini-3.8-flash": "exploratory",
+        "xkiro/google/gemini-4-argon": "exploratory",
+        "xkiro/google/gemini-4-carbon": "exploratory",
+        "xkiro/google/gemini-4-hydrogen": "exploratory",
         "xkiro/inclusionai/ling-3.0-flash-sante:free": "exploratory",
         "xkiro/liquid/lfm-2.5-2.6b:free": "exploratory",
         "xkiro/meituan/longcat-2.0": "exploratory",
@@ -21736,8 +22405,6 @@
         "xkiro/qwen/qwen-plus-2025-07-28:free": "exploratory",
         "xkiro/qwen/qwen3-coder-plus:free": "exploratory",
         "xkiro/qwen/qwen3-max:free": "exploratory",
-        "xkiro/qwen/qwen3-omni-flash:free": "exploratory",
-        "xkiro/qwen/qwen3-vl-plus:free": "exploratory",
         "xkiro/qwen/qwen3.5-397b-a17b:free": "deep",
         "xkiro/qwen/qwen3.5-flash:free": "exploratory",
         "xkiro/qwen/qwen3.5-omni-flash:free": "exploratory",
@@ -21920,7 +22587,8 @@
           "tools"
         ],
         "xkiro/cohere/command-r7b-12-2024": [
-          "json"
+          "json",
+          "tools"
         ],
         "xkiro/cohere/north-mini-code": [
           "reasoning",
@@ -22009,6 +22677,24 @@
           "vision"
         ],
         "xkiro/google/gemini-3.8-flash": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "xkiro/google/gemini-4-argon": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "xkiro/google/gemini-4-carbon": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "xkiro/google/gemini-4-hydrogen": [
           "json",
           "reasoning",
           "tools",
@@ -22249,88 +22935,12 @@
           "tools",
           "vision"
         ],
-        "xkiro/qwen/qwen-plus-2025-07-28:free": [
-          "json",
-          "tools"
-        ],
-        "xkiro/qwen/qwen3-coder-plus:free": [
-          "json",
-          "tools"
-        ],
-        "xkiro/qwen/qwen3-max:free": [
-          "json",
-          "reasoning",
-          "tools"
-        ],
-        "xkiro/qwen/qwen3-omni-flash:free": [
-          "tools",
-          "vision"
-        ],
-        "xkiro/qwen/qwen3-vl-plus:free": [
-          "tools",
-          "vision"
-        ],
-        "xkiro/qwen/qwen3.5-397b-a17b:free": [
-          "json",
-          "reasoning",
-          "tools",
-          "vision"
-        ],
-        "xkiro/qwen/qwen3.5-flash:free": [
-          "reasoning",
-          "tools",
-          "vision"
-        ],
-        "xkiro/qwen/qwen3.5-omni-flash:free": [
-          "reasoning",
-          "tools",
-          "vision"
-        ],
-        "xkiro/qwen/qwen3.5-omni-plus:free": [
-          "reasoning",
-          "tools",
-          "vision"
-        ],
         "xkiro/qwen/qwen3.5-plus": [
           "reasoning",
           "tools",
           "vision"
         ],
-        "xkiro/qwen/qwen3.5-plus:free": [
-          "reasoning",
-          "tools",
-          "vision"
-        ],
-        "xkiro/qwen/qwen3.6-27b:free": [
-          "json",
-          "reasoning",
-          "tools",
-          "vision"
-        ],
-        "xkiro/qwen/qwen3.6-35b-a3b:free": [
-          "json",
-          "reasoning",
-          "tools",
-          "vision"
-        ],
-        "xkiro/qwen/qwen3.6-max-preview:free": [
-          "json",
-          "reasoning",
-          "tools"
-        ],
         "xkiro/qwen/qwen3.6-plus": [
-          "json",
-          "reasoning",
-          "tools",
-          "vision"
-        ],
-        "xkiro/qwen/qwen3.6-plus:free": [
-          "json",
-          "reasoning",
-          "tools",
-          "vision"
-        ],
-        "xkiro/qwen/qwen3.7-flash:free": [
           "json",
           "reasoning",
           "tools",
@@ -22341,36 +22951,13 @@
           "reasoning",
           "tools"
         ],
-        "xkiro/qwen/qwen3.7-max:free": [
-          "json",
-          "reasoning",
-          "tools"
-        ],
         "xkiro/qwen/qwen3.7-plus": [
           "json",
           "reasoning",
           "tools",
           "vision"
         ],
-        "xkiro/qwen/qwen3.7-plus:free": [
-          "json",
-          "reasoning",
-          "tools",
-          "vision"
-        ],
         "xkiro/qwen/qwen3.8-max": [
-          "reasoning",
-          "tools",
-          "vision"
-        ],
-        "xkiro/qwen/qwen3.8-max:free": [
-          "json",
-          "reasoning",
-          "tools",
-          "vision"
-        ],
-        "xkiro/qwen/qwen3.8-omni-flash:free": [
-          "json",
           "reasoning",
           "tools",
           "vision"
@@ -22571,6 +23158,7 @@
       "model_reasoning": {
         "teamorouter/claude-fable-5": "exploratory",
         "teamorouter/claude-fable-5-1": "exploratory",
+        "teamorouter/claude-fable-5-2": "exploratory",
         "teamorouter/claude-haiku-4-5": "exploratory",
         "teamorouter/claude-haiku-4-5-20251001": "exploratory",
         "teamorouter/claude-haiku-5-5": "exploratory",
@@ -22603,6 +23191,8 @@
         "teamorouter/gemini-3.7-flash": "exploratory",
         "teamorouter/gemini-3.8-flash": "exploratory",
         "teamorouter/gemini-4-argon": "exploratory",
+        "teamorouter/gemini-4-carbon": "exploratory",
+        "teamorouter/gemini-4-hydrogen": "exploratory",
         "teamorouter/gemini-nano-banana-2.1": "exploratory",
         "teamorouter/glm-5.2": "exploratory",
         "teamorouter/glm-5.3": "exploratory",
@@ -22631,6 +23221,7 @@
         "teamorouter/gpt-image-2.6-sunburst-4k-upscale": "exploratory",
         "teamorouter/grok-4.6": "exploratory",
         "teamorouter/grok-4.7": "exploratory",
+        "teamorouter/hy4": "exploratory",
         "teamorouter/kimi-k3": "exploratory",
         "teamorouter/kimi-k3.1-pro": "exploratory",
         "teamorouter/kimi-k3.1-pro[1m]": "exploratory",
@@ -22643,7 +23234,8 @@
         "teamorouter/qwen3.7-flash": "exploratory",
         "teamorouter/qwen3.7-max": "exploratory",
         "teamorouter/qwen3.8-flash": "exploratory",
-        "teamorouter/qwen3.8-max": "exploratory"
+        "teamorouter/qwen3.8-max": "exploratory",
+        "teamorouter/qwen4-max": "exploratory"
       },
       "free_limits": {},
       "model_capabilities": {
@@ -22654,6 +23246,12 @@
           "vision"
         ],
         "teamorouter/claude-fable-5-1": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "teamorouter/claude-fable-5-2": [
           "json",
           "reasoning",
           "tools",
@@ -22773,11 +23371,13 @@
           "vision"
         ],
         "teamorouter/doubao-seed-2.1-lite": [
+          "json",
           "reasoning",
           "tools",
           "vision"
         ],
         "teamorouter/doubao-seed-2.1-pro": [
+          "json",
           "reasoning",
           "tools",
           "vision"
@@ -22836,6 +23436,18 @@
           "vision"
         ],
         "teamorouter/gemini-4-argon": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "teamorouter/gemini-4-carbon": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "teamorouter/gemini-4-hydrogen": [
           "json",
           "reasoning",
           "tools",
@@ -22997,6 +23609,12 @@
           "tools",
           "vision"
         ],
+        "teamorouter/hy4": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "teamorouter/kimi-k3": [
           "json",
           "reasoning",
@@ -23081,6 +23699,8 @@
       "model_reasoning": {
         "tokenharbor/claude-fable-5": "exploratory",
         "tokenharbor/claude-fable-5.1": "exploratory",
+        "tokenharbor/claude-fable-5.2": "exploratory",
+        "tokenharbor/claude-fable-5.2-fast": "exploratory",
         "tokenharbor/claude-haiku-5.5": "exploratory",
         "tokenharbor/claude-opus-4.8": "exploratory",
         "tokenharbor/claude-opus-5": "exploratory",
@@ -23104,6 +23724,8 @@
         "tokenharbor/gemini-3.7-flash": "exploratory",
         "tokenharbor/gemini-3.8-flash": "exploratory",
         "tokenharbor/gemini-4-argon": "exploratory",
+        "tokenharbor/gemini-4-carbon": "exploratory",
+        "tokenharbor/gemini-4-hydrogen": "exploratory",
         "tokenharbor/glm-5.1": "exploratory",
         "tokenharbor/glm-5.2": "exploratory",
         "tokenharbor/glm-5.3": "exploratory",
@@ -23131,6 +23753,7 @@
         "tokenharbor/grok-4.5": "exploratory",
         "tokenharbor/grok-4.6": "exploratory",
         "tokenharbor/grok-4.7": "exploratory",
+        "tokenharbor/inkling-2-small": "exploratory",
         "tokenharbor/kimi-k2.6": "exploratory",
         "tokenharbor/kimi-k3": "exploratory",
         "tokenharbor/kimi-k3-fast": "exploratory",
@@ -23146,6 +23769,7 @@
         "tokenharbor/minimax-m3.1-flash": "exploratory",
         "tokenharbor/mistral-large-2512": "standard",
         "tokenharbor/mistral-large-4": "standard",
+        "tokenharbor/muse-ember": "exploratory",
         "tokenharbor/muse-spark-1-3": "exploratory",
         "tokenharbor/muse-spark-1.1": "exploratory",
         "tokenharbor/muse-spark-1.2": "exploratory",
@@ -23159,6 +23783,7 @@
         "tokenharbor/qwen3.8-flash": "exploratory",
         "tokenharbor/qwen3.8-flash:free": "exploratory",
         "tokenharbor/qwen3.8-max": "exploratory",
+        "tokenharbor/qwen4-max": "exploratory",
         "tokenharbor/th-orchestra": "exploratory"
       },
       "free_limits": {},
@@ -23170,6 +23795,18 @@
           "vision"
         ],
         "tokenharbor/claude-fable-5.1": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenharbor/claude-fable-5.2": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenharbor/claude-fable-5.2-fast": [
           "json",
           "reasoning",
           "tools",
@@ -23275,7 +23912,8 @@
         "tokenharbor/deepseek-v4.1-flash-1017-ultrafast": [
           "json",
           "reasoning",
-          "tools"
+          "tools",
+          "vision"
         ],
         "tokenharbor/deepseek-v4.1-flash:free": [
           "json",
@@ -23302,6 +23940,18 @@
           "vision"
         ],
         "tokenharbor/gemini-4-argon": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenharbor/gemini-4-carbon": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenharbor/gemini-4-hydrogen": [
           "json",
           "reasoning",
           "tools",
@@ -23465,6 +24115,12 @@
           "tools",
           "vision"
         ],
+        "tokenharbor/inkling-2-small": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "tokenharbor/kimi-k2.6": [
           "json",
           "reasoning",
@@ -23490,7 +24146,6 @@
           "vision"
         ],
         "tokenharbor/ling-3.1-flash": [
-          "json",
           "reasoning",
           "tools"
         ],
@@ -23545,6 +24200,12 @@
           "vision"
         ],
         "tokenharbor/mistral-large-4": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenharbor/muse-ember": [
           "json",
           "reasoning",
           "tools",
@@ -23637,13 +24298,13 @@
       "_note": "OpenAI-compatible new-api gateway (it also serves Anthropic- and Gemini-format endpoints, which llmproxy does not use). GET /v1/models is key-gated: without a key it answers 401 JSON 'Invalid token', where an unknown /v1 path answers a 404 JSON 'Invalid URL', so default discovery with Bearer auth works and no models_url override is needed (verified October 2026). Pricing comes from the public, keyless GET https://api.tokenrouter.com/api/pricing (scripts/sources/tokenrouter.py): input $/1M = model_ratio * 2 * group_ratio.default, output = input * completion_ratio. Pricing is keyed tokenrouter/<model>, so name the config entry 'tokenrouter'.",
       "believed_free": [
         "tokenrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-        "tokenrouter/stealth/ox-alpha",
         "tokenrouter/stealth/union-alpha"
       ],
       "model_reasoning": {
         "tokenrouter/anthropic/claude-fable-5": "exploratory",
         "tokenrouter/anthropic/claude-fable-5-huo": "exploratory",
         "tokenrouter/anthropic/claude-fable-5.1": "exploratory",
+        "tokenrouter/anthropic/claude-fable-5.2": "exploratory",
         "tokenrouter/anthropic/claude-haiku-4.5": "exploratory",
         "tokenrouter/anthropic/claude-haiku-5.5": "exploratory",
         "tokenrouter/anthropic/claude-opus-4.5": "exploratory",
@@ -23689,7 +24350,9 @@
         "tokenrouter/ex/gpt-5.4": "exploratory",
         "tokenrouter/google/gemini-2.5-flash-image": "exploratory",
         "tokenrouter/google/gemini-3-flash-preview": "standard",
+        "tokenrouter/google/gemini-3-pro-image": "exploratory",
         "tokenrouter/google/gemini-3-pro-image-preview": "exploratory",
+        "tokenrouter/google/gemini-3.1-flash-image": "exploratory",
         "tokenrouter/google/gemini-3.1-flash-image-preview": "exploratory",
         "tokenrouter/google/gemini-3.1-flash-lite-image": "exploratory",
         "tokenrouter/google/gemini-3.1-pro-preview": "exploratory",
@@ -23711,6 +24374,7 @@
         "tokenrouter/minimax-h3": "exploratory",
         "tokenrouter/minimax-hailuo-2.3": "exploratory",
         "tokenrouter/minimax-m3": "exploratory",
+        "tokenrouter/minimax/minimax-h3-image": "exploratory",
         "tokenrouter/minimax/minimax-m2-her": "exploratory",
         "tokenrouter/minimax/minimax-m2.1": "exploratory",
         "tokenrouter/minimax/minimax-m2.1-highspeed": "exploratory",
@@ -23755,7 +24419,10 @@
         "tokenrouter/openai/gpt-audio-mini": "exploratory",
         "tokenrouter/openai/gpt-image-2.5-flare": "exploratory",
         "tokenrouter/openai/gpt-image-2.5-sunburst": "exploratory",
+        "tokenrouter/openai/gpt-image-2.6-flare": "exploratory",
+        "tokenrouter/openai/gpt-image-2.6-sunburst": "exploratory",
         "tokenrouter/openai/gpt-oss-120b": "deep",
+        "tokenrouter/qwen/qwen-4-max": "exploratory",
         "tokenrouter/qwen/qwen3-coder-next": "exploratory",
         "tokenrouter/qwen/qwen3.5-122b-a10b": "deep",
         "tokenrouter/qwen/qwen3.5-35b-a3b": "standard",
@@ -23780,6 +24447,7 @@
         "tokenrouter/stepfun/step-3.5-flash": "exploratory",
         "tokenrouter/stepfun/step-3.7-flash": "exploratory",
         "tokenrouter/tencent/hy3-preview": "exploratory",
+        "tokenrouter/tencent/hy4": "exploratory",
         "tokenrouter/tencent/hy4-preview": "exploratory",
         "tokenrouter/wan3.0-video": "exploratory",
         "tokenrouter/wan3.0-video-prime": "exploratory",
@@ -23825,6 +24493,12 @@
           "vision"
         ],
         "tokenrouter/anthropic/claude-fable-5.1": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/anthropic/claude-fable-5.2": [
           "json",
           "reasoning",
           "tools",
@@ -23926,16 +24600,19 @@
           "vision"
         ],
         "tokenrouter/bytedance-seed/seedream-4.5": [
+          "json",
           "reasoning",
           "tools",
           "vision"
         ],
         "tokenrouter/bytedance-seed/seedream-5.0-lite": [
+          "json",
           "reasoning",
           "tools",
           "vision"
         ],
         "tokenrouter/bytedance-seed/seedream-5.0-pro": [
+          "json",
           "reasoning",
           "tools",
           "vision"
@@ -24063,10 +24740,21 @@
           "tools",
           "vision"
         ],
+        "tokenrouter/google/gemini-3-pro-image": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "tokenrouter/google/gemini-3-pro-image-preview": [
           "json",
           "reasoning",
           "tools",
+          "vision"
+        ],
+        "tokenrouter/google/gemini-3.1-flash-image": [
+          "json",
+          "reasoning",
           "vision"
         ],
         "tokenrouter/google/gemini-3.1-flash-image-preview": [
@@ -24156,6 +24844,9 @@
           "json",
           "reasoning",
           "tools",
+          "vision"
+        ],
+        "tokenrouter/minimax/minimax-h3-image": [
           "vision"
         ],
         "tokenrouter/minimax/minimax-m2.1": [
@@ -24394,6 +25085,16 @@
           "tools",
           "vision"
         ],
+        "tokenrouter/openai/gpt-image-2.6-flare": [
+          "json",
+          "tools",
+          "vision"
+        ],
+        "tokenrouter/openai/gpt-image-2.6-sunburst": [
+          "json",
+          "tools",
+          "vision"
+        ],
         "tokenrouter/openai/gpt-oss-120b": [
           "json",
           "reasoning",
@@ -24523,6 +25224,12 @@
           "reasoning",
           "tools"
         ],
+        "tokenrouter/tencent/hy4": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
         "tokenrouter/tencent/hy4-preview": [
           "json",
           "reasoning",
@@ -24536,13 +25243,11 @@
         ],
         "tokenrouter/x-ai/grok-4.1-fast": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "tokenrouter/x-ai/grok-4.20-beta": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
@@ -24789,6 +25494,7 @@
         "together/deepseek-ai/deepseek-v4-pro-0813": "exploratory",
         "together/deepseek-ai/deepseek-v4.1-flash": "exploratory",
         "together/deepseek-ai/deepseek-v4.1-flash-1017": "exploratory",
+        "together/elorian-labs/glimpse-1.0": "exploratory",
         "together/facebook/cwm": "exploratory",
         "together/google/flash-image-2.5": "exploratory",
         "together/google/flash-image-3.1": "exploratory",
@@ -24960,6 +25666,7 @@
         "together/qwen/qwen3-next-80b-a3b-instruct": "standard",
         "together/qwen/qwen3-next-80b-a3b-instruct-fp8": "standard",
         "together/qwen/qwen3-next-80b-a3b-thinking": "standard",
+        "together/qwen/qwen3-tts-12hz-1.7b": "exploratory",
         "together/qwen/qwen3-tts-12hz-1.7b-customvoice": "exploratory",
         "together/qwen/qwen3-vl-235b-a22b-instruct-fp8": "deep",
         "together/qwen/qwen3-vl-32b-instruct": "standard",
@@ -24978,6 +25685,7 @@
         "together/qwen/qwen3.7-plus": "exploratory",
         "together/qwen/qwen3.8-2.4t-a95b": "standard",
         "together/qwen/qwen3.8-flash": "exploratory",
+        "together/qwen/qwen4-max": "exploratory",
         "together/qwen/qwq-32b": "deep",
         "together/reflection/beam-1.0-501b-a23b": "deep",
         "together/ricursive-ai/ripple-65b-preview": "standard",
@@ -24992,7 +25700,9 @@
         "together/salesforce/llama-rank-v1": "exploratory",
         "together/sarvamai/sarvam-m": "exploratory",
         "together/stabilityai/stable-diffusion-xl-base-1.0": "exploratory",
+        "together/tencent/hy4": "exploratory",
         "together/thinkingmachines/inkling": "exploratory",
+        "together/thinkingmachines/inkling-2-small": "exploratory",
         "together/together/tev1-4b-experimental": "exploratory",
         "together/togethercomputer/essentialai-rnj-1-instruct": "exploratory",
         "together/togethercomputer/meta-llama-3.1-8b-instruct-awq-int4": "exploratory",
@@ -25024,11 +25734,13 @@
       "free_limits": {},
       "model_capabilities": {
         "together/bytedance-seed/seedream-3.0": [
+          "json",
           "reasoning",
           "tools",
           "vision"
         ],
         "together/bytedance-seed/seedream-4.0": [
+          "json",
           "reasoning",
           "tools",
           "vision"
@@ -25046,6 +25758,7 @@
           "vision"
         ],
         "together/bytedance/seedream-5.0-lite": [
+          "json",
           "reasoning",
           "tools",
           "vision"
@@ -25232,11 +25945,9 @@
           "json"
         ],
         "together/meta-llama/llama-3.1-405b": [
-          "reasoning",
           "tools"
         ],
         "together/meta-llama/llama-3.1-405b-instruct": [
-          "reasoning",
           "tools"
         ],
         "together/meta-llama/llama-3.2-1b": [
@@ -25253,7 +25964,6 @@
         ],
         "together/meta-llama/llama-3.3-70b-instruct": [
           "json",
-          "reasoning",
           "tools"
         ],
         "together/meta-llama/llama-3.3-70b-instruct-fp8-lora": [
@@ -25264,25 +25974,21 @@
         ],
         "together/meta-llama/llama-4-maverick-17b-128e-instruct-fp4": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "together/meta-llama/llama-4-scout-17b-16e": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "together/meta-llama/llama-4-scout-17b-16e-instruct": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
         "together/meta-llama/llama-4-scout-17b-16e-instruct-fp8-lora": [
           "json",
-          "reasoning",
           "tools",
           "vision"
         ],
@@ -25293,19 +25999,15 @@
           "json"
         ],
         "together/meta-llama/meta-llama-3.1-70b": [
-          "reasoning",
           "tools"
         ],
         "together/meta-llama/meta-llama-3.1-70b-instruct-turbo": [
-          "reasoning",
           "tools"
         ],
         "together/meta-llama/meta-llama-3.1-8b": [
-          "reasoning",
           "tools"
         ],
         "together/meta-llama/meta-llama-3.1-8b-instruct-turbo": [
-          "reasoning",
           "tools"
         ],
         "together/meta-models/muse-glimmer-30b": [
@@ -25385,12 +26087,10 @@
           "vision"
         ],
         "together/nim/meta/llama-3.1-70b-instruct": [
-          "reasoning",
           "tools"
         ],
         "together/nim/meta/llama-3.1-8b-instruct": [
           "json",
-          "reasoning",
           "tools"
         ],
         "together/nim/meta/llama-3.2-11b-vision-instruct": [
@@ -25401,11 +26101,9 @@
         ],
         "together/nim/meta/llama-3.3-70b-instruct": [
           "json",
-          "reasoning",
           "tools"
         ],
         "together/nim/nvidia/llama-3.1-nemotron-70b-instruct": [
-          "reasoning",
           "tools"
         ],
         "together/nim/nvidia/llama-3.3-nemotron-super-49b-v1": [
@@ -25415,7 +26113,6 @@
           "json"
         ],
         "together/nvidia/llama-3.1-nemotron-70b-instruct-hf": [
-          "reasoning",
           "tools"
         ],
         "together/nvidia/nemotron-3-asr-streaming-0.6b": [
@@ -25607,6 +26304,9 @@
           "reasoning",
           "tools"
         ],
+        "together/qwen/qwen3-tts-12hz-1.7b": [
+          "tools"
+        ],
         "together/qwen/qwen3-tts-12hz-1.7b-customvoice": [
           "tools"
         ],
@@ -25708,10 +26408,17 @@
         ],
         "together/ricursive-ai/ripple-65b-preview": [
           "json",
+          "reasoning",
           "tools"
         ],
         "together/salesforce/llama-rank-v1": [
           "json"
+        ],
+        "together/tencent/hy4": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
         ],
         "together/thinkingmachines/inkling": [
           "json",
@@ -25719,8 +26426,13 @@
           "tools",
           "vision"
         ],
-        "together/togethercomputer/meta-llama-3.1-8b-instruct-awq-int4": [
+        "together/thinkingmachines/inkling-2-small": [
+          "json",
           "reasoning",
+          "tools",
+          "vision"
+        ],
+        "together/togethercomputer/meta-llama-3.1-8b-instruct-awq-int4": [
           "tools"
         ],
         "together/wan-ai/wan2.6-image": [
@@ -26120,6 +26832,8 @@
         "gmi/google/gemini-3.7-flash": "exploratory",
         "gmi/google/gemini-3.8-flash": "exploratory",
         "gmi/google/gemini-4-argon": "exploratory",
+        "gmi/google/gemini-4-carbon": "exploratory",
+        "gmi/google/gemini-4-hydrogen": "exploratory",
         "gmi/google/gemma-4-26b-a4b-it": "standard",
         "gmi/google/gemma-4-31b-it": "standard",
         "gmi/inclusionai/ling-3.0-flash-fin": "exploratory",
@@ -26244,6 +26958,7 @@
         ],
         "gmi/gmicloud/ripple-65b-preview": [
           "json",
+          "reasoning",
           "tools"
         ],
         "gmi/google/gemini-3-flash-preview": [
@@ -26295,6 +27010,18 @@
           "vision"
         ],
         "gmi/google/gemini-4-argon": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "gmi/google/gemini-4-carbon": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "gmi/google/gemini-4-hydrogen": [
           "json",
           "reasoning",
           "tools",
@@ -26713,7 +27440,7 @@
       ],
       "believed_free": [],
       "model_reasoning": {
-        "meta-muse/muse-ember-1.0": "standard",
+        "meta-muse/muse-ember-1.0": "exploratory",
         "meta-muse/muse-spark-1.1": "exploratory",
         "meta-muse/muse-spark-1.2": "exploratory",
         "meta-muse/muse-spark-1.3": "exploratory",
@@ -26769,6 +27496,7 @@
       "model_reasoning": {
         "anthropic/claude-fable-5": "exploratory",
         "anthropic/claude-fable-5-1": "exploratory",
+        "anthropic/claude-fable-5-2": "exploratory",
         "anthropic/claude-haiku-4-5-20251001": "exploratory",
         "anthropic/claude-haiku-5-5": "exploratory",
         "anthropic/claude-opus-4-5-20251101": "exploratory",
@@ -26791,6 +27519,12 @@
           "vision"
         ],
         "anthropic/claude-fable-5-1": [
+          "json",
+          "reasoning",
+          "tools",
+          "vision"
+        ],
+        "anthropic/claude-fable-5-2": [
           "json",
           "reasoning",
           "tools",
@@ -27008,6 +27742,10 @@
     "cerebras/qwen-3.8-27b": {
       "input_cost_per_token": 9.9e-07,
       "output_cost_per_token": 1.49e-06
+    },
+    "cloudflare-workers/@cf/thinkingmachines/inkling-2-small": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1e-06
     },
     "cloudflare-workers/@hf/thebloke/codellama-7b-instruct-awq": {
       "input_cost_per_token": 1.923e-06,
@@ -28149,17 +28887,29 @@
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 2e-07
     },
+    "fireworks/accounts/fireworks/routers/deepseek-flash-latest": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "fireworks/accounts/fireworks/routers/deepseek-v4p1-flash-1017-flex": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
+    },
     "fireworks/accounts/fireworks/routers/deepseek-v4p1-flash-1017-spot": {
-      "input_cost_per_token": 2.1e-07,
-      "output_cost_per_token": 8.4e-07
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
     },
     "fireworks/accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast": {
-      "input_cost_per_token": 2.4e-06,
-      "output_cost_per_token": 9.6e-06
+      "input_cost_per_token": 1.2e-06,
+      "output_cost_per_token": 4.8e-06
+    },
+    "fireworks/accounts/fireworks/routers/deepseek-v4p1-flash-1017-us": {
+      "input_cost_per_token": 4.5e-07,
+      "output_cost_per_token": 1.8e-06
     },
     "fireworks/accounts/fireworks/routers/deepseek-v4p1-flash-spot": {
-      "input_cost_per_token": 2.1e-07,
-      "output_cost_per_token": 8.4e-07
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
     },
     "fireworks/accounts/fireworks/routers/deepseek-v4p1-flash-us": {
       "input_cost_per_token": 4.5e-07,
@@ -28186,12 +28936,28 @@
       "output_cost_per_token": 7.5e-07
     },
     "fireworks/accounts/fireworks/routers/glm-5p3-spot": {
-      "input_cost_per_token": 9.8e-07,
-      "output_cost_per_token": 3.08e-06
+      "input_cost_per_token": 7e-07,
+      "output_cost_per_token": 2.2e-06
     },
     "fireworks/accounts/fireworks/routers/glm-5p3-us": {
       "input_cost_per_token": 2.1e-06,
       "output_cost_per_token": 6.6e-06
+    },
+    "fireworks/accounts/fireworks/routers/glm-fast-latest": {
+      "input_cost_per_token": 2.1e-06,
+      "output_cost_per_token": 6.6e-06
+    },
+    "fireworks/accounts/fireworks/routers/glm-flash-latest": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 5e-07
+    },
+    "fireworks/accounts/fireworks/routers/glm-latest": {
+      "input_cost_per_token": 1.4e-06,
+      "output_cost_per_token": 4.4e-06
+    },
+    "fireworks/accounts/fireworks/routers/kimi-fast-latest": {
+      "input_cost_per_token": 4.5e-06,
+      "output_cost_per_token": 2.25e-05
     },
     "fireworks/accounts/fireworks/routers/kimi-k2p6-fast": {
       "input_cost_per_token": 2e-06,
@@ -28213,9 +28979,25 @@
       "input_cost_per_token": 4.5e-06,
       "output_cost_per_token": 2.25e-05
     },
+    "fireworks/accounts/fireworks/routers/kimi-k3p1-pro-us": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1.25e-05
+    },
+    "fireworks/accounts/fireworks/routers/kimi-latest": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "fireworks/accounts/fireworks/routers/minimax-latest": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "fireworks/accounts/fireworks/routers/qwen-max-latest": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06
+    },
     "fireworks/accounts/fireworks/routers/spot-deepseek-v4-flash": {
-      "input_cost_per_token": 1.05e-07,
-      "output_cost_per_token": 2.1e-07
+      "input_cost_per_token": 7e-08,
+      "output_cost_per_token": 1.4e-07
     },
     "fireworks/deepseek-v4-flash": {
       "input_cost_per_token": 1.4e-07,
@@ -28397,6 +29179,18 @@
       "input_cost_per_token": 1.5e-06,
       "output_cost_per_token": 7.5e-06
     },
+    "google/gemini-4-carbon": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "google/gemini-4-hydrogen": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 7.5e-06
+    },
+    "google/gemini-4-neon": {
+      "input_cost_per_token": 3e-06,
+      "output_cost_per_token": 1.5e-05
+    },
     "google/gemini-exp-1206": {
       "input_cost_per_token": 3e-07,
       "output_cost_per_token": 2.5e-06
@@ -28444,6 +29238,10 @@
     "google/gemini-robotics-er-2-streaming-preview": {
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 5e-06
+    },
+    "google/genie-4": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 9e-06
     },
     "google/vertex_ai/deep-research-pro-preview-12-2025": {
       "input_cost_per_token": 2e-06,
@@ -28570,8 +29368,8 @@
       "output_cost_per_token": 2.1e-06
     },
     "mistral/mistral-large-latest": {
-      "input_cost_per_token": 5e-07,
-      "output_cost_per_token": 1.5e-06
+      "input_cost_per_token": 7e-07,
+      "output_cost_per_token": 2.1e-06
     },
     "mistral/mistral-medium": {
       "input_cost_per_token": 1.5e-06,
@@ -28681,6 +29479,10 @@
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1e-05
     },
+    "moonshot/kimi-k3.1-pro-highspeed": {
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 2e-05
+    },
     "moonshot/moonshot-v1-128k": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 5e-06
@@ -28768,6 +29570,14 @@
     "openrouter/anthropic/claude-fable-5.1:batch": {
       "input_cost_per_token": 5e-06,
       "output_cost_per_token": 2.5e-05
+    },
+    "openrouter/anthropic/claude-fable-5.2": {
+      "input_cost_per_token": 8e-06,
+      "output_cost_per_token": 4e-05
+    },
+    "openrouter/anthropic/claude-fable-5.2:batch": {
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 2e-05
     },
     "openrouter/anthropic/claude-fable-5:batch": {
       "input_cost_per_token": 5e-06,
@@ -28877,21 +29687,13 @@
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 5e-06
     },
-    "openrouter/bytedance-seed/seed-1.6": {
-      "input_cost_per_token": 2.5e-07,
-      "output_cost_per_token": 2e-06
-    },
-    "openrouter/bytedance-seed/seed-1.6-flash": {
-      "input_cost_per_token": 7.5e-08,
-      "output_cost_per_token": 3e-07
+    "openrouter/baidu/ernie-light-dt-1.0-intl": {
+      "input_cost_per_token": 1.13e-06,
+      "output_cost_per_token": 3.94e-06
     },
     "openrouter/bytedance-seed/seed-2-1-turbo": {
       "input_cost_per_token": 5e-07,
       "output_cost_per_token": 2.5e-06
-    },
-    "openrouter/bytedance-seed/seed-2.0-code": {
-      "input_cost_per_token": 5e-07,
-      "output_cost_per_token": 3e-06
     },
     "openrouter/bytedance-seed/seed-2.0-lite": {
       "input_cost_per_token": 2.5e-07,
@@ -28930,20 +29732,20 @@
       "output_cost_per_token": 1.5e-07
     },
     "openrouter/deepseek/deepseek-chat": {
-      "input_cost_per_token": 3.2e-07,
-      "output_cost_per_token": 8.9e-07
+      "input_cost_per_token": 2.574e-07,
+      "output_cost_per_token": 1.0287e-06
     },
     "openrouter/deepseek/deepseek-chat-v3-0324": {
-      "input_cost_per_token": 2.9e-07,
-      "output_cost_per_token": 1.14e-06
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 1e-06
     },
     "openrouter/deepseek/deepseek-chat-v3.1": {
       "input_cost_per_token": 2.5e-07,
       "output_cost_per_token": 9.5e-07
     },
     "openrouter/deepseek/deepseek-r1-0528": {
-      "input_cost_per_token": 5e-07,
-      "output_cost_per_token": 2.15e-06
+      "input_cost_per_token": 5.71e-07,
+      "output_cost_per_token": 2.286e-06
     },
     "openrouter/deepseek/deepseek-v3.1-terminus": {
       "input_cost_per_token": 2.7e-07,
@@ -28958,36 +29760,44 @@
       "output_cost_per_token": 4.1e-07
     },
     "openrouter/deepseek/deepseek-v4-flash": {
-      "input_cost_per_token": 9.1e-08,
-      "output_cost_per_token": 1.82e-07
+      "input_cost_per_token": 9e-08,
+      "output_cost_per_token": 1.8e-07
     },
     "openrouter/deepseek/deepseek-v4-flash-0731": {
-      "input_cost_per_token": 5.9e-08,
+      "input_cost_per_token": 4.43e-08,
       "output_cost_per_token": 3e-07
     },
+    "openrouter/deepseek/deepseek-v4-flash-0731:batch": {
+      "input_cost_per_token": 4.8e-08,
+      "output_cost_per_token": 1.44e-07
+    },
     "openrouter/deepseek/deepseek-v4-flash-vision-exp": {
-      "input_cost_per_token": 4.4e-07,
-      "output_cost_per_token": 1.32e-06
+      "input_cost_per_token": 2.156e-07,
+      "output_cost_per_token": 6.468e-07
     },
     "openrouter/deepseek/deepseek-v4-pro": {
-      "input_cost_per_token": 9.5526e-07,
-      "output_cost_per_token": 1.91052e-06
+      "input_cost_per_token": 9e-07,
+      "output_cost_per_token": 1.5e-06
     },
     "openrouter/deepseek/deepseek-v4-pro-0813": {
-      "input_cost_per_token": 1.165e-07,
-      "output_cost_per_token": 4.66e-06
+      "input_cost_per_token": 1.32e-06,
+      "output_cost_per_token": 3.96e-06
     },
     "openrouter/deepseek/deepseek-v4.1-flash": {
-      "input_cost_per_token": 5.1e-08,
-      "output_cost_per_token": 5.67e-07
+      "input_cost_per_token": 4.98e-08,
+      "output_cost_per_token": 1.992e-07
     },
     "openrouter/deepseek/deepseek-v4.1-flash-1017": {
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 6e-07
     },
+    "openrouter/deepseek/deepseek-v4.1-flash-1017:batch": {
+      "input_cost_per_token": 3.5e-08,
+      "output_cost_per_token": 1.49e-07
+    },
     "openrouter/deepseek/deepseek-v4.1-flash:batch": {
-      "input_cost_per_token": 1.12e-07,
-      "output_cost_per_token": 3.36e-07
+      "input_cost_per_token": 5e-08,
+      "output_cost_per_token": 1.5e-07
     },
     "openrouter/elorian/glimpse": {
       "input_cost_per_token": 6e-07,
@@ -29117,6 +29927,30 @@
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 5e-06
     },
+    "openrouter/google/gemini-4-carbon": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "openrouter/google/gemini-4-carbon:batch": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 5e-06
+    },
+    "openrouter/google/gemini-4-hydrogen": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 7.5e-06
+    },
+    "openrouter/google/gemini-4-hydrogen:batch": {
+      "input_cost_per_token": 7.5e-07,
+      "output_cost_per_token": 3.75e-06
+    },
+    "openrouter/google/gemini-4-neon": {
+      "input_cost_per_token": 3e-06,
+      "output_cost_per_token": 1.5e-05
+    },
+    "openrouter/google/gemini-4-neon:batch": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 7.5e-06
+    },
     "openrouter/google/gemini-nano-banana-2.1": {
       "input_cost_per_token": 1.5e-06,
       "output_cost_per_token": 7.5e-06
@@ -29139,39 +29973,27 @@
     },
     "openrouter/google/gemma-3-27b-it": {
       "input_cost_per_token": 8e-08,
-      "output_cost_per_token": 3.5e-07
+      "output_cost_per_token": 4.5e-07
     },
     "openrouter/google/gemma-3-4b-it": {
-      "input_cost_per_token": 5e-08,
-      "output_cost_per_token": 1e-07
+      "input_cost_per_token": 4e-08,
+      "output_cost_per_token": 5e-08
     },
     "openrouter/google/gemma-4-26b-a4b-it": {
-      "input_cost_per_token": 9e-08,
-      "output_cost_per_token": 3e-07
+      "input_cost_per_token": 6.75e-08,
+      "output_cost_per_token": 2.25e-07
     },
     "openrouter/google/gemma-4-31b-it": {
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 4e-07
     },
     "openrouter/gryphe/mythomax-l2-13b": {
-      "input_cost_per_token": 8e-08,
-      "output_cost_per_token": 1.1e-07
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 5e-07
     },
     "openrouter/ibm-granite/granite-4.2-8b": {
       "input_cost_per_token": 6e-08,
-      "output_cost_per_token": 2.5e-07
-    },
-    "openrouter/inception/mercury-2": {
-      "input_cost_per_token": 2.5e-07,
-      "output_cost_per_token": 7.5e-07
-    },
-    "openrouter/inception/mercury-2.5": {
-      "input_cost_per_token": 4e-08,
       "output_cost_per_token": 1.5e-07
-    },
-    "openrouter/inception/mercury-3": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 3.5e-07
     },
     "openrouter/inclusionai/ling-3.0-flash": {
       "input_cost_per_token": 2.1e-08,
@@ -29186,8 +30008,8 @@
       "output_cost_per_token": 4.5e-08
     },
     "openrouter/inclusionai/ling-3.1-flash": {
-      "input_cost_per_token": 7.5e-08,
-      "output_cost_per_token": 2.25e-07
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 1.8e-07
     },
     "openrouter/inference-net/schematron-v2-small": {
       "input_cost_per_token": 5e-08,
@@ -29197,41 +30019,37 @@
       "input_cost_per_token": 3e-08,
       "output_cost_per_token": 1.5e-07
     },
-    "openrouter/liquid/lfm-2.5-2.6b": {
-      "input_cost_per_token": 3.5e-07,
-      "output_cost_per_token": 5e-07
+    "openrouter/kt/midm-k-3.0-pro": {
+      "input_cost_per_token": 2e-07,
+      "output_cost_per_token": 8e-07
     },
     "openrouter/liquid/lfm-2.5-24b-a2b": {
       "input_cost_per_token": 5e-08,
       "output_cost_per_token": 7e-07
     },
-    "openrouter/mancer/weaver": {
-      "input_cost_per_token": 4e-07,
-      "output_cost_per_token": 7.5e-07
+    "openrouter/liquid/lfm-3-1.7b": {
+      "input_cost_per_token": 8e-08,
+      "output_cost_per_token": 2e-07
     },
-    "openrouter/meituan/longcat-2.0": {
+    "openrouter/mancer/weaver": {
       "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 1.2e-06
+      "output_cost_per_token": 5e-07
     },
     "openrouter/meta-llama/llama-3.1-70b-instruct": {
       "input_cost_per_token": 7.2e-07,
       "output_cost_per_token": 7.2e-07
     },
     "openrouter/meta-llama/llama-3.1-8b-instruct": {
-      "input_cost_per_token": 5e-08,
-      "output_cost_per_token": 8e-08
-    },
-    "openrouter/meta-llama/llama-3.2-1b-instruct": {
-      "input_cost_per_token": 2.7e-08,
-      "output_cost_per_token": 2.01e-07
+      "input_cost_per_token": 2e-08,
+      "output_cost_per_token": 4e-08
     },
     "openrouter/meta-llama/llama-3.2-3b-instruct": {
-      "input_cost_per_token": 5.09e-08,
-      "output_cost_per_token": 3.35e-07
+      "input_cost_per_token": 5e-08,
+      "output_cost_per_token": 3.3e-07
     },
     "openrouter/meta-llama/llama-3.3-70b-instruct": {
-      "input_cost_per_token": 5.9e-07,
-      "output_cost_per_token": 7.9e-07
+      "input_cost_per_token": 7.1e-07,
+      "output_cost_per_token": 7.1e-07
     },
     "openrouter/meta-llama/llama-4-maverick": {
       "input_cost_per_token": 3.5e-07,
@@ -29245,9 +30063,17 @@
       "input_cost_per_token": 1.8e-07,
       "output_cost_per_token": 1.8e-07
     },
+    "openrouter/meta/muse-ember": {
+      "input_cost_per_token": 1e-07,
+      "output_cost_per_token": 5e-07
+    },
     "openrouter/meta/muse-glimmer-30b": {
-      "input_cost_per_token": 3e-07,
-      "output_cost_per_token": 1.2e-06
+      "input_cost_per_token": 3.5e-07,
+      "output_cost_per_token": 1.5e-06
+    },
+    "openrouter/meta/muse-glimmer-30b:batch": {
+      "input_cost_per_token": 2.4e-07,
+      "output_cost_per_token": 9.6e-07
     },
     "openrouter/meta/muse-spark-1.1": {
       "input_cost_per_token": 1.25e-06,
@@ -29281,25 +30107,25 @@
       "input_cost_per_token": 7e-08,
       "output_cost_per_token": 1.4e-07
     },
-    "openrouter/minimax/minimax-m1": {
-      "input_cost_per_token": 5.5e-07,
-      "output_cost_per_token": 2.2e-06
-    },
     "openrouter/minimax/minimax-m2.5": {
       "input_cost_per_token": 2.7e-07,
       "output_cost_per_token": 9.5e-07
     },
     "openrouter/minimax/minimax-m2.7": {
-      "input_cost_per_token": 2.1e-07,
-      "output_cost_per_token": 8.4e-07
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 1.8e-06
     },
     "openrouter/minimax/minimax-m3": {
       "input_cost_per_token": 3e-07,
       "output_cost_per_token": 1.2e-06
     },
     "openrouter/minimax/minimax-m3.1-flash": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 6e-07
+      "input_cost_per_token": 7.5e-08,
+      "output_cost_per_token": 3e-07
+    },
+    "openrouter/minimax/minimax-m3:batch": {
+      "input_cost_per_token": 2.24e-07,
+      "output_cost_per_token": 8.8e-07
     },
     "openrouter/mistralai/codestral-2508": {
       "input_cost_per_token": 3e-07,
@@ -29338,8 +30164,8 @@
       "output_cost_per_token": 2.1e-06
     },
     "openrouter/mistralai/mistral-medium-3": {
-      "input_cost_per_token": 4e-07,
-      "output_cost_per_token": 2e-06
+      "input_cost_per_token": 4.4e-07,
+      "output_cost_per_token": 2.2e-06
     },
     "openrouter/mistralai/mistral-medium-3-5": {
       "input_cost_per_token": 1.5e-06,
@@ -29350,8 +30176,8 @@
       "output_cost_per_token": 3.75e-06
     },
     "openrouter/mistralai/mistral-medium-3.1": {
-      "input_cost_per_token": 4e-07,
-      "output_cost_per_token": 2e-06
+      "input_cost_per_token": 4.4e-07,
+      "output_cost_per_token": 2.2e-06
     },
     "openrouter/mistralai/mistral-nemo": {
       "input_cost_per_token": 2.9e-08,
@@ -29378,6 +30204,10 @@
       "output_cost_per_token": 2e-07
     },
     "openrouter/mistralai/mixtral-8x22b-instruct": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06
+    },
+    "openrouter/mistralai/pixtral-large-2502": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 6e-06
     },
@@ -29415,15 +30245,19 @@
     },
     "openrouter/moonshotai/kimi-k2.7-code": {
       "input_cost_per_token": 6e-07,
-      "output_cost_per_token": 3.5e-06
+      "output_cost_per_token": 3e-06
     },
     "openrouter/moonshotai/kimi-k3": {
       "input_cost_per_token": 1.92e-07,
       "output_cost_per_token": 1.6e-05
     },
     "openrouter/moonshotai/kimi-k3.1-pro": {
-      "input_cost_per_token": 2e-06,
-      "output_cost_per_token": 1e-05
+      "input_cost_per_token": 2.403e-07,
+      "output_cost_per_token": 8.4023e-06
+    },
+    "openrouter/moonshotai/kimi-k3.1-pro:batch": {
+      "input_cost_per_token": 3.72e-07,
+      "output_cost_per_token": 5.583e-06
     },
     "openrouter/moonshotai/kimi-k3:batch": {
       "input_cost_per_token": 2.28e-06,
@@ -29433,9 +30267,21 @@
       "input_cost_per_token": 8e-07,
       "output_cost_per_token": 1.2e-06
     },
+    "openrouter/morph/morph-v3-fast:batch": {
+      "input_cost_per_token": 4e-07,
+      "output_cost_per_token": 6e-07
+    },
     "openrouter/morph/morph-v3-large": {
       "input_cost_per_token": 9e-07,
       "output_cost_per_token": 1.9e-06
+    },
+    "openrouter/morph/morph-v3-large:batch": {
+      "input_cost_per_token": 4.5e-07,
+      "output_cost_per_token": 9.5e-07
+    },
+    "openrouter/motif-technologies/motif-3": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06
     },
     "openrouter/nex-agi/nex-n2.5-mini": {
       "input_cost_per_token": 2.5e-08,
@@ -29444,6 +30290,10 @@
     "openrouter/nex-agi/nex-n2.5-pro": {
       "input_cost_per_token": 7.5e-08,
       "output_cost_per_token": 2.5e-07
+    },
+    "openrouter/nex-agi/nex-n2.6": {
+      "input_cost_per_token": 1.2e-07,
+      "output_cost_per_token": 4e-07
     },
     "openrouter/nousresearch/hermes-4-405b": {
       "input_cost_per_token": 1e-06,
@@ -29458,8 +30308,8 @@
       "output_cost_per_token": 4e-07
     },
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b": {
-      "input_cost_per_token": 6e-07,
-      "output_cost_per_token": 2.4e-06
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 2.2e-06
     },
     "openrouter/nvidia/nemotron-3.5-content-safety": {
       "input_cost_per_token": 2e-07,
@@ -29471,7 +30321,7 @@
     },
     "openrouter/nvidia/nemotron-3.5-super-vl": {
       "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 5e-07
+      "output_cost_per_token": 4.7e-07
     },
     "openrouter/openai/gpt-3.5-turbo-0613": {
       "input_cost_per_token": 1e-06,
@@ -29813,6 +30663,38 @@
       "input_cost_per_token": 5e-07,
       "output_cost_per_token": 2.5e-06
     },
+    "openrouter/openai/gpt-6.2-astra": {
+      "input_cost_per_token": 8e-06,
+      "output_cost_per_token": 4e-05
+    },
+    "openrouter/openai/gpt-6.2-astra-pro": {
+      "input_cost_per_token": 8e-06,
+      "output_cost_per_token": 4e-05
+    },
+    "openrouter/openai/gpt-6.2-astra-pro:batch": {
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 2e-05
+    },
+    "openrouter/openai/gpt-6.2-astra:batch": {
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 2e-05
+    },
+    "openrouter/openai/gpt-6.2-sol": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "openrouter/openai/gpt-6.2-sol-pro": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "openrouter/openai/gpt-6.2-sol-pro:batch": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 5e-06
+    },
+    "openrouter/openai/gpt-6.2-sol:batch": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 5e-06
+    },
     "openrouter/openai/gpt-audio": {
       "input_cost_per_token": 2.5e-06,
       "output_cost_per_token": 1e-05
@@ -29826,8 +30708,8 @@
       "output_cost_per_token": 3e-05
     },
     "openrouter/openai/gpt-oss-120b": {
-      "input_cost_per_token": 2.9e-08,
-      "output_cost_per_token": 1.07e-07
+      "input_cost_per_token": 9e-08,
+      "output_cost_per_token": 3.6e-07
     },
     "openrouter/openai/gpt-oss-120b:batch": {
       "input_cost_per_token": 2.96e-08,
@@ -29866,7 +30748,7 @@
       "output_cost_per_token": 2.2e-06
     },
     "openrouter/particle-ai/particle-1": {
-      "input_cost_per_token": 5e-08,
+      "input_cost_per_token": 7e-08,
       "output_cost_per_token": 5e-07
     },
     "openrouter/perceptron/perceptron-mk1": {
@@ -29909,10 +30791,6 @@
       "input_cost_per_token": 3.6e-07,
       "output_cost_per_token": 4e-07
     },
-    "openrouter/qwen/qwen-2.5-7b-instruct": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 2e-07
-    },
     "openrouter/qwen/qwen-2.5-coder-32b-instruct": {
       "input_cost_per_token": 6.6e-07,
       "output_cost_per_token": 1e-06
@@ -29954,8 +30832,8 @@
       "output_cost_per_token": 1e-06
     },
     "openrouter/qwen/qwen3-coder-30b-a3b-instruct": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 6e-07
+      "input_cost_per_token": 7e-08,
+      "output_cost_per_token": 2.8e-07
     },
     "openrouter/qwen/qwen3-coder-flash": {
       "input_cost_per_token": 1.95e-07,
@@ -29966,7 +30844,7 @@
       "output_cost_per_token": 8e-07
     },
     "openrouter/qwen/qwen3-next-80b-a3b-instruct": {
-      "input_cost_per_token": 9e-08,
+      "input_cost_per_token": 1e-07,
       "output_cost_per_token": 1.1e-06
     },
     "openrouter/qwen/qwen3-vl-235b-a22b-instruct": {
@@ -29976,10 +30854,6 @@
     "openrouter/qwen/qwen3-vl-30b-a3b-instruct": {
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 6e-07
-    },
-    "openrouter/qwen/qwen3-vl-30b-a3b-thinking": {
-      "input_cost_per_token": 2.9e-07,
-      "output_cost_per_token": 1e-06
     },
     "openrouter/qwen/qwen3-vl-8b-instruct": {
       "input_cost_per_token": 2.5e-07,
@@ -29998,8 +30872,8 @@
       "output_cost_per_token": 1e-06
     },
     "openrouter/qwen/qwen3.5-397b-a17b": {
-      "input_cost_per_token": 5e-07,
-      "output_cost_per_token": 3.6e-06
+      "input_cost_per_token": 4.5e-07,
+      "output_cost_per_token": 3e-06
     },
     "openrouter/qwen/qwen3.5-9b": {
       "input_cost_per_token": 1.7e-07,
@@ -30018,8 +30892,8 @@
       "output_cost_per_token": 1.8e-06
     },
     "openrouter/qwen/qwen3.6-27b": {
-      "input_cost_per_token": 4.5e-07,
-      "output_cost_per_token": 2.7e-06
+      "input_cost_per_token": 3.2e-07,
+      "output_cost_per_token": 3.2e-06
     },
     "openrouter/qwen/qwen3.6-35b-a3b": {
       "input_cost_per_token": 1e-07,
@@ -30054,8 +30928,12 @@
       "output_cost_per_token": 6e-06
     },
     "openrouter/qwen/qwen3.8-27b": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 1.875e-06
+      "input_cost_per_token": 3.5e-08,
+      "output_cost_per_token": 1.5e-06
+    },
+    "openrouter/qwen/qwen3.8-27b:batch": {
+      "input_cost_per_token": 1.6e-07,
+      "output_cost_per_token": 2e-06
     },
     "openrouter/qwen/qwen3.8-flash": {
       "input_cost_per_token": 1.5e-07,
@@ -30065,6 +30943,10 @@
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 6e-06
     },
+    "openrouter/qwen/qwen3.8-max-0902:batch": {
+      "input_cost_per_token": 1.15e-06,
+      "output_cost_per_token": 3.45e-06
+    },
     "openrouter/qwen/qwen3.8-max-prime": {
       "input_cost_per_token": 4e-06,
       "output_cost_per_token": 1.2e-05
@@ -30073,8 +30955,16 @@
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 4.7e-07
     },
+    "openrouter/qwen/qwen4-max": {
+      "input_cost_per_token": 1.425e-06,
+      "output_cost_per_token": 4.275e-06
+    },
+    "openrouter/radixark/daisyrose-27b": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 1.875e-06
+    },
     "openrouter/reflection/beam-1.0-501b-a23b": {
-      "input_cost_per_token": 3e-07,
+      "input_cost_per_token": 2.5e-07,
       "output_cost_per_token": 1e-06
     },
     "openrouter/rekaai/reka-edge": {
@@ -30094,8 +30984,8 @@
       "output_cost_per_token": 3e-06
     },
     "openrouter/ricursiveai/ripple-65b-preview": {
-      "input_cost_per_token": 2e-07,
-      "output_cost_per_token": 6e-07
+      "input_cost_per_token": 1e-07,
+      "output_cost_per_token": 3e-07
     },
     "openrouter/sakana/fugu-max": {
       "input_cost_per_token": 2e-06,
@@ -30129,10 +31019,6 @@
       "input_cost_per_token": 4e-08,
       "output_cost_per_token": 0.0
     },
-    "openrouter/stepfun/step-3.5-flash": {
-      "input_cost_per_token": 1e-07,
-      "output_cost_per_token": 3e-07
-    },
     "openrouter/stepfun/step-3.7-flash": {
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 1.15e-06
@@ -30140,10 +31026,6 @@
     "openrouter/stepfun/step-5-preview": {
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 2.7e-06
-    },
-    "openrouter/tencent/hunyuan-a13b-instruct": {
-      "input_cost_per_token": 1.4e-07,
-      "output_cost_per_token": 5.7e-07
     },
     "openrouter/tencent/hy-mt2-1.8b": {
       "input_cost_per_token": 4.4e-08,
@@ -30158,20 +31040,20 @@
       "output_cost_per_token": 2.95e-07
     },
     "openrouter/tencent/hy3": {
-      "input_cost_per_token": 1.32e-07,
-      "output_cost_per_token": 5.28e-07
-    },
-    "openrouter/tencent/hy3-preview": {
-      "input_cost_per_token": 1.8e-07,
-      "output_cost_per_token": 6e-07
+      "input_cost_per_token": 1.4e-07,
+      "output_cost_per_token": 5.8e-07
     },
     "openrouter/tencent/hy4": {
       "input_cost_per_token": 4.17e-07,
       "output_cost_per_token": 1.2505e-06
     },
+    "openrouter/tencent/hy4-flash": {
+      "input_cost_per_token": 3.5e-08,
+      "output_cost_per_token": 1.405e-07
+    },
     "openrouter/tencent/hy4-preview": {
-      "input_cost_per_token": 8.34e-07,
-      "output_cost_per_token": 2.501e-06
+      "input_cost_per_token": 7.506e-07,
+      "output_cost_per_token": 2.2509e-06
     },
     "openrouter/thedrummer/cydonia-24b-v4.1": {
       "input_cost_per_token": 3e-07,
@@ -30189,11 +31071,27 @@
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 4.05e-06
     },
+    "openrouter/thinkingmachines/inkling-2-mini": {
+      "input_cost_per_token": 7.5e-08,
+      "output_cost_per_token": 3e-07
+    },
+    "openrouter/thinkingmachines/inkling-2-small": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1e-06
+    },
     "openrouter/thinkingmachines/inkling-small": {
       "input_cost_per_token": 4.5e-07,
       "output_cost_per_token": 1.2e-06
     },
+    "openrouter/thinkingmachines/inkling-small:batch": {
+      "input_cost_per_token": 3.6e-07,
+      "output_cost_per_token": 9.6e-07
+    },
     "openrouter/unbiased/pareto-26.10": {
+      "input_cost_per_token": 8e-07,
+      "output_cost_per_token": 3.2e-06
+    },
+    "openrouter/unbiased/pareto-26.10-preview": {
       "input_cost_per_token": 8e-07,
       "output_cost_per_token": 3.2e-06
     },
@@ -30202,8 +31100,8 @@
       "output_cost_per_token": 7.5e-06
     },
     "openrouter/undi95/remm-slerp-l2-13b": {
-      "input_cost_per_token": 3.5e-07,
-      "output_cost_per_token": 6.5e-07
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 5e-07
     },
     "openrouter/upstage/solar-mini4": {
       "input_cost_per_token": 5e-08,
@@ -30252,10 +31150,6 @@
     "openrouter/x-ai/grok-4.7:batch": {
       "input_cost_per_token": 1.6e-06,
       "output_cost_per_token": 4.8e-06
-    },
-    "openrouter/x-ai/grok-build-0.1": {
-      "input_cost_per_token": 1e-06,
-      "output_cost_per_token": 2e-06
     },
     "openrouter/xiaomi/mimo-v2.5": {
       "input_cost_per_token": 4e-07,
@@ -30318,20 +31212,24 @@
       "output_cost_per_token": 4.4e-06
     },
     "openrouter/z-ai/glm-5.2": {
-      "input_cost_per_token": 6e-09,
-      "output_cost_per_token": 6.8e-06
+      "input_cost_per_token": 6.2e-07,
+      "output_cost_per_token": 2.42e-06
+    },
+    "openrouter/z-ai/glm-5.2:batch": {
+      "input_cost_per_token": 3.22e-07,
+      "output_cost_per_token": 9.89e-07
     },
     "openrouter/z-ai/glm-5.3": {
       "input_cost_per_token": 6.99e-08,
       "output_cost_per_token": 1.4e-06
     },
     "openrouter/z-ai/glm-5.3-flash": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 5e-07
+      "input_cost_per_token": 3.99e-08,
+      "output_cost_per_token": 7.84e-08
     },
     "openrouter/z-ai/glm-5.3-flash:batch": {
-      "input_cost_per_token": 5e-08,
-      "output_cost_per_token": 1.8e-07
+      "input_cost_per_token": 2.3e-08,
+      "output_cost_per_token": 6.8e-08
     },
     "openrouter/z-ai/glm-5.3-flashx": {
       "input_cost_per_token": 3.7e-07,
@@ -30342,20 +31240,20 @@
       "output_cost_per_token": 1.25e-06
     },
     "openrouter/z-ai/glm-5.3-prime": {
-      "input_cost_per_token": 2.8e-06,
-      "output_cost_per_token": 8.8e-06
+      "input_cost_per_token": 1.68e-06,
+      "output_cost_per_token": 5.28e-06
     },
     "openrouter/z-ai/glm-5.3:batch": {
-      "input_cost_per_token": 4.5e-07,
-      "output_cost_per_token": 2e-06
+      "input_cost_per_token": 2.8e-07,
+      "output_cost_per_token": 1.249e-06
     },
     "openrouter/z-ai/glm-5v-turbo": {
       "input_cost_per_token": 1.2e-06,
       "output_cost_per_token": 4e-06
     },
     "openrouter/~anthropic/claude-fable-latest": {
-      "input_cost_per_token": 1e-05,
-      "output_cost_per_token": 5e-05
+      "input_cost_per_token": 8e-06,
+      "output_cost_per_token": 4e-05
     },
     "openrouter/~anthropic/claude-haiku-latest": {
       "input_cost_per_token": 1e-07,
@@ -30370,20 +31268,20 @@
       "output_cost_per_token": 1e-05
     },
     "openrouter/~deepseek/deepseek-flash-latest": {
-      "input_cost_per_token": 6e-09,
+      "input_cost_per_token": 3.6e-08,
       "output_cost_per_token": 5e-07
     },
     "openrouter/~deepseek/deepseek-pro-latest": {
-      "input_cost_per_token": 9.99e-08,
+      "input_cost_per_token": 1.188e-07,
       "output_cost_per_token": 8e-06
     },
     "openrouter/~deepseek/deepseek-v4-flash-latest": {
-      "input_cost_per_token": 5.9e-08,
-      "output_cost_per_token": 3e-07
+      "input_cost_per_token": 4.4e-08,
+      "output_cost_per_token": 1.32e-07
     },
     "openrouter/~google/gemini-flash-latest": {
-      "input_cost_per_token": 7.5e-07,
-      "output_cost_per_token": 3.75e-06
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 7.5e-06
     },
     "openrouter/~google/gemini-pro-latest": {
       "input_cost_per_token": 2e-06,
@@ -30391,11 +31289,11 @@
     },
     "openrouter/~moonshotai/kimi-latest": {
       "input_cost_per_token": 1.824e-07,
-      "output_cost_per_token": 9.3388e-06
+      "output_cost_per_token": 1.10055e-05
     },
     "openrouter/~openai/gpt-astra-latest": {
-      "input_cost_per_token": 1e-05,
-      "output_cost_per_token": 5e-05
+      "input_cost_per_token": 8e-06,
+      "output_cost_per_token": 4e-05
     },
     "openrouter/~openai/gpt-luna-latest": {
       "input_cost_per_token": 1e-07,
@@ -30422,8 +31320,8 @@
       "output_cost_per_token": 6e-06
     },
     "openrouter/~z-ai/glm-flash-latest": {
-      "input_cost_per_token": 2.84e-08,
-      "output_cost_per_token": 9.23e-08
+      "input_cost_per_token": 3.99e-08,
+      "output_cost_per_token": 7.84e-08
     },
     "openrouter/~z-ai/glm-latest": {
       "input_cost_per_token": 6.99e-08,
@@ -30496,6 +31394,14 @@
     "together/deepseek-ai/deepseek-v4.1-flash-1017": {
       "input_cost_per_token": 3e-07,
       "output_cost_per_token": 1.2e-06
+    },
+    "together/elorian-labs/glimpse-1.0": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 3e-06
+    },
+    "together/essentialai/rnj-1-instruct": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 1.5e-07
     },
     "together/google/gemma-4-31b-it": {
       "input_cost_per_token": 3.9e-07,
@@ -30674,8 +31580,8 @@
       "output_cost_per_token": 3e-06
     },
     "together/qwen/qwen3.7-max": {
-      "input_cost_per_token": 1.5e-06,
-      "output_cost_per_token": 4.5e-06
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 7.5e-06
     },
     "together/qwen/qwen3.7-plus": {
       "input_cost_per_token": 3.2e-07,
@@ -30689,6 +31595,10 @@
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 4.7e-07
     },
+    "together/qwen/qwen4-max": {
+      "input_cost_per_token": 1.05e-06,
+      "output_cost_per_token": 3.15e-06
+    },
     "together/reflection/beam-1.0-501b-a23b": {
       "input_cost_per_token": 4e-07,
       "output_cost_per_token": 1.2e-06
@@ -30697,9 +31607,17 @@
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 6e-07
     },
+    "together/tencent/hy4": {
+      "input_cost_per_token": 8.34e-07,
+      "output_cost_per_token": 2.501e-06
+    },
     "together/thinkingmachines/inkling": {
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 4.05e-06
+    },
+    "together/thinkingmachines/inkling-2-small": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1e-06
     },
     "together/together-ai-21.1b-41b": {
       "input_cost_per_token": 8e-07,
@@ -30769,6 +31687,10 @@
       "input_cost_per_token": 1e-05,
       "output_cost_per_token": 5e-05
     },
+    "tokenrouter/anthropic/claude-fable-5.2": {
+      "input_cost_per_token": 8e-06,
+      "output_cost_per_token": 4e-05
+    },
     "tokenrouter/anthropic/claude-haiku-4.5": {
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 5e-06
@@ -30801,10 +31723,6 @@
       "input_cost_per_token": 4e-06,
       "output_cost_per_token": 2e-05
     },
-    "tokenrouter/anthropic/claude-opus-5.5-huo": {
-      "input_cost_per_token": 4e-06,
-      "output_cost_per_token": 2e-05
-    },
     "tokenrouter/anthropic/claude-sonnet-4": {
       "input_cost_per_token": 3e-06,
       "output_cost_per_token": 1.5e-05
@@ -30825,27 +31743,7 @@
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1e-05
     },
-    "tokenrouter/claude-haiku-5-5": {
-      "input_cost_per_token": 5e-07,
-      "output_cost_per_token": 2.5e-06
-    },
-    "tokenrouter/claude-opus-4-8": {
-      "input_cost_per_token": 5e-06,
-      "output_cost_per_token": 2.5e-05
-    },
-    "tokenrouter/claude-opus-5": {
-      "input_cost_per_token": 5e-06,
-      "output_cost_per_token": 2.5e-05
-    },
-    "tokenrouter/claude-opus-5-5": {
-      "input_cost_per_token": 4e-06,
-      "output_cost_per_token": 2e-05
-    },
-    "tokenrouter/claude-sonnet-5": {
-      "input_cost_per_token": 2e-06,
-      "output_cost_per_token": 1e-05
-    },
-    "tokenrouter/claude-sonnet-5-5": {
+    "tokenrouter/anthropic/claude-sonnet-5.5-clould": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1e-05
     },
@@ -30854,8 +31752,8 @@
       "output_cost_per_token": 3.7999988e-07
     },
     "tokenrouter/deepseek/deepseek-v4-flash-0731": {
-      "input_cost_per_token": 2.64e-07,
-      "output_cost_per_token": 7.92e-07
+      "input_cost_per_token": 2.376e-07,
+      "output_cost_per_token": 7.128e-07
     },
     "tokenrouter/deepseek/deepseek-v4-flash-vision-exp": {
       "input_cost_per_token": 4.4e-07,
@@ -30870,40 +31768,16 @@
       "output_cost_per_token": 3.96e-06
     },
     "tokenrouter/deepseek/deepseek-v4.1-flash": {
-      "input_cost_per_token": 1.8e-07,
-      "output_cost_per_token": 7.2e-07
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
     },
     "tokenrouter/deepseek/deepseek-v4.1-flash-1017": {
-      "input_cost_per_token": 1.8e-07,
-      "output_cost_per_token": 7.2e-07
+      "input_cost_per_token": 7.5e-08,
+      "output_cost_per_token": 3e-07
     },
-    "tokenrouter/deepseek/deepseek-v4.1-flash-1017-ex": {
-      "input_cost_per_token": 1.8e-07,
-      "output_cost_per_token": 7.2e-07
-    },
-    "tokenrouter/dreamina-seedance-2-0-fast-xm": {
-      "input_cost_per_token": 5.6e-06,
-      "output_cost_per_token": 5.6e-06
-    },
-    "tokenrouter/dreamina-seedance-2-0-hc": {
+    "tokenrouter/dreamina-seedance-2-5-flash-hc": {
       "input_cost_per_token": 7e-06,
       "output_cost_per_token": 7e-06
-    },
-    "tokenrouter/dreamina-seedance-2-0-mini-xm": {
-      "input_cost_per_token": 3.5e-06,
-      "output_cost_per_token": 3.5e-06
-    },
-    "tokenrouter/dreamina-seedance-2-0-xm": {
-      "input_cost_per_token": 7e-06,
-      "output_cost_per_token": 7e-06
-    },
-    "tokenrouter/dreamina-seedance-2-5-xm": {
-      "input_cost_per_token": 1.17e-05,
-      "output_cost_per_token": 1.17e-05
-    },
-    "tokenrouter/ex/gpt-5.4": {
-      "input_cost_per_token": 2.5e-06,
-      "output_cost_per_token": 1.5e-05
     },
     "tokenrouter/google/gemini-2.5-flash-image": {
       "input_cost_per_token": 3e-07,
@@ -30913,11 +31787,11 @@
       "input_cost_per_token": 5e-07,
       "output_cost_per_token": 3e-06
     },
-    "tokenrouter/google/gemini-3-pro-image-preview": {
+    "tokenrouter/google/gemini-3-pro-image": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1.2e-05
     },
-    "tokenrouter/google/gemini-3.1-flash-image-preview": {
+    "tokenrouter/google/gemini-3.1-flash-image": {
       "input_cost_per_token": 5e-07,
       "output_cost_per_token": 3e-06
     },
@@ -31026,8 +31900,8 @@
       "output_cost_per_token": 9e-06
     },
     "tokenrouter/moonshotai/kimi-k3.1-pro": {
-      "input_cost_per_token": 2e-06,
-      "output_cost_per_token": 1e-05
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 3e-06
     },
     "tokenrouter/nvidia/nemotron-3-super-120b-a12b": {
       "input_cost_per_token": 3e-07,
@@ -31040,10 +31914,6 @@
     "tokenrouter/openai/gpt-4o-mini": {
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 6e-07
-    },
-    "tokenrouter/openai/gpt-5": {
-      "input_cost_per_token": 1.25e-06,
-      "output_cost_per_token": 1e-05
     },
     "tokenrouter/openai/gpt-5-image-mini": {
       "input_cost_per_token": 2.5e-06,
@@ -31072,10 +31942,6 @@
     "tokenrouter/openai/gpt-5.4-nano": {
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 1.25e-06
-    },
-    "tokenrouter/openai/gpt-5.4-pro": {
-      "input_cost_per_token": 3e-05,
-      "output_cost_per_token": 0.00018
     },
     "tokenrouter/openai/gpt-5.5": {
       "input_cost_per_token": 5e-06,
@@ -31113,13 +31979,25 @@
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1e-05
     },
+    "tokenrouter/openai/gpt-6.2-astra": {
+      "input_cost_per_token": 8e-06,
+      "output_cost_per_token": 4e-05
+    },
+    "tokenrouter/openai/gpt-6.2-sol": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
     "tokenrouter/openai/gpt-oss-120b": {
       "input_cost_per_token": 3.9e-08,
       "output_cost_per_token": 1.8e-07
     },
-    "tokenrouter/qwen/qwen-3.8-max-qoder": {
-      "input_cost_per_token": 1.2e-05,
-      "output_cost_per_token": 3.6e-05
+    "tokenrouter/qwen/qwen-3.8-flash-next-qoder": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 4.7e-07
+    },
+    "tokenrouter/qwen/qwen-4-max": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 4.5e-06
     },
     "tokenrouter/qwen/qwen3-coder-next": {
       "input_cost_per_token": 1.2e-07,
@@ -31166,8 +32044,8 @@
       "output_cost_per_token": 3.971e-07
     },
     "tokenrouter/qwen/qwen3.8-max": {
-      "input_cost_per_token": 2e-06,
-      "output_cost_per_token": 6e-06
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 3e-06
     },
     "tokenrouter/qwen3.5-omni-plus": {
       "input_cost_per_token": 1e-06,
@@ -31209,9 +32087,13 @@
       "input_cost_per_token": 6.6e-08,
       "output_cost_per_token": 2.60000004e-07
     },
-    "tokenrouter/text-embedding-3-small": {
-      "input_cost_per_token": 2e-08,
-      "output_cost_per_token": 2e-08
+    "tokenrouter/tencent/hy4": {
+      "input_cost_per_token": 4.17e-07,
+      "output_cost_per_token": 1.251e-06
+    },
+    "tokenrouter/tencent/hy4-flash": {
+      "input_cost_per_token": 3.5e-08,
+      "output_cost_per_token": 1.405e-07
     },
     "tokenrouter/x-ai/grok-4.1-fast": {
       "input_cost_per_token": 2e-07,
@@ -31277,37 +32159,41 @@
       "input_cost_per_token": 1.3e-07,
       "output_cost_per_token": 8.5000006e-07
     },
+    "tokenrouter/z-ai/glm-4.6": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 2.2e-06
+    },
     "tokenrouter/z-ai/glm-4.6v": {
       "input_cost_per_token": 3e-07,
       "output_cost_per_token": 9e-07
+    },
+    "tokenrouter/z-ai/glm-4.7": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 2.2e-06
     },
     "tokenrouter/z-ai/glm-5": {
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 3.2e-06
     },
     "tokenrouter/z-ai/glm-5.1": {
-      "input_cost_per_token": 1.05e-06,
-      "output_cost_per_token": 3.49999965e-06
+      "input_cost_per_token": 1.4e-06,
+      "output_cost_per_token": 4.4e-06
     },
     "tokenrouter/z-ai/glm-5.2": {
       "input_cost_per_token": 1.4e-06,
       "output_cost_per_token": 4.4e-06
     },
     "tokenrouter/z-ai/glm-5.3": {
-      "input_cost_per_token": 5.6e-07,
-      "output_cost_per_token": 1.76e-06
+      "input_cost_per_token": 7.7e-07,
+      "output_cost_per_token": 2.42e-06
     },
     "tokenrouter/z-ai/glm-5.3-flash": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 5e-07
+      "input_cost_per_token": 7.5e-08,
+      "output_cost_per_token": 2.5e-07
     },
-    "tokenrouter/z-ai/glm-5.3-flash-batch": {
-      "input_cost_per_token": 7.5e-05,
-      "output_cost_per_token": 7.5e-05
-    },
-    "tokenrouter/z-ai/glm-5.3-flash-ns": {
-      "input_cost_per_token": 1.5e-07,
-      "output_cost_per_token": 5e-07
+    "tokenrouter/z-ai/glm-5.3-flashx": {
+      "input_cost_per_token": 3.7e-07,
+      "output_cost_per_token": 1.25e-06
     },
     "typesafe/jev-1.13.0": {
       "input_cost_per_token": 4.2e-08,
@@ -31538,12 +32424,12 @@
       "output_cost_per_token": 2e-05
     },
     "xkiro/anthropic/claude-sonnet-4": {
-      "input_cost_per_token": 3e-06,
-      "output_cost_per_token": 1.5e-05
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
     },
     "xkiro/anthropic/claude-sonnet-4.5": {
-      "input_cost_per_token": 3e-06,
-      "output_cost_per_token": 1.5e-05
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
     },
     "xkiro/anthropic/claude-sonnet-4.6": {
       "input_cost_per_token": 3e-06,
@@ -31558,48 +32444,56 @@
       "output_cost_per_token": 1e-05
     },
     "xkiro/deepseek/deepseek-v4-flash-0731": {
-      "input_cost_per_token": 9.1e-08,
-      "output_cost_per_token": 1.82e-07
-    },
-    "xkiro/deepseek/deepseek-v4-pro-0813": {
-      "input_cost_per_token": 2.8275e-07,
-      "output_cost_per_token": 5.655e-07
+      "input_cost_per_token": 1.4e-07,
+      "output_cost_per_token": 2.8e-07
     },
     "xkiro/deepseek/deepseek-v4.1-flash": {
-      "input_cost_per_token": 7.5e-08,
-      "output_cost_per_token": 3e-07
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
     },
     "xkiro/google/gemini-2.5-flash": {
-      "input_cost_per_token": 1.95e-07,
-      "output_cost_per_token": 1.625e-06
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 2.5e-06
     },
     "xkiro/google/gemini-2.5-pro": {
-      "input_cost_per_token": 8.125e-07,
-      "output_cost_per_token": 6.5e-06
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
     },
     "xkiro/google/gemini-3-flash": {
-      "input_cost_per_token": 4.875e-07,
-      "output_cost_per_token": 2.4375e-06
+      "input_cost_per_token": 7.5e-07,
+      "output_cost_per_token": 3.75e-06
     },
     "xkiro/google/gemini-3.1-pro": {
-      "input_cost_per_token": 1.3e-06,
-      "output_cost_per_token": 7.8e-06
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1.2e-05
     },
     "xkiro/google/gemini-3.5-flash": {
-      "input_cost_per_token": 9.75e-07,
-      "output_cost_per_token": 5.85e-06
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 9e-06
     },
     "xkiro/google/gemini-3.6-flash": {
-      "input_cost_per_token": 4.875e-07,
-      "output_cost_per_token": 2.4375e-06
+      "input_cost_per_token": 7.5e-07,
+      "output_cost_per_token": 3.75e-06
     },
     "xkiro/google/gemini-3.7-flash": {
-      "input_cost_per_token": 4.875e-07,
-      "output_cost_per_token": 2.4375e-06
+      "input_cost_per_token": 7.5e-07,
+      "output_cost_per_token": 3.75e-06
     },
     "xkiro/google/gemini-3.8-flash": {
-      "input_cost_per_token": 4.875e-07,
-      "output_cost_per_token": 2.4375e-06
+      "input_cost_per_token": 7.5e-07,
+      "output_cost_per_token": 3.75e-06
+    },
+    "xkiro/google/gemini-4-argon": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "xkiro/google/gemini-4-carbon": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "xkiro/google/gemini-4-hydrogen": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 7.5e-06
     },
     "xkiro/mistralai/mistral-large-4-0": {
       "input_cost_per_token": 6.800000000000001e-07,
@@ -31626,20 +32520,20 @@
       "output_cost_per_token": 5e-07
     },
     "xkiro/openai/gpt-5.6-luna": {
-      "input_cost_per_token": 1.0000000000000001e-07,
-      "output_cost_per_token": 6e-07
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 1.2e-06
     },
     "xkiro/openai/gpt-5.6-sol": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 1e-05
     },
     "xkiro/openai/gpt-5.6-terra": {
-      "input_cost_per_token": 1e-06,
-      "output_cost_per_token": 6e-06
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1.2e-05
     },
     "xkiro/openai/gpt-6-astra": {
-      "input_cost_per_token": 1e-05,
-      "output_cost_per_token": 5e-05
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
     },
     "xkiro/openai/gpt-6-luna": {
       "input_cost_per_token": 1.0000000000000001e-07,
@@ -31657,17 +32551,13 @@
       "input_cost_per_token": 1e-06,
       "output_cost_per_token": 5e-06
     },
-    "xkiro/tencent/hy3": {
-      "input_cost_per_token": 1.3200000000000002e-07,
-      "output_cost_per_token": 5.280000000000001e-07
+    "xkiro/openai/gpt-6.2-astra": {
+      "input_cost_per_token": 8e-06,
+      "output_cost_per_token": 4e-05
     },
-    "xkiro/tencent/hy3-preview": {
-      "input_cost_per_token": 1.8e-07,
-      "output_cost_per_token": 6e-07
-    },
-    "xkiro/tencent/hy4-preview": {
-      "input_cost_per_token": 8.34e-07,
-      "output_cost_per_token": 2.501e-06
+    "xkiro/openai/gpt-6.2-sol": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
     },
     "xkiro/x-ai/grok-4.5": {
       "input_cost_per_token": 2e-06,
@@ -31680,18 +32570,6 @@
     "xkiro/x-ai/grok-4.7": {
       "input_cost_per_token": 2e-06,
       "output_cost_per_token": 6e-06
-    },
-    "xkiro/xiaomi/mimo-v2.5": {
-      "input_cost_per_token": 1.4e-07,
-      "output_cost_per_token": 2.8e-07
-    },
-    "xkiro/xiaomi/mimo-v2.6-flash": {
-      "input_cost_per_token": 1.4e-07,
-      "output_cost_per_token": 2.8e-07
-    },
-    "xkiro/xiaomi/mimo-v2.6-pro": {
-      "input_cost_per_token": 4.35e-07,
-      "output_cost_per_token": 8.7e-07
     }
   }
 }

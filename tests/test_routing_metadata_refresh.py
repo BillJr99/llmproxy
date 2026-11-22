@@ -1114,16 +1114,30 @@ def test_a_curated_entry_is_qualified_exactly_once(monkeypatch, tmp_path):
 # after the PR was open. Promotion now applies llmproxy/review_overrides.json
 # itself, so the deployment's PR arrives already consistent with the review.
 
-def _held_and_required():
-    from scripts.update_free_models import load_review_overrides
-    o = load_review_overrides()
+# A stand-in required-capability entry, used when review has retired every real
+# one (xkiro's two Qwen models were withdrawn in 2026-11). These tests exercise
+# the override MECHANISM, which must stay covered whether or not the shipped
+# file currently holds an entry of each kind.
+_SYNTHETIC_REQUIRED = {"xkiro": {"xkiro/acme/test-vl:free": ["vision"]}}
+
+
+def _held_and_required(monkeypatch, tmp_path):
+    import scripts.update_free_models as ufm
+    o = ufm.load_review_overrides()
+    if not any(o["required_capabilities"].values()):
+        raw = json.loads(ufm.REVIEW_OVERRIDES_PATH.read_text(encoding="utf-8"))
+        raw["required_capabilities"] = _SYNTHETIC_REQUIRED
+        path = tmp_path / "review_overrides.json"
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        monkeypatch.setattr(ufm, "REVIEW_OVERRIDES_PATH", path)
+        o = ufm.load_review_overrides()
     pkey, held = next(iter(o["cost_observations_needing_corroboration"].items()))
     rkey, required = next(iter(o["required_capabilities"].items()))
     return pkey, sorted(held), rkey, required
 
 
 def test_a_held_cost_observation_is_not_promoted(monkeypatch, tmp_path):
-    pkey, held, _, _ = _held_and_required()
+    pkey, held, _, _ = _held_and_required(monkeypatch, tmp_path)
     bare = [m.split("/", 1)[1] for m in held]
     s = _promotion_server(monkeypatch, tmp_path, {
         "by_provider": {pkey: {"cost_observed_free_tier": bare + ["other-model"]}},
@@ -1137,7 +1151,7 @@ def test_a_held_cost_observation_is_not_promoted(monkeypatch, tmp_path):
 
 
 def test_a_dropped_required_tag_is_restored(monkeypatch, tmp_path):
-    _, _, rkey, required = _held_and_required()
+    _, _, rkey, required = _held_and_required(monkeypatch, tmp_path)
     mid, tags = next(iter(required.items()))
     upstream = mid.split("/", 1)[1]
     from llmproxy.flagship import normalize_model_id
@@ -1154,7 +1168,7 @@ def test_a_dropped_required_tag_is_restored(monkeypatch, tmp_path):
 
 
 def test_the_pr_body_lists_what_was_held_back(monkeypatch, tmp_path):
-    pkey, held, _, _ = _held_and_required()
+    pkey, held, _, _ = _held_and_required(monkeypatch, tmp_path)
     s = _promotion_server(monkeypatch, tmp_path, {
         "by_provider": {pkey: {"cost_observed_free_tier": [held[0].split("/", 1)[1]]}},
     }, [])
@@ -1177,10 +1191,10 @@ def test_an_unreadable_overrides_file_does_not_break_promotion(monkeypatch, tmp_
     assert "groq/llama-3.3-70b" in json.loads(text)["providers"]["groq"]["cost_observed_free_tier"]
 
 
-def test_the_scraper_applies_the_same_overrides():
+def test_the_scraper_applies_the_same_overrides(monkeypatch, tmp_path):
     """The Actions refresh writes through apply_review_overrides too."""
     from scripts.update_free_models import apply_review_overrides
-    pkey, held, rkey, required = _held_and_required()
+    pkey, held, rkey, required = _held_and_required(monkeypatch, tmp_path)
     mid = next(iter(required))
     sidecar = {"providers": {
         pkey: {"cost_observed_free_tier": list(held)},

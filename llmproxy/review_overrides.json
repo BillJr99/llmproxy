@@ -4,6 +4,10 @@
     "cloudflare-workers": {
       "cloudflare-workers/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b": "https://developers.cloudflare.com/changelog/post/2026-11-05-planned-model-deprecations/#models-deprecated-on-november-20-2026",
       "cloudflare-workers/@cf/qwen/qwen3-30b-a3b-fp8": "https://developers.cloudflare.com/changelog/post/2026-11-05-planned-model-deprecations/#models-deprecated-on-november-20-2026"
+    },
+    "xkiro": {
+      "xkiro/qwen/qwen3-vl-plus:free": "withdrawn: absent from xkiro's live /models listing on 2026-11-22 (73 models, no qwen3-vl)",
+      "xkiro/qwen/qwen3-omni-flash:free": "withdrawn: absent from xkiro's live /models listing on 2026-11-22 (73 models, no qwen models at all)"
     }
   },
   "cost_observations_needing_corroboration": {
@@ -12,10 +16,5 @@
       "groq/openai/gpt-oss-120b": "free-tier key; cost was computed, not billed"
     }
   },
-  "required_capabilities": {
-    "xkiro": {
-      "xkiro/qwen/qwen3-vl-plus:free": ["vision"],
-      "xkiro/qwen/qwen3-omni-flash:free": ["vision"]
-    }
-  }
+  "required_capabilities": {}
 }

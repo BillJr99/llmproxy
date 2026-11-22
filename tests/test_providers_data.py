@@ -10,7 +10,11 @@ from __future__ import annotations
 import pytest
 
 from llmproxy.providers import FREE_LIMIT_KEYS, VALID_REASONING_LEVELS, load_data
-from scripts.update_free_models import apply_review_overrides, load_review_overrides
+from scripts.update_free_models import (
+    REVIEW_OVERRIDES_PATH,
+    apply_review_overrides,
+    load_review_overrides,
+)
 
 SIDE = load_data()
 _OVERRIDES = load_review_overrides()
@@ -264,9 +268,19 @@ _COST_OBSERVATIONS_NEEDING_CORROBORATION: dict[str, dict[str, str]] = \
 
 def test_review_overrides_file_is_loaded():
     """GUARD: an unreadable overrides file degrades to empty tables at runtime,
-    which would turn both checks below into silent no-ops."""
-    assert _COST_OBSERVATIONS_NEEDING_CORROBORATION
-    assert _REQUIRED_CAPABILITIES
+    which would turn the checks below into silent no-ops.
+
+    Compared against the raw file rather than asserted non-empty: retiring the
+    last entry of a table is a legitimate review outcome (xkiro's two Qwen
+    models, withdrawn 2026-11), and must not read as a load failure."""
+    import json as _json
+    raw = _json.loads(REVIEW_OVERRIDES_PATH.read_text())
+    for table in ("cost_observations_needing_corroboration",
+                  "required_capabilities", "retired_models"):
+        assert table in raw, f"review_overrides.json lost its {table!r} table"
+        assert _OVERRIDES[table] == raw[table]
+    assert any(raw[t] for t in raw if not t.startswith("_")), \
+        "every review table is empty; was the file truncated?"
 
 
 @pytest.mark.parametrize("pkey", sorted(_COST_OBSERVATIONS_NEEDING_CORROBORATION))
@@ -308,7 +322,7 @@ def test_uncorroborated_cost_observations_are_not_merged(pkey):
 # and inference is what dropped these.
 # Entries live in llmproxy/review_overrides.json (see above).
 #
-# xkiro (PR #148, 2026-09). Inference stripped `vision` from two models that are
+# xkiro (PR #148, 2026-09; both RETIRED 2026-11, see below). Inference stripped `vision` from two models that are
 # vision-capable by name -- "-vl-" is Qwen's vision-language line, "-omni-" its
 # multimodal one -- while leaving the tag on their own siblings, which is the
 # tell that this was a naming heuristic misfiring rather than a catalog change.
