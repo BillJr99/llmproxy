@@ -169,3 +169,42 @@ def test_a_capable_free_variant_is_still_admitted(monkeypatch):
     spec = profiles[normalize_model_id("qwen/qwen9.9-27b")]["by_id"]["qwen/qwen9.9-27b:free"]
     free = _cand("qwen/qwen9.9-27b:free", tools=spec["supports_tools"], ctx=spec["context_length"])
     assert passes_spec_gate(free, min_context=200000, require_tools=True) is True
+
+
+# ── a catalog that stopped publishing agentic_index ─────────────────────────
+
+NO_AGENTIC = {"data": [
+    {"id": "acme/big", "context_length": 262144,
+     "benchmarks": {"artificial_analysis": {
+         "agentic_index": None, "coding_index": None, "intelligence_index": 48.2}}},
+    {"id": "acme/small:free", "context_length": 262144,
+     "benchmarks": {"artificial_analysis": {
+         "agentic_index": None, "coding_index": None, "intelligence_index": 12.0}}},
+    {"id": "acme/unscored", "benchmarks": {"artificial_analysis": {"agentic_index": None}}},
+]}
+
+
+def test_intelligence_index_scores_when_agentic_is_unpublished(monkeypatch):
+    """The regression: OpenRouter nulled agentic_index catalog-wide, nothing was
+    scored, and flagship__free emptied. Populated indices must still rank."""
+    from llmproxy.flagship import Candidate, combine_scores
+    profiles = _catalog(monkeypatch, NO_AGENTIC)
+    big, small = normalize_model_id("acme/big"), normalize_model_id("acme/small")
+    assert profiles[big]["scores"] == {"openrouter_aa_intelligence": 48.2}
+    assert profiles[small]["scores"] == {"openrouter_aa_intelligence": 12.0}
+    assert profiles[normalize_model_id("acme/unscored")]["scores"] == {}
+    combined = combine_scores([
+        Candidate("p", "acme/big", scores=profiles[big]["scores"]),
+        Candidate("p", "acme/small:free", is_free=True, scores=profiles[small]["scores"]),
+    ])
+    assert combined[big] > combined[small]
+
+
+def test_every_populated_index_is_its_own_source(monkeypatch):
+    payload = {"data": [{"id": "acme/all", "benchmarks": {"artificial_analysis": {
+        "agentic_index": 50.0, "coding_index": 40.0, "intelligence_index": 30.0}}}]}
+    profiles = _catalog(monkeypatch, payload)
+    assert profiles[normalize_model_id("acme/all")]["scores"] == {
+        "openrouter_aa": 50.0, "openrouter_aa_coding": 40.0,
+        "openrouter_aa_intelligence": 30.0,
+    }

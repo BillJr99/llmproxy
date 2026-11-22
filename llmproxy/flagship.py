@@ -498,6 +498,21 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
 # flagship_models.json cache.
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+# Artificial Analysis indices read from the catalog, each kept as its own score
+# source. ``combine_scores`` percentile-ranks every source over the models it
+# covers and takes the median, so indices on different scales combine without
+# rescaling, and a model missing one index is ranked on the others.
+#
+# Reading only ``agentic_index`` used to be enough. Then OpenRouter stopped
+# populating it (and ``coding_index``) for every model while still publishing
+# ``intelligence_index`` for about a hundred. Nothing was scored, the refresh
+# kept only pins, and ``llmproxy/flagship__free`` emptied. Whichever indices
+# are populated now take part; when agentic comes back it rejoins the median.
+_AA_INDICES: tuple[tuple[str, str], ...] = (
+    ("openrouter_aa", "agentic_index"),
+    ("openrouter_aa_coding", "coding_index"),
+    ("openrouter_aa_intelligence", "intelligence_index"),
+)
 _FETCH_TIMEOUT = (5, 15)
 
 
@@ -507,9 +522,11 @@ def fetch_openrouter_profiles(url: str = OPENROUTER_MODELS_URL) -> dict[str, dic
     OpenRouter's catalog embeds Artificial Analysis indices under
     ``benchmarks.artificial_analysis``, so the scores arrive with the model
     listing we already fetch each sweep: no second scraper, no extra API key,
-    and ids that match by construction. ``agentic_index`` is used because it is
-    the closest published measure of what this tier is for — driving a tool
-    loop — where chat-arena style ratings measure conversational preference.
+    and ids that match by construction. Every populated index in ``_AA_INDICES`` is
+    kept as its own source. ``agentic_index`` is preferred in spirit, because it
+    is the closest published measure of what this tier is for (driving a tool
+    loop), but no single index is required, since a catalog that stops filling
+    one must not empty the tier.
 
     Returns ``{model_key: {"scores": {...}, "context_length": int|None,
     "supports_tools": bool, "capabilities": set[str], "model_id": str,
@@ -552,7 +569,6 @@ def fetch_openrouter_profiles(url: str = OPENROUTER_MODELS_URL) -> dict[str, dic
             continue
         key = normalize_model_id(mid)
         bench = (model.get("benchmarks") or {}).get("artificial_analysis") or {}
-        score = bench.get("agentic_index")
         supported = model.get("supported_parameters") or []
         profile = out.setdefault(key, {"scores": {}, "context_length": None,
                                        "supports_tools": False,
@@ -566,10 +582,13 @@ def fetch_openrouter_profiles(url: str = OPENROUTER_MODELS_URL) -> dict[str, dic
             "supports_tools": "tools" in supported,
             "context_length": ctx_raw,
         }
-        if score is not None:
-            prev = profile["scores"].get("openrouter_aa")
+        for source, field_name in _AA_INDICES:
+            score = bench.get(field_name)
+            if isinstance(score, bool) or not isinstance(score, (int, float)):
+                continue
+            prev = profile["scores"].get(source)
             if prev is None or score > prev:
-                profile["scores"]["openrouter_aa"] = float(score)
+                profile["scores"][source] = float(score)
         ctx = model.get("context_length")
         if ctx and (profile["context_length"] or 0) < ctx:
             profile["context_length"] = ctx
