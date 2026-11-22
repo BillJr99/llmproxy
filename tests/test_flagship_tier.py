@@ -236,7 +236,8 @@ def test_recent_refresh_is_throttled(server, tmp_path):
     from llmproxy.config import FLAGSHIP_TIER_DEFAULTS, save_flagship_state
     cfg = str(tmp_path / "throttled" / "config.json")
     (tmp_path / "throttled").mkdir(parents=True, exist_ok=True)
-    save_flagship_state({"last_refresh_at": _iso(1.0)}, cfg)
+    save_flagship_state({"last_refresh_at": _iso(1.0),
+                         "score_sources": server._flagship_score_sources()}, cfg)
     assert server._flagship_refresh_due(FLAGSHIP_TIER_DEFAULTS, cfg) is False
 
 
@@ -600,7 +601,12 @@ def test_the_models_endpoint_shows_the_real_failover_order(ranked_server):
 # so every existing deployment kept its pre-ranking order for a week. These pin
 # the trigger that fixes it, and the guard that stops it becoming a refresh loop.
 
+_CURRENT_SOURCES = ["agentic_index", "coding_index", "intelligence_index"]
+
+
 def _state(tmp_path: Path, **over) -> Path:
+    """A cache as the CURRENT build writes it, unless a test overrides a key."""
+    over.setdefault("score_sources", _CURRENT_SOURCES)
     (tmp_path / "config.json").write_text(json.dumps({"providers": {}}), encoding="utf-8")
     (tmp_path / "flagship_models.json").write_text(json.dumps(over), encoding="utf-8")
     return tmp_path / "config.json"
@@ -670,6 +676,7 @@ FLOOR_TIER = {"enabled": True, "refresh_frequency_days": 7,
 
 
 def _floor_cfg(tmp_path: Path, config: dict, **state) -> str:
+    state.setdefault("score_sources", _CURRENT_SOURCES)
     (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
     (tmp_path / "flagship_models.json").write_text(json.dumps(state), encoding="utf-8")
     return str(tmp_path / "config.json")
@@ -872,3 +879,22 @@ def test_the_attempt_log_names_the_position_actually_tried(
     assert resp.status_code == 200
     lines = [r.getMessage() for r in caplog.records]
     assert any("trying candidate 1/1:" in line for line in lines), lines
+
+
+# ── scorer changes force a recompute ────────────────────────────────────────
+
+def test_current_score_sources_match_the_scorer(server):
+    assert server._flagship_score_sources() == _CURRENT_SOURCES
+
+
+def test_a_cache_scored_from_other_fields_is_due_despite_the_cadence(server, tmp_path):
+    """OpenRouter stopped filling agentic_index; a cache the agentic-only scorer
+    wrote (no score_sources key) holds an empty tier and must not wait a week."""
+    cfg = _state(tmp_path, last_refresh_at=_now(), members=["a/b"], model_scores={},
+                 score_sources=None)
+    assert server._flagship_refresh_due(FLOOR_TIER, cfg) is True
+
+
+def test_a_cache_from_the_current_scorer_honours_the_cadence(server, tmp_path):
+    cfg = _state(tmp_path, last_refresh_at=_now(), members=["a/b"], model_scores={})
+    assert server._flagship_refresh_due(FLOOR_TIER, cfg) is False

@@ -3125,6 +3125,12 @@ def _live_flagship_free_count(config: dict, config_path: str | None) -> int:
     return len(keys)
 
 
+def _flagship_score_sources() -> list[str]:
+    """The benchmark fields the flagship scorer currently reads, in order."""
+    from .flagship import _AA_INDICES
+    return [field_name for _source, field_name in _AA_INDICES]
+
+
 def _flagship_refresh_due(tier_cfg: dict, config_path: str | None,
                           config: dict | None = None) -> bool:
     """Whether the flagship membership recompute is due.
@@ -3160,6 +3166,18 @@ def _flagship_refresh_due(tier_cfg: dict, config_path: str | None,
         logger.info(
             "[flagship] cached membership predates benchmark scores — recomputing "
             "so the tier can be ranked"
+        )
+        return True
+    # Same reasoning for a change in which benchmark fields the scorer reads.
+    # The motivating case: OpenRouter stopped publishing agentic_index, the
+    # refresh scored nothing and kept only pins, and llmproxy/flagship__free
+    # emptied. A build that reads more fields must not wait out the cadence
+    # behind a cache the old fields produced. Once rewritten, the key matches
+    # and the ordinary cadence resumes, so this fires once per scorer change.
+    if state.get("score_sources") != _flagship_score_sources():
+        logger.info(
+            "[flagship] cached membership was scored from different benchmark "
+            "fields — recomputing"
         )
         return True
     due, _ = _probe_due(state.get("last_refresh_at"),
@@ -3347,6 +3365,10 @@ def _recompute_flagship_members(config: dict, config_path: str | None) -> dict |
         "distinct_models": selection.distinct_models,
         "free_models": selection.free_models,
         "candidates_considered": len(candidates),
+        # Which benchmark fields produced these scores. A cache built by a
+        # scorer that read different fields is stale whatever its age; see
+        # _flagship_refresh_due.
+        "score_sources": _flagship_score_sources(),
     }
     save_flagship_state(state, config_path)
     logger.info(

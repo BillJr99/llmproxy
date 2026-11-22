@@ -654,7 +654,8 @@ def flagship_tier_cfg(config: dict | None = None) -> dict:
 #         "scores": {"provider/model": {"combined": float, "model_key": str}},
 #         "model_scores": {model_key: float},
 #         "distinct_models": [model_key, ...], "free_models": [model_key, ...],
-#         "candidates_considered": int}
+#         "candidates_considered": int,
+#         "score_sources": [benchmark field, ...]}
 #
 # `members` says who is in the tier; `scores` and `model_scores` say how strong
 # each one is, which is what lets the router walk a flagship pool strongest-first
