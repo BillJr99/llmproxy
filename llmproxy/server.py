@@ -5877,6 +5877,11 @@ def _drop_known_incapable(
     of the strongest tool-callers available — dropping those is what would turn
     a thin pool into a hard 503.
 
+    The virtual-model dispatcher does not discard what this removes: it walks
+    the dropped candidates last, after the pool and its fallback tail, so the
+    later reordering passes cannot promote them but they are still tried
+    before the request fails.
+
     Returns ``(survivors, dropped_count)``. When EVERY candidate is known
     incapable the pool is returned unchanged: a request that is attempted and
     fails over is strictly better than a 503 with no upstream call made, and a
@@ -8257,6 +8262,47 @@ def _expand_accounts(
     return expanded
 
 
+def _order_fallback_pool(
+    free_pool: list[tuple[str, dict, str]],
+    local_pool: list[tuple[str, dict, str]],
+    payload: dict,
+    config: dict,
+    needed: set[str],
+    label: str,
+) -> tuple[list[tuple[str, dict, str]], list[tuple[str, dict, str]]]:
+    """Order a virtual's fallback tail (see ``_virtual_fallback_candidates``).
+
+    Free before local, each part ordered the way its own virtual orders it:
+    capacity-weighted for free, rotated for local, then request fit, the
+    capability gate and the oversize demotion. Favorites, affinity and the
+    flagship ranking are deliberately not applied — those express a preference
+    *within* the endpoint's own pool, which the tail only extends.
+
+    Returns ``(tail, gate_dropped)`` at model granularity (accounts not yet
+    expanded). ``gate_dropped`` holds the candidates known to lack a needed
+    capability; the caller puts them at the very end of the walk rather than
+    discarding them, so a wrong capability map can never cost the request.
+    """
+    reasoning = _get_model_reasoning(config)
+    free_limits = _get_normalized_free_limits(config)
+    tail: list[tuple[str, dict, str]] = []
+    dropped: list[tuple[str, dict, str]] = []
+    for part in (_capacity_ordered_candidates(free_pool, free_limits),
+                 _cycling_candidates(local_pool)):
+        if not part:
+            continue
+        part = _order_by_request_fit(part, payload, reasoning)
+        if needed:
+            before = part
+            part, n = _apply_capability_gate(part, needed, _model_capabilities(config), label)
+            if n:
+                kept = {(pn, um) for pn, _pc, um in part}
+                dropped.extend(c for c in before if (c[0], c[2]) not in kept)
+        part, _ = _demote_oversize_candidates(part, payload)
+        tail.extend(part)
+    return tail, dropped
+
+
 def _capacity_ordered_candidates(
     candidates: list[tuple[str, dict, str]],
     free_limits: dict[str, dict],
@@ -9960,6 +10006,38 @@ def _get_virtual_candidates(model_full: str) -> list[tuple[str, dict, str]]:
     return []
 
 
+def _virtual_fallback_candidates(model_full: str) -> tuple[list[tuple[str, dict, str]], list[tuple[str, dict, str]]]:
+    """The broader pools a virtual falls back to once its own pool is exhausted.
+
+    Returns ``(free_tail, local_tail)``. A narrowed virtual (``flagship/free``,
+    ``deep/free``, ``<provider>/free``, ``deep``, ...) used to walk only its own
+    slice and 503 the moment that slice was empty or every member failed — even
+    with dozens of other working free models configured. Every virtual now keeps
+    going through the rest of its cost tier before giving up:
+
+    * ``*/free``  → every free model
+    * ``*/local`` → every local model
+    * untiered (``flagship``, ``deep``, ``tools``, ``<provider>``, ...) → every
+      free model, then every local model. Never paid: a fallback must not spend
+      money the endpoint's own pool would not have spent.
+
+    ``free``, ``local`` and ``loadbalanced`` already ARE the full pool, and
+    fusion dispatches on its own path, so they get no tail. Overlap with the
+    primary pool is removed by the caller.
+    """
+    if _is_loadbalanced_model(model_full) or _is_fusion_model(model_full):
+        return [], []
+    if _split_per_provider_virtual(model_full) is None:
+        name = _strip_virtual_prefix(model_full)
+        if name in ("free", "local"):
+            return [], []
+    if _is_free_virtual_model(model_full):
+        return _get_free_model_candidates(), []
+    if _is_local_virtual_model(model_full):
+        return [], _get_local_model_candidates()
+    return _get_free_model_candidates(), _get_local_model_candidates()
+
+
 # ---------------------------------------------------------------------------
 # Shared routing logic for all proxied endpoints
 # ---------------------------------------------------------------------------
@@ -10750,7 +10828,16 @@ def _proxy_endpoint(
                 endpoint, model_full, payload, config, inbound_adapter, is_streaming
             )
         candidates = _get_virtual_candidates(model_full)
-        if not candidates:
+        # The rest of this endpoint's cost tier, tried after its own pool so a
+        # narrowed virtual whose slice is empty or failing still reaches every
+        # other free (or local) model before giving up. Minus the primary pool,
+        # so no model is walked twice.
+        fallback_free, fallback_local = _virtual_fallback_candidates(model_full)
+        _seen = {(pn, um) for pn, _pc, um in candidates}
+        fallback_free = [c for c in fallback_free if (c[0], c[2]) not in _seen]
+        _seen |= {(pn, um) for pn, _pc, um in fallback_free}
+        fallback_local = [c for c in fallback_local if (c[0], c[2]) not in _seen]
+        if not candidates and not fallback_free and not fallback_local:
             return _error(
                 f"No '{model_full}' models are currently available. "
                 + _virtual_model_hint(model_full),
@@ -10778,7 +10865,7 @@ def _proxy_endpoint(
             # passes below are stable no-ops over it.
             ordered = _loadbalanced_ordered_candidates(candidates, payload, config)
             decisions.append(ROUTE_SOURCE_LOADBALANCED)
-        elif is_flagship_virtual:
+        elif is_flagship_virtual and candidates:
             # Tested BEFORE is_free_virtual: llmproxy__flagship/free belongs to
             # both sets, and the benchmark ranking is the stronger signal — it
             # is the only one measured per model rather than inferred from quota
@@ -10873,13 +10960,20 @@ def _proxy_endpoint(
                     sig.recent_read_count, sig.recent_plan_count,
                     sig.tests_passed, score_signals(sig)[0],
                 )
+        # Candidates the gate removes are kept aside and walked last, after the
+        # fallback tail: known-incapable is a prediction, and a prediction must
+        # never stop a pool from being fully tried before the request fails.
+        gate_dropped: list[tuple[str, dict, str]] = []
         if needed:
+            _pre_gate = ordered
             ordered, _cap_dropped = _apply_capability_gate(
                 ordered, needed, _model_capabilities(config), model_full,
             )
             decisions.append(f"{ROUTE_SOURCE_CAPABILITY}={'+'.join(sorted(needed))}")
             if _cap_dropped:
                 decisions.append(f"{ROUTE_SOURCE_CAPABILITY}_dropped={_cap_dropped}")
+                _kept = {(pn, um) for pn, _pc, um in ordered}
+                gate_dropped = [c for c in _pre_gate if (c[0], c[2]) not in _kept]
         # favorite_free_models is a soft preference over an otherwise unranked
         # free pool. Flagship is ranked on measured capability, which is the
         # stronger claim, so a favorite does not reorder it.
@@ -10942,6 +11036,20 @@ def _proxy_endpoint(
         ordered = _expand_accounts(ordered, payload)
         if affinity_applied:
             decisions.append(ROUTE_SOURCE_AFFINITY)
+        primary_count = len(ordered)
+        if fallback_free or fallback_local:
+            tail, tail_dropped = _order_fallback_pool(
+                fallback_free, fallback_local, payload, config, needed, model_full,
+            )
+            gate_dropped.extend(tail_dropped)
+            ordered = ordered + _expand_accounts(tail, payload)
+        ordered = ordered + _expand_accounts(gate_dropped, payload)
+        if len(ordered) > primary_count:
+            decisions.append(f"fallback={len(ordered) - primary_count}")
+            logger.info(
+                "  [%s] %d primary + %d fallback candidate(s)",
+                model_full, primary_count, len(ordered) - primary_count,
+            )
         route_reason = ",".join(decisions)
         logger.info("  [%s] cycling through %d candidate(s) [%s]", model_full, len(ordered), route_reason)
         if is_streaming:

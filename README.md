@@ -183,8 +183,8 @@ the same cycling engine as `llmproxy/flagship`, differing only in which
 candidates its pool contains and in the ordering passes that run before the walk;
 the failover rules themselves are driven by the upstream's response, never by the
 virtual's name. So every family and every `*/free` and `*/local` slice fails over
-across the models in its own pool, and the per-provider virtuals do too, within
-the one provider they name.
+across the models in its own pool first, and then keeps going through the rest
+of its cost tier before it gives up (see the fallback step below).
 
 ### How cycling & failover works
 
@@ -212,6 +212,17 @@ When a request targets a (non-fusion) virtual model, llmproxy:
    sidecar is partial and the untagged remainder includes some of the strongest
    tool-callers in the free pool, so treating "unknown" as "incapable" would bury
    exactly the models you want.
+   **Fallback tail.** After its own pool, every narrowed virtual appends the rest
+   of its cost tier, so an empty or failing slice never ends the request while
+   other models could still answer: `*/free` virtuals (including
+   `flagship__free`, `deep__free`, `tools__free` and `<provider>__free`) continue
+   through **every** free model; `*/local` virtuals through every local model;
+   untiered virtuals (`flagship`, `deep`, `tools`, `<provider>`, …) through every
+   free model and then every local model. The tail **never adds a paid model**.
+   `free`, `local` and `loadbalanced` are already the full pool and get no tail.
+   Candidates the capability gate knows lack a needed capability are not
+   discarded either: they are walked last, after the tail. The route reason
+   reports the tail as `fallback=<n>`.
 3. **Tries each candidate in order**, returning the first **usable** response.
 
 A candidate is considered to have **failed** — so llmproxy moves on to the next
