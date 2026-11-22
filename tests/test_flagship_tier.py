@@ -603,7 +603,7 @@ def test_the_models_endpoint_shows_the_real_failover_order(ranked_server):
 # the trigger that fixes it, and the guard that stops it becoming a refresh loop.
 
 _CURRENT_SOURCES = ["agentic_index", "coding_index", "intelligence_index",
-                    "epoch_eci", "lmarena_agent", "lmarena_text"]
+                    "epoch_eci", "lmarena_agent", "lmarena_text", "lmarena_webdev"]
 
 
 def _state(tmp_path: Path, **over) -> Path:

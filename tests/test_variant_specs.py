@@ -310,4 +310,13 @@ def test_the_shipped_snapshot_is_loadable_and_redistributable_only():
 def test_aliases_expand():
     from llmproxy.flagship import expand_sources
     assert expand_sources(["openrouter_aa", "epoch"]) == ["openrouter_aa", "epoch_eci"]
-    assert expand_sources(["lmarena", "lmarena_text"]) == ["lmarena_agent", "lmarena_text"]
+    assert expand_sources(["lmarena", "lmarena_text"]) == [
+        "lmarena_agent", "lmarena_text", "lmarena_webdev"]
+    assert expand_sources(["all"]) == [
+        "openrouter_aa", "epoch_eci", "lmarena_agent", "lmarena_text", "lmarena_webdev"]
+
+
+def test_all_alias_covers_every_fetcher():
+    """'all' must not silently miss a source added later."""
+    from llmproxy import flagship
+    assert set(flagship.expand_sources(["all"])) == set(flagship._SOURCE_FETCHERS)
