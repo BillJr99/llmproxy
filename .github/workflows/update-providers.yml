@@ -40,11 +40,15 @@ jobs:
         id: scrape
         run: |
           python scripts/update_free_models.py
+          # Bundled benchmark snapshot (CC-BY sources only) for the flagship
+          # tier. A failed fetch keeps the previous snapshot, so it never fails
+          # the run.
+          python scripts/update_benchmark_scores.py || true
           echo "----- git status after scrape -----"
-          git status --porcelain llmproxy/providers.json config.example.json || true
+          git status --porcelain llmproxy/providers.json llmproxy/benchmark_scores.json config.example.json || true
           # Record whether the tracked data files actually changed so the PR step
           # is skipped entirely on a no-op run (no empty branch / PR is opened).
-          if [ -n "$(git status --porcelain llmproxy/providers.json config.example.json)" ]; then
+          if [ -n "$(git status --porcelain llmproxy/providers.json llmproxy/benchmark_scores.json config.example.json)" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -62,6 +66,7 @@ jobs:
           labels: automated, providers-data
           add-paths: |
             llmproxy/providers.json
+            llmproxy/benchmark_scores.json
             config.example.json
           body: |
             Automated refresh of `llmproxy/providers.json` (and the regenerated

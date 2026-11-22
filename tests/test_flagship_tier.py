@@ -236,7 +236,8 @@ def test_recent_refresh_is_throttled(server, tmp_path):
     from llmproxy.config import FLAGSHIP_TIER_DEFAULTS, save_flagship_state
     cfg = str(tmp_path / "throttled" / "config.json")
     (tmp_path / "throttled").mkdir(parents=True, exist_ok=True)
-    save_flagship_state({"last_refresh_at": _iso(1.0),
+    save_flagship_state({"last_refresh_at": _iso(1.0), "members": ["a/b"],
+                         "model_scores": {"b": 0.9},
                          "score_sources": server._flagship_score_sources()}, cfg)
     assert server._flagship_refresh_due(FLAGSHIP_TIER_DEFAULTS, cfg) is False
 
@@ -601,7 +602,8 @@ def test_the_models_endpoint_shows_the_real_failover_order(ranked_server):
 # so every existing deployment kept its pre-ranking order for a week. These pin
 # the trigger that fixes it, and the guard that stops it becoming a refresh loop.
 
-_CURRENT_SOURCES = ["agentic_index", "coding_index", "intelligence_index"]
+_CURRENT_SOURCES = ["agentic_index", "coding_index", "intelligence_index",
+                    "epoch_eci", "lmarena_agent", "lmarena_text"]
 
 
 def _state(tmp_path: Path, **over) -> Path:
@@ -633,11 +635,22 @@ def test_a_cache_predating_scores_is_due_however_fresh(server, tmp_path, monkeyp
 
 
 def test_an_uncovered_deployment_does_not_refresh_on_every_tick(server, tmp_path):
-    """model_scores == {} is legitimate — no benchmark source covers these
-    models. A truthiness check here would re-fetch the catalog every minute,
-    forever, so the trigger must test for the KEY."""
+    """model_scores == {} can be legitimate — no benchmark source covers these
+    models. An empty tier is retried at once (the first check in a process, so
+    a restart always retries) but then only past the hourly floor, never on
+    every interval tick."""
     cfg = _state(tmp_path, last_refresh_at=_now(), members=["a/b"], model_scores={})
+    assert server._flagship_refresh_due(TIER, str(cfg)) is True
     assert server._flagship_refresh_due(TIER, str(cfg)) is False
+    assert server._flagship_refresh_due(TIER, str(cfg)) is False
+
+
+def test_an_empty_tier_is_retried_once_the_floor_passes(server, tmp_path):
+    import datetime as _dt
+    two_hours_ago = (_dt.datetime.now(_dt.UTC) - _dt.timedelta(hours=2)).isoformat()
+    cfg = _state(tmp_path, last_refresh_at=two_hours_ago, members=[], model_scores={})
+    server._flagship_empty_retry_checked = True  # not the first check
+    assert server._flagship_refresh_due(TIER, str(cfg)) is True
 
 
 def test_a_scored_cache_still_honours_the_cadence(server, tmp_path):
@@ -896,5 +909,6 @@ def test_a_cache_scored_from_other_fields_is_due_despite_the_cadence(server, tmp
 
 
 def test_a_cache_from_the_current_scorer_honours_the_cadence(server, tmp_path):
-    cfg = _state(tmp_path, last_refresh_at=_now(), members=["a/b"], model_scores={})
+    cfg = _state(tmp_path, last_refresh_at=_now(), members=["a/b"],
+                 model_scores={"b": 0.9})
     assert server._flagship_refresh_due(FLOOR_TIER, cfg) is False

@@ -120,6 +120,20 @@ no OmniRoute source is reproduced here.
 
 ---
 
+## Benchmark data
+
+`llmproxy/benchmark_scores.json` redistributes scores from the following
+sources under the Creative Commons Attribution 4.0 licence
+(https://creativecommons.org/licenses/by/4.0/). The scores are rank-normalised
+and combined by the flagship tier; they are otherwise unmodified.
+
+- **Epoch AI**, "Capabilities & benchmarking". Published online at epoch.ai.
+  Retrieved from https://epoch.ai/benchmarks. Epoch Capabilities Index scores.
+- **LMArena**, `lmarena-ai/leaderboard-dataset` (agent and text leaderboards),
+  https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset.
+
+---
+
 ## Prior-art algorithms
 
 These predate both projects above and are attributed to their original authors
