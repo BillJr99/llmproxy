@@ -129,7 +129,7 @@ and combined by the flagship tier; they are otherwise unmodified.
 
 - **Epoch AI**, "Capabilities & benchmarking". Published online at epoch.ai.
   Retrieved from https://epoch.ai/benchmarks. Epoch Capabilities Index scores.
-- **LMArena**, `lmarena-ai/leaderboard-dataset` (agent and text leaderboards),
+- **LMArena**, `lmarena-ai/leaderboard-dataset` (agent, text and webdev leaderboards),
   https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset.
 
 ---

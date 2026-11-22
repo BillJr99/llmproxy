@@ -45,6 +45,13 @@ SOURCES = {
         "attribution": "LMArena, leaderboard-dataset (text), Hugging Face",
         "fetch": lambda: flagship.fetch_lmarena_scores("text", "rating"),
     },
+    "lmarena_webdev": {
+        "name": "LMArena webdev leaderboard (overall rating)",
+        "url": "https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset",
+        "license": "CC-BY-4.0",
+        "attribution": "LMArena, leaderboard-dataset (webdev), Hugging Face",
+        "fetch": lambda: flagship.fetch_lmarena_scores("webdev", "rating"),
+    },
 }
 
 

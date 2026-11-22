@@ -3694,7 +3694,7 @@ values, so upgrading needs no edit.
   "max_models": null,
   "pin": [],
   "exclude": [],
-  "sources": ["openrouter_aa", "epoch_eci", "lmarena_agent", "lmarena_text"],
+  "sources": ["openrouter_aa", "epoch_eci", "lmarena_agent", "lmarena_text", "lmarena_webdev"],
   "refresh_frequency_days": 7
 }
 ```
@@ -3709,7 +3709,7 @@ values, so upgrading needs no edit.
 | `max_models` | `null` | Optional hard cap on distinct models. `null` means uncapped. |
 | `pin` | `[]` | Ids always admitted, bypassing both the bar and the spec veto. A qualified `provider/model` id pins one routing target; a bare upstream id pins every provider serving it. An entry may instead be `{"name": …, "percentile": …}` to place it in the ranking — see [saying where a pin belongs](#pin-placement). |
 | `exclude` | `[]` | Qualified ids never admitted. Applied last, so it beats a pin. |
-| `sources` | `["openrouter_aa", "epoch_eci", "lmarena_agent", "lmarena_text"]` | Which benchmark sources to combine. `epoch` is accepted as an alias for `epoch_eci`, and `lmarena` for both LMArena boards. |
+| `sources` | `["openrouter_aa", "epoch_eci", "lmarena_agent", "lmarena_text", "lmarena_webdev"]` | Which benchmark sources to combine. Aliases: `all` (every source, including ones added later), `epoch` (`epoch_eci`), `lmarena` (all three LMArena boards). |
 | `refresh_frequency_days` | `7` | How often membership is recomputed. `0` recomputes every time the interval is checked. |
 
 Pins and excludes take effect immediately, when membership is read, rather
@@ -3723,6 +3723,7 @@ than waiting for the next refresh.
 | `epoch_eci` | The [Epoch AI](https://epoch.ai/benchmarks) Capabilities Index: one aggregate score per model, fitted across all of Epoch's benchmarks, from Epoch's public data export. | CC-BY 4.0 |
 | `lmarena_agent` | [LMArena](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset)'s agent leaderboard, overall score. | CC-BY 4.0 |
 | `lmarena_text` | LMArena's text leaderboard, overall rating. | CC-BY 4.0 |
+| `lmarena_webdev` | LMArena's webdev (coding) leaderboard, overall rating. | CC-BY 4.0 |
 
 None needs an API key. Each source is rank-normalised to a percentile over the
 models it covers before the scores are combined (median), so sources on
@@ -3745,6 +3746,13 @@ Artificial Analysis data is never snapshot.
 **An empty tier is refreshed immediately.** When the cached tier has no members
 or no scored models, the next check recomputes it without waiting for
 `refresh_frequency_days`; after that first attempt it retries at most hourly.
+
+LMArena's other boards are left out on purpose: the image and video boards rank
+generation models rather than chat models; the `*_style_control` and
+`*_factuality` boards re-score the same votes, so they would count one signal
+twice; and vision, search and document each rank one narrow modality. Adding
+them all would let LMArena outvote Epoch and Artificial Analysis several to one
+in the median.
 
 **Deliberately absent:** LLM Stats (forbids redistribution on every tier) and
 BenchLM (no licence at all). Aider's polyglot board, LiveBench and BFCL were

@@ -745,11 +745,16 @@ def fetch_lmarena_text_profiles() -> dict[str, dict]:
     return _score_only_profiles("lmarena_text", fetch_lmarena_scores("text", "rating"))
 
 
+def fetch_lmarena_webdev_profiles() -> dict[str, dict]:
+    return _score_only_profiles("lmarena_webdev", fetch_lmarena_scores("webdev", "rating"))
+
+
 _SOURCE_FETCHERS = {
     "openrouter_aa": fetch_openrouter_profiles,
     "epoch_eci": fetch_epoch_eci_profiles,
     "lmarena_agent": fetch_lmarena_agent_profiles,
     "lmarena_text": fetch_lmarena_text_profiles,
+    "lmarena_webdev": fetch_lmarena_webdev_profiles,
 }
 
 # Short names accepted in ``flagship_tier.sources``. "epoch" is the spelling
@@ -757,7 +762,11 @@ _SOURCE_FETCHERS = {
 # from it already say "epoch" and must get the source they asked for.
 _SOURCE_ALIASES: dict[str, tuple[str, ...]] = {
     "epoch": ("epoch_eci",),
-    "lmarena": ("lmarena_agent", "lmarena_text"),
+    "lmarena": ("lmarena_agent", "lmarena_text", "lmarena_webdev"),
+    # Every free source llmproxy knows, so a config can ask for all of them
+    # without listing each one or missing a source added later.
+    "all": ("openrouter_aa", "epoch_eci", "lmarena_agent", "lmarena_text",
+            "lmarena_webdev"),
 }
 
 
@@ -776,7 +785,8 @@ def expand_sources(sources: list[str] | None) -> list[str]:
 # and stands in when a live fetch fails, so a deployment behind a firewall, or
 # on a day a leaderboard is down, still ranks the tier. Artificial Analysis
 # data reached through OpenRouter is NOT redistributable and is never snapshot.
-SNAPSHOT_SOURCES: tuple[str, ...] = ("epoch_eci", "lmarena_agent", "lmarena_text")
+SNAPSHOT_SOURCES: tuple[str, ...] = ("epoch_eci", "lmarena_agent", "lmarena_text",
+                                     "lmarena_webdev")
 BENCHMARK_SNAPSHOT_PATH = Path(__file__).with_name("benchmark_scores.json")
 
 
