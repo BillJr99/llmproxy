@@ -623,7 +623,7 @@ FLAGSHIP_TIER_DEFAULTS: dict = {
     "max_models": None,
     "pin": [],
     "exclude": [],
-    "sources": ["openrouter_aa"],
+    "sources": ["openrouter_aa", "epoch_eci", "lmarena_agent", "lmarena_text"],
     "refresh_frequency_days": 7,
 }
 

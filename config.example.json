@@ -373,7 +373,10 @@
     "pin": [],
     "exclude": [],
     "sources": [
-      "openrouter_aa"
+      "openrouter_aa",
+      "epoch_eci",
+      "lmarena_agent",
+      "lmarena_text"
     ],
     "refresh_frequency_days": 7
   },

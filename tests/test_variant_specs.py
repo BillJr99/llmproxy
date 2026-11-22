@@ -17,6 +17,8 @@ catalog, except where a test is deliberately pinned to the shipped case.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from llmproxy.flagship import (
@@ -208,3 +210,104 @@ def test_every_populated_index_is_its_own_source(monkeypatch):
         "openrouter_aa": 50.0, "openrouter_aa_coding": 40.0,
         "openrouter_aa_intelligence": 30.0,
     }
+
+
+# ── Epoch / LMArena sources, joins and the bundled snapshot ─────────────────
+
+def test_display_names_join_api_ids():
+    from llmproxy.flagship import display_name_key
+    assert display_name_key("Gemma 4 31B IT") == normalize_model_id("google/gemma-4-31b-it:free")
+    assert display_name_key("Claude Opus 5.5 (Max)") == normalize_model_id("anthropic/claude-opus-5.5")
+    assert display_name_key("DeepSeek V4.1 Flash") == normalize_model_id("deepseek/deepseek-v4.1-flash")
+
+
+def test_profile_for_merges_the_bare_moe_family():
+    from llmproxy.flagship import profile_for
+    profiles = {
+        "nemotron3ultra": {"scores": {"epoch_eci": 147.0}},
+        "nemotron3ultra550ba55b": {"scores": {"openrouter_aa_intelligence": 11.8},
+                                   "context_length": 1000000},
+    }
+    got = profile_for(profiles, "nvidia/nemotron-3-ultra-550b-a55b:free")
+    assert got["scores"] == {"epoch_eci": 147.0, "openrouter_aa_intelligence": 11.8}
+    assert got["context_length"] == 1000000
+    # A plain size is NOT stripped: Gemma 4 26B and 31B stay distinct.
+    assert profile_for({"gemma4": {"scores": {"x": 1.0}}}, "google/gemma-4-31b-it") == {}
+
+
+def test_epoch_eci_parses_the_export(monkeypatch):
+    import io
+    import zipfile
+
+    import requests
+
+    from llmproxy import flagship
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("epoch_capabilities_index/eci_scores.csv",
+                    "Model,Display name,eci\nGLM-5.3,GLM-5.3,157.1\nBad,Bad,\n")
+
+    class R:
+        content = buf.getvalue()
+        def raise_for_status(self): pass
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: R())
+    assert flagship.fetch_epoch_eci_scores() == {"glm53": 157.1}
+
+
+def test_lmarena_pages_and_keeps_the_best_effort_level(monkeypatch):
+    import requests
+
+    from llmproxy import flagship
+    pages = [
+        {"num_rows_total": 3, "rows": [
+            {"row": {"model_name": "Qwen4 Max (High)", "rating": 1400.0}},
+            {"row": {"model_name": "Qwen4 Max (Low)", "rating": 1350.0}}]},
+        {"num_rows_total": 3, "rows": [
+            {"row": {"model_name": "GLM-5.3", "rating": 1420.0}}]},
+    ]
+    seen = []
+
+    class R:
+        def __init__(self, body): self.body = body
+        def raise_for_status(self): pass
+        def json(self): return self.body
+
+    def fake_get(url, params=None, **k):
+        seen.append(params["offset"])
+        return R(pages[len(seen) - 1])
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    assert flagship.fetch_lmarena_scores("text", "rating") == {"qwen4max": 1400.0, "glm53": 1420.0}
+    assert seen == [0, 2]
+
+
+def test_a_failed_source_falls_back_to_the_bundled_snapshot(monkeypatch, tmp_path):
+    from llmproxy import flagship
+    snap = tmp_path / "benchmark_scores.json"
+    snap.write_text(json.dumps({"sources": {"epoch_eci": {"scores": {"glm53": 157.1}}}}))
+    monkeypatch.setattr(flagship, "BENCHMARK_SNAPSHOT_PATH", snap)
+
+    def boom():
+        raise OSError("offline")
+
+    monkeypatch.setitem(flagship._SOURCE_FETCHERS, "epoch_eci", boom)
+    merged = flagship.fetch_profiles(["epoch"])  # the documented alias
+    assert merged["glm53"]["scores"] == {"epoch_eci": 157.1}
+
+
+def test_the_shipped_snapshot_is_loadable_and_redistributable_only():
+    from llmproxy import flagship
+    snap = flagship.load_benchmark_snapshot()
+    assert set(snap) <= set(flagship.SNAPSHOT_SOURCES)
+    assert snap.get("epoch_eci"), "the bundled snapshot must carry Epoch scores"
+    raw = json.loads(flagship.BENCHMARK_SNAPSHOT_PATH.read_text())
+    assert "openrouter_aa" not in raw["sources"]
+    for block in raw["sources"].values():
+        assert block["license"] == "CC-BY-4.0" and block["attribution"]
+
+
+def test_aliases_expand():
+    from llmproxy.flagship import expand_sources
+    assert expand_sources(["openrouter_aa", "epoch"]) == ["openrouter_aa", "epoch_eci"]
+    assert expand_sources(["lmarena", "lmarena_text"]) == ["lmarena_agent", "lmarena_text"]

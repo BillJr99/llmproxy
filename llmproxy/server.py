@@ -3125,10 +3125,16 @@ def _live_flagship_free_count(config: dict, config_path: str | None) -> int:
     return len(keys)
 
 
+# Retry floor for an EMPTY flagship cache (no members or no scored models): one
+# hour, expressed in the days unit _probe_due takes. See _flagship_refresh_due.
+_FLAGSHIP_EMPTY_RETRY_DAYS: float = 1.0 / 24.0
+_flagship_empty_retry_checked: bool = False
+
+
 def _flagship_score_sources() -> list[str]:
     """The benchmark fields the flagship scorer currently reads, in order."""
-    from .flagship import _AA_INDICES
-    return [field_name for _source, field_name in _AA_INDICES]
+    from .flagship import score_sources
+    return score_sources()
 
 
 def _flagship_refresh_due(tier_cfg: dict, config_path: str | None,
@@ -3174,6 +3180,22 @@ def _flagship_refresh_due(tier_cfg: dict, config_path: str | None,
     # emptied. A build that reads more fields must not wait out the cadence
     # behind a cache the old fields produced. Once rewritten, the key matches
     # and the ordinary cadence resumes, so this fires once per scorer change.
+    # An empty tier is a correctness problem, not a staleness question: with no
+    # scored models nothing can be ranked, and with no members flagship and
+    # flagship__free serve nothing of their own. Recompute right away instead
+    # of waiting out the cadence. A short retry floor keeps a deployment that
+    # genuinely has nothing to score from re-fetching every catalog on every
+    # interval tick; the first check in a process ignores it, so a restart
+    # always retries immediately.
+    global _flagship_empty_retry_checked
+    if not state.get("members") or not state.get("model_scores"):
+        first_check = not _flagship_empty_retry_checked
+        _flagship_empty_retry_checked = True
+        floor_passed, _ = _probe_due(state.get("last_refresh_at"),
+                               _FLAGSHIP_EMPTY_RETRY_DAYS)
+        if first_check or floor_passed:
+            logger.info("[flagship] cached tier has no scored models — recomputing now")
+            return True
     if state.get("score_sources") != _flagship_score_sources():
         logger.info(
             "[flagship] cached membership was scored from different benchmark "
@@ -3313,7 +3335,7 @@ def _recompute_flagship_members(config: dict, config_path: str | None) -> dict |
     from .flagship import (
         Candidate,
         fetch_profiles,
-        normalize_model_id,
+        profile_for,
         select_flagship,
     )
 
@@ -3331,7 +3353,7 @@ def _recompute_flagship_members(config: dict, config_path: str | None) -> dict |
         provider_cfg = get_provider(config, provider_name)
         if not provider_cfg or not _provider_exposes_to_virtual_models(provider_cfg):
             continue
-        profile = profiles.get(normalize_model_id(upstream_id), {})
+        profile = profile_for(profiles, upstream_id)
         context_length, supports_tools = _flagship_specs_for(
             provider_name, upstream_id, profile, cap_snapshot, ctx_snapshot,
         )

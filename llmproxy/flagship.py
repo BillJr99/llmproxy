@@ -34,8 +34,10 @@ not of the model.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from statistics import median
 
 from . import USER_AGENT
@@ -486,16 +488,16 @@ def select_flagship(candidates: list[Candidate], tier_cfg: dict) -> Selection:
 #     a redistribution license").
 #   * BenchLM states no licence at all, which is an absence of any grant
 #     rather than a restrictive one.
-#   * Epoch AI publishes under CC-BY, but its `epochai` client is an Airtable
-#     ORM: it reads AIRTABLE_PERSONAL_ACCESS_TOKEN and AIRTABLE_BASE_ID at
-#     import time and raises without them, and its data model is benchmark
-#     *runs* rather than a leaderboard. Installing it does not make the source
-#     work, it just fails quietly, so it is not a dependency. Epoch's public
-#     CC-BY CSV export would be the way to add it, keyed the same way and
-#     credited per the licence.
+#   * Epoch AI publishes under CC-BY. Its `epochai` client is an Airtable ORM
+#     that needs credentials, so it is not used; the public CC-BY export zip
+#     is read directly instead (``fetch_epoch_eci_scores``).
+#   * LMArena's leaderboard dataset is CC-BY and read through Hugging Face's
+#     JSON datasets-server, so no parquet dependency is needed.
 #
-# Nothing fetched here is committed: scores live only in the local
-# flagship_models.json cache.
+# Artificial Analysis data reached through OpenRouter is fetched live and
+# never committed. The CC-BY sources are also snapshot into
+# benchmark_scores.json as an offline fallback, credited in
+# THIRD_PARTY_NOTICES.md.
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 # Artificial Analysis indices read from the catalog, each kept as its own score
@@ -597,9 +599,211 @@ def fetch_openrouter_profiles(url: str = OPENROUTER_MODELS_URL) -> dict[str, dic
     return out
 
 
+# — name joins for sources keyed by display name rather than API id —
+
+# A mixture-of-experts size tag (``-550b-a55b``: total and active parameters).
+# Leaderboards name the family ("Nemotron 3 Ultra") while providers append the
+# tag, so the tag is dropped for a SECOND lookup. Only this explicit two-part
+# pattern is stripped: a plain size such as ``31b`` distinguishes real models
+# (Gemma 4 26B vs 31B) and must keep them apart.
+_MOE_SIZE_RE = re.compile(r"\d+ba\d+b$")
+
+
+def display_name_key(name: str) -> str:
+    """Join key for a leaderboard display name such as ``Gemma 4 31B IT (High)``.
+
+    Parenthesised qualifiers name an effort setting or a date, not different
+    weights, and spaces become hyphens so the trailing-qualifier rule in
+    ``normalize_model_id`` sees ``-it`` exactly as it would in an API id.
+    """
+    s = re.sub(r"\([^)]*\)", "", (name or "").lower()).strip()
+    return normalize_model_id(re.sub(r"\s+", "-", s))
+
+
+def profile_for(profiles: dict[str, dict], upstream_id: str) -> dict:
+    """The benchmark profile for one routing target, exact key first.
+
+    When the key carries an MoE size tag, scores published under the bare
+    family key are merged in beneath the exact ones, so a leaderboard that
+    names only the family still ranks the model without overriding a score
+    published for the exact id.
+    """
+    key = normalize_model_id(upstream_id)
+    exact = profiles.get(key) or {}
+    bare = _MOE_SIZE_RE.sub("", key)
+    if bare == key or bare not in profiles:
+        return exact
+    merged = dict(exact) if exact else {"scores": {}}
+    merged["scores"] = {**(profiles[bare].get("scores") or {}),
+                        **(exact.get("scores") or {})}
+    return merged
+
+
+def _score_only_profiles(source: str, scores: dict[str, float]) -> dict[str, dict]:
+    """Wrap ``{key: score}`` as profiles that carry a score and no specs."""
+    return {
+        key: {"scores": {source: float(val)}, "context_length": None,
+              "supports_tools": False, "capabilities": set(), "model_id": None,
+              "by_id": {}}
+        for key, val in scores.items()
+    }
+
+
+# — Epoch AI Capabilities Index (CC-BY 4.0) —
+
+EPOCH_BENCHMARK_ZIP_URL = "https://epoch.ai/data/benchmark_data.zip"
+_EPOCH_ECI_MEMBER = "epoch_capabilities_index/eci_scores.csv"
+_FETCH_TIMEOUT_LARGE = (5, 60)
+
+
+def fetch_epoch_eci_scores(url: str = EPOCH_BENCHMARK_ZIP_URL) -> dict[str, float]:
+    """``{model_key: eci}`` from Epoch AI's public benchmark export.
+
+    The ECI is one aggregate capability score per model, fitted across all of
+    Epoch's benchmarks, so it is the closest thing to a single "how strong is
+    this model" number that is published under an open licence. Epoch AI's data
+    is CC-BY 4.0; see THIRD_PARTY_NOTICES.md for the credit.
+    """
+    import csv
+    import io
+    import zipfile
+
+    import requests
+
+    resp = requests.get(url, timeout=_FETCH_TIMEOUT_LARGE,
+                        headers={"User-Agent": USER_AGENT})
+    resp.raise_for_status()
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        text = zf.read(_EPOCH_ECI_MEMBER).decode("utf-8")
+    out: dict[str, float] = {}
+    for row in csv.DictReader(io.StringIO(text)):
+        try:
+            score = float(row.get("eci") or "")
+        except ValueError:
+            continue
+        for name in (row.get("Model"), row.get("Display name")):
+            key = display_name_key(name or "")
+            if key and score > out.get(key, float("-inf")):
+                out[key] = score
+    return out
+
+
+# — LMArena leaderboards (CC-BY 4.0) —
+
+LMARENA_FILTER_URL = "https://datasets-server.huggingface.co/filter"
+LMARENA_DATASET = "lmarena-ai/leaderboard-dataset"
+_LMARENA_PAGE = 100
+_LMARENA_MAX_PAGES = 50
+
+
+def fetch_lmarena_scores(config_name: str, field: str,
+                         url: str = LMARENA_FILTER_URL) -> dict[str, float]:
+    """``{model_key: score}`` from one LMArena leaderboard's ``overall`` rows.
+
+    Read through Hugging Face's datasets-server JSON API rather than the
+    parquet files, so no parquet library is needed in the image. A model listed
+    at several effort levels keeps its best one, matching how every other
+    source collapses variants. LMArena's dataset is CC-BY 4.0.
+    """
+    import requests
+
+    out: dict[str, float] = {}
+    offset = 0
+    for _ in range(_LMARENA_MAX_PAGES):
+        resp = requests.get(url, timeout=_FETCH_TIMEOUT_LARGE,
+                            headers={"User-Agent": USER_AGENT},
+                            params={"dataset": LMARENA_DATASET,
+                                    "config": config_name, "split": "latest",
+                                    "where": "\"category\"='overall'",
+                                    "offset": offset, "length": _LMARENA_PAGE})
+        resp.raise_for_status()
+        body = resp.json()
+        rows = body.get("rows") or []
+        for item in rows:
+            row = item.get("row") or {}
+            score = row.get(field)
+            if isinstance(score, bool) or not isinstance(score, (int, float)):
+                continue
+            key = display_name_key(row.get("model_name") or "")
+            if key and score > out.get(key, float("-inf")):
+                out[key] = float(score)
+        offset += len(rows)
+        if not rows or offset >= int(body.get("num_rows_total") or 0):
+            break
+    return out
+
+
+def fetch_epoch_eci_profiles() -> dict[str, dict]:
+    return _score_only_profiles("epoch_eci", fetch_epoch_eci_scores())
+
+
+def fetch_lmarena_agent_profiles() -> dict[str, dict]:
+    return _score_only_profiles("lmarena_agent", fetch_lmarena_scores("agent", "score"))
+
+
+def fetch_lmarena_text_profiles() -> dict[str, dict]:
+    return _score_only_profiles("lmarena_text", fetch_lmarena_scores("text", "rating"))
+
+
 _SOURCE_FETCHERS = {
     "openrouter_aa": fetch_openrouter_profiles,
+    "epoch_eci": fetch_epoch_eci_profiles,
+    "lmarena_agent": fetch_lmarena_agent_profiles,
+    "lmarena_text": fetch_lmarena_text_profiles,
 }
+
+# Short names accepted in ``flagship_tier.sources``. "epoch" is the spelling
+# the README documented before any Epoch source existed, so configs written
+# from it already say "epoch" and must get the source they asked for.
+_SOURCE_ALIASES: dict[str, tuple[str, ...]] = {
+    "epoch": ("epoch_eci",),
+    "lmarena": ("lmarena_agent", "lmarena_text"),
+}
+
+
+def expand_sources(sources: list[str] | None) -> list[str]:
+    """Configured source names with aliases expanded, de-duplicated, in order."""
+    out: list[str] = []
+    for name in (sources or list(_SOURCE_FETCHERS)):
+        for real in _SOURCE_ALIASES.get(name, (name,)):
+            if real not in out:
+                out.append(real)
+    return out
+
+
+# Sources whose licence permits shipping their scores in the repo. A snapshot
+# of these lives in benchmark_scores.json (scripts/update_benchmark_scores.py)
+# and stands in when a live fetch fails, so a deployment behind a firewall, or
+# on a day a leaderboard is down, still ranks the tier. Artificial Analysis
+# data reached through OpenRouter is NOT redistributable and is never snapshot.
+SNAPSHOT_SOURCES: tuple[str, ...] = ("epoch_eci", "lmarena_agent", "lmarena_text")
+BENCHMARK_SNAPSHOT_PATH = Path(__file__).with_name("benchmark_scores.json")
+
+
+def load_benchmark_snapshot(path: Path | None = None) -> dict[str, dict[str, float]]:
+    """``{source: {model_key: score}}`` from the bundled snapshot, or ``{}``."""
+    try:
+        raw = json.loads((path or BENCHMARK_SNAPSHOT_PATH).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out: dict[str, dict[str, float]] = {}
+    for name, block in (raw.get("sources") or {}).items():
+        scores = (block or {}).get("scores") if isinstance(block, dict) else None
+        if name in SNAPSHOT_SOURCES and isinstance(scores, dict):
+            out[name] = {k: float(v) for k, v in scores.items()
+                         if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    return out
+
+
+def score_sources() -> list[str]:
+    """Every benchmark field the scorer reads, in a stable order.
+
+    Recorded in flagship_models.json so a cache built by a scorer that read
+    different fields is recomputed instead of waiting out the cadence.
+    """
+    return [f for _src, f in _AA_INDICES] + [
+        name for name in _SOURCE_FETCHERS if name != "openrouter_aa"
+    ]
 
 
 def fetch_profiles(sources: list[str] | None = None) -> dict[str, dict]:
@@ -607,16 +811,25 @@ def fetch_profiles(sources: list[str] | None = None) -> dict[str, dict]:
 
     A source that fails is skipped rather than failing the refresh, so one
     unreachable leaderboard degrades the ranking instead of emptying the tier.
+    A redistributable source that fails (or returns nothing) falls back to the
+    bundled snapshot in benchmark_scores.json.
     Returns the merged map and leaves the caller to log per-source outcomes.
     """
     merged: dict[str, dict] = {}
-    for name in (sources or list(_SOURCE_FETCHERS)):
+    snapshot: dict[str, dict[str, float]] | None = None
+    for name in expand_sources(sources):
         fetcher = _SOURCE_FETCHERS.get(name)
         if fetcher is None:
             continue
         try:
             profiles = fetcher()
         except Exception:  # noqa: BLE001 — see docstring
+            profiles = {}
+        if not profiles and name in SNAPSHOT_SOURCES:
+            if snapshot is None:
+                snapshot = load_benchmark_snapshot()
+            profiles = _score_only_profiles(name, snapshot.get(name) or {})
+        if not profiles:
             continue
         for key, profile in profiles.items():
             slot = merged.setdefault(key, {"scores": {}, "context_length": None,
