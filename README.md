@@ -20,6 +20,7 @@ llmproxy/
 │   ├── config.py
 │   ├── server.py
 │   ├── usage.py             ← token/cost accounting + health windows (GET /v1/usage)
+│   ├── caching.py           ← prompt caching: settings, per-provider request shaping, cache counters
 │   ├── signals.py           ← tool-result signals that size agentic requests by progress
 │   ├── setup_wizard.py
 │   ├── admin.py             ← web admin UI + config API (/admin, /admin/api/*)
@@ -1158,6 +1159,93 @@ since prompt caching was historically gated behind it. Cache activity comes back
 `usage` as `prompt_tokens_details.cached_tokens` (the read side, OpenAI's standard
 field) and `cache_creation_input_tokens` (the write side, which has no OpenAI
 equivalent) — without which a caching setup is impossible to verify.
+
+<a name="prompt-caching"></a>
+#### Turning prompt caching on (`prompt_caching`)
+
+Relaying a client's own markers is always on. Separately, llmproxy **asks for
+caching itself** on the providers that document how, for clients that send no
+cache fields at all. That part is on by default with the five-minute lifetime and
+can be set to `"off"`, `"5m"` or `"1h"`, globally and per provider. On Anthropic a
+cache *write* costs 1.25x the input price for the five-minute cache and 2x for the
+one-hour cache; a cache *read* costs 0.1x. **llmproxy never warms a cache**: it
+sends no request of its own to keep a prefix alive, so `warming` has the single
+value `"off"`. A client that warms its own cache (pi does, when its own
+`cacheWarming` setting and the model allow it) is relayed like any other request.
+
+What each provider needs, and what llmproxy does when caching is enabled:
+
+| Provider (how it is reached) | How it caches | What llmproxy adds when enabled | What it reports |
+|---|---|---|---|
+| Anthropic (`"protocol": "anthropic"`) | Only prefixes marked with `cache_control` (up to 4 breakpoints); `"ttl": "1h"` for the one-hour cache; a top-level `cache_control` is automatic caching | Breakpoints on the last tool definition, the last system block and the last markable block of the newest turn (3 of the 4), with the configured `ttl`. Nothing when the request already carries any marker, including a top-level one | `cache_read_input_tokens`, `cache_creation_input_tokens`, `cache_creation` (5m / 1h split) |
+| OpenRouter, Claude models (`anthropic/...`) | `cache_control` on content parts, or top-level | The same markers as content parts on the last system message and the newest user message | `prompt_tokens_details.cached_tokens`, `cache_write_tokens` |
+| OpenRouter, other models (OpenAI, DeepSeek, Grok, Moonshot, Groq, Gemini 2.5+) | Automatic | Nothing (no change needed) | `prompt_tokens_details.cached_tokens` |
+| OpenAI (`api.openai.com`, `openai` or `responses` protocol) | Automatic for prompts of 1024 tokens or more; `prompt_cache_key` routes related requests to one cache; `prompt_cache_retention` `"in_memory"` or `"24h"` | A `prompt_cache_key` derived from the conversation (a hash of the [affinity key](#prompt-cache-affinity--keeping-a-conversation-on-one-upstream)) when the client sent none, and `prompt_cache_retention` when `retention` is set | `prompt_tokens_details.cached_tokens` (`input_tokens_details` on Responses) |
+| Gemini (`"protocol": "gemini"`) | Implicit on 2.5 and newer, no request change. Explicit caching needs a separately created `cachedContents` resource, which llmproxy does not manage | Nothing | `cachedContentTokenCount`, surfaced as `prompt_tokens_details.cached_tokens` |
+| DeepSeek, Grok, Moonshot, Z.AI and other automatic caches | Automatic | Nothing | DeepSeek: `prompt_cache_hit_tokens` |
+| Any other OpenAI-compatible provider | Not documented | Nothing, unless that provider sets `"inject_markers": true` (content-part markers, for a gateway that forwards them to Claude) | Whatever it reports in the fields above |
+
+Client-supplied fields (`cache_control` anywhere, `prompt_cache_key`,
+`prompt_cache_retention`, `prompt_cache_options`) are always relayed and always win
+over what llmproxy would add. The Anthropic dialect now also carries a top-level
+`cache_control` (automatic caching) and markers on `tool_result` blocks, and the
+Responses dialect carries `prompt_cache_retention`, `prompt_cache_options` and a
+top-level `cache_control`. A provider that rejects these fields can drop them with
+`"passthrough": false`.
+
+The one-hour TTL needs no beta header. A client's own `anthropic-beta` header is
+relayed to Anthropic-protocol upstreams as well.
+
+**Settings.** A top-level `prompt_caching` block applies to every provider, and any
+provider entry may carry its own `prompt_caching` (a bool toggles only `enabled`;
+an object overrides individual keys):
+
+```json
+"prompt_caching": {
+  "enabled": true,
+  "ttl": "5m",
+  "warming": "off",
+  "retention": null,
+  "inject_markers": "auto",
+  "cache_key": true,
+  "passthrough": true
+},
+"providers": {
+  "anthropic": { "...": "...", "protocol": "anthropic", "prompt_caching": { "ttl": "1h" } },
+  "local":     { "...": "...", "prompt_caching": { "ttl": "off" } },
+  "groq":      { "...": "...", "prompt_caching": { "passthrough": false } }
+}
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ttl` | `"5m"` | `"off"` (add nothing), `"5m"` or `"1h"`: whether llmproxy asks for caching, and the lifetime of the breakpoints it places. |
+| `enabled` | `true` | The same switch as a bool, kept for compatibility: `false` is `"ttl": "off"`. Setting `ttl` to `"5m"` or `"1h"` in a block turns caching on unless that block also says `"enabled": false`; turning it on over an inherited `"off"` gives `"5m"`. Relaying client fields does not depend on either. |
+| `warming` | `"off"` | Cache warming. `"off"` is the only value: llmproxy never sends warming requests. |
+| `retention` | `null` | OpenAI `prompt_cache_retention` to send when the client sent none: `null` (send nothing), `"in_memory"` or `"24h"`. GPT-5.5 accepts only `"24h"`. |
+| `inject_markers` | `"auto"` | `"auto"`: markers where the provider documents them (Anthropic protocol, Claude models on OpenRouter). `true`: also on this OpenAI-compatible provider. `false`: never. |
+| `cache_key` | `true` | Derive a `prompt_cache_key` for OpenAI when the client sent none. |
+| `passthrough` | `true` | Relay client cache fields. `false` strips them for an upstream that rejects them. |
+
+Precedence, later wins: the defaults above, the top-level block, the environment
+variables `LLMPROXY_PROMPT_CACHING` (`true`/`false`), `LLMPROXY_PROMPT_CACHE_TTL`
+and `LLMPROXY_PROMPT_CACHE_RETENTION`, then the provider entry. Invalid values fall
+back to the defaults, so a typo cannot produce a request the upstream rejects. The
+config file is re-read when it changes, so no restart is needed after editing it.
+
+**Token counts with caching.** Anthropic's `input_tokens` excludes the cached and
+newly written prefix. llmproxy's canonical `prompt_tokens` now follows OpenAI and
+includes them (`input + cache_read + cache_creation`), so `cached_tokens` is always
+a subset of `prompt_tokens` and computed costs never undercount input. A client on
+the Anthropic dialect gets Anthropic's own counters back (`input_tokens` without
+the cache, plus `cache_read_input_tokens` and `cache_creation_input_tokens`).
+[`GET /v1/usage`](#usage-endpoint) totals both sides per model as
+`cache_read_tokens` and `cache_creation_tokens`.
+
+To check that caching works, send the same long prompt twice within the TTL and
+compare `cache_creation_tokens` (first request) with `cache_read_tokens` (second)
+in `/v1/usage`. Both stay at 0 for prompts below the model's minimum cacheable
+length (512 to 4096 tokens on Anthropic, depending on the model; 1024 on OpenAI).
 
 ## Configuration
 
@@ -3201,6 +3289,7 @@ curl http://localhost:8080/v1/usage | jq
       "requests": 412,
       "prompt_tokens": 50231, "completion_tokens": 18044, "total_tokens": 68275,
       "tokens_last_60s": 1203, "tokens_today": 68275,
+      "cache_read_tokens": 0, "cache_creation_tokens": 0,
       "cost": 0.0, "cost_currency": "USD",
       "cost_sources": {"provider": 0, "computed": 412, "unknown": 0},
       "believed_free": true,
@@ -3208,7 +3297,8 @@ curl http://localhost:8080/v1/usage | jq
     }
   ],
   "totals": {"requests": 412, "prompt_tokens": 50231, "completion_tokens": 18044,
-             "total_tokens": 68275, "cost": 0.0},
+             "total_tokens": 68275, "cost": 0.0,
+             "cache_read_tokens": 0, "cache_creation_tokens": 0},
   "flagged_paid_free_models": []
 }
 ```
@@ -3241,6 +3331,13 @@ curl http://localhost:8080/v1/usage | jq
   ```bash
   docker exec llmproxy python -c "import datetime; print(datetime.datetime.now().astimezone())"
   ```
+- **Cache counters.** `cache_read_tokens` (served from a prompt cache) and
+  `cache_creation_tokens` (written to one) are read from whichever form the
+  upstream reports: OpenAI and OpenRouter `prompt_tokens_details`, Responses
+  `input_tokens_details`, Anthropic `cache_read_input_tokens` /
+  `cache_creation_input_tokens`, Gemini `cachedContentTokenCount`, DeepSeek
+  `prompt_cache_hit_tokens`. Both are subsets of `prompt_tokens`. See
+  [Turning prompt caching on](#prompt-caching).
 - **Token counts** come from the upstream `usage` block of each response
   (streaming included — the proxy asks for a final usage chunk via
   `stream_options.include_usage`; disable with `server.stream_include_usage:
@@ -5304,6 +5401,9 @@ usage: run.py [--setup] [--config PATH] [--host HOST] [--port PORT]
 |-------------------|----------------------------------------|
 | `LLMPROXY_CONFIG` | Override the default config file path. |
 | `LLMPROXY_STATE_DIR` | Directory for machine-written state files (image default `/state`). See [State directory](#state-directory). |
+| `LLMPROXY_PROMPT_CACHING` | `true`/`false`: overrides `prompt_caching.enabled` (a provider entry still wins). See [Turning prompt caching on](#prompt-caching). |
+| `LLMPROXY_PROMPT_CACHE_TTL` | `off`, `5m` or `1h`: overrides `prompt_caching.ttl`. |
+| `LLMPROXY_PROMPT_CACHE_RETENTION` | `in_memory`, `24h` or `none`: overrides `prompt_caching.retention`. |
 | `LLMPROXY_STARTUP_WAIT_SECONDS` | How long the server waits for an explicitly configured `config.json` to become readable before exiting with status 1 (default `600`; `0` disables). See [Starting before host mounts are ready](#starting-before-host-mounts-are-ready). |
 
 ---

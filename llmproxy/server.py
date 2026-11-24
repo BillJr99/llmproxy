@@ -84,7 +84,7 @@ from flask import (
     stream_with_context,
 )
 
-from . import USER_AGENT, __version__
+from . import USER_AGENT, __version__, caching
 from . import fusion as _fusion
 from . import route_report as _route_report
 from .config import (
@@ -911,6 +911,8 @@ def _record_usage(
         requests=1 if count_request else 0,
         prompt=prompt, completion=completion, total=total,
         cost=cost, cost_source=source,
+        cache_read=(usage or {}).get("cache_read_tokens", 0) or 0,
+        cache_creation=(usage or {}).get("cache_creation_tokens", 0) or 0,
     )
     _invalidate_snapshot()
 
@@ -1827,6 +1829,31 @@ _FORWARDED_REQUEST_HEADERS = {
     # features, never credentials, so relaying it leaks nothing.
     "anthropic-beta",
 }
+
+
+def _build_upstream_request(outbound, endpoint, base_url, provider_cfg, payload,
+                            *, stream, forwarded_headers):
+    """``outbound.build_request`` plus prompt-caching shaping.
+
+    Every upstream chat call goes through here so the ``prompt_caching``
+    settings (global block, environment, provider entry) apply the same way on
+    the buffered path, the streaming path and the cycling loop. See
+    ``llmproxy/caching.py`` for what is added per provider.
+    """
+    url, headers, body = outbound.build_request(
+        endpoint, base_url, provider_cfg, payload,
+        stream=stream, forwarded_headers=forwarded_headers,
+    )
+    try:
+        settings = caching.resolve_settings(load_config(), provider_cfg)
+        if settings["enabled"] or not settings["passthrough"]:
+            body, headers = caching.apply(
+                outbound.name, provider_cfg, body, headers, settings,
+                endpoint=endpoint, affinity_key=_affinity_key(payload),
+            )
+    except Exception as exc:  # noqa: BLE001 - caching must never break a request
+        logger.warning("[caching] request shaping skipped: %s", exc)
+    return url, headers, body
 
 
 def _upstream_headers(provider_cfg: dict) -> dict:
@@ -5210,8 +5237,8 @@ def _proxy_request(
     outbound = outbound or get_outbound(provider_cfg.get("protocol"))
     if forwarded_headers is None:
         forwarded_headers = _forwarded_client_headers()
-    url, headers, body = outbound.build_request(
-        endpoint, base_url, provider_cfg, payload,
+    url, headers, body = _build_upstream_request(
+        outbound, endpoint, base_url, provider_cfg, payload,
         stream=False, forwarded_headers=forwarded_headers,
     )
 
@@ -5503,8 +5530,8 @@ def _proxy_streaming(
     base_url = provider_base_url(provider_cfg)
     outbound = outbound or get_outbound(provider_cfg.get("protocol"))
     inbound = inbound or get_inbound("openai")
-    url, headers, body = outbound.build_request(
-        endpoint, base_url, provider_cfg, payload,
+    url, headers, body = _build_upstream_request(
+        outbound, endpoint, base_url, provider_cfg, payload,
         stream=True, forwarded_headers=_forwarded_client_headers(),
     )
     upstream_model = payload.get("model", "")
@@ -7615,8 +7642,8 @@ def _proxy_cycling_streaming(
         max_attempts = _candidate_max_attempts(idx, total)
         base_url = provider_base_url(provider_cfg)
         outbound = get_outbound(provider_cfg.get("protocol"))
-        url, headers, body = outbound.build_request(
-            endpoint, base_url, provider_cfg, upstream_payload,
+        url, headers, body = _build_upstream_request(
+            outbound, endpoint, base_url, provider_cfg, upstream_payload,
             stream=True, forwarded_headers=_forwarded_client_headers(),
         )
         # Shrink the read timeout too. It governs how long we wait for bytes
@@ -11441,6 +11468,7 @@ def _build_usage_report() -> dict:
     totals = {
         "requests": 0, "prompt_tokens": 0, "completion_tokens": 0,
         "total_tokens": 0, "cost": 0.0,
+        "cache_read_tokens": 0, "cache_creation_tokens": 0,
     }
     for key, snap in rows:
         tok_min = snap["tokens_last_60s"]
@@ -11456,6 +11484,11 @@ def _build_usage_report() -> dict:
             "prompt_tokens": snap["prompt_tokens"],
             "completion_tokens": snap["completion_tokens"],
             "total_tokens": snap["total_tokens"],
+            # Prompt-cache activity, as reported by the upstream. Both are
+            # subsets of prompt_tokens: read = served from cache, creation =
+            # written to it (Anthropic and OpenRouter report the write side).
+            "cache_read_tokens": snap.get("cache_read_tokens", 0),
+            "cache_creation_tokens": snap.get("cache_creation_tokens", 0),
             "tokens_last_60s": tok_min,
             "tokens_today": tok_day,
             "cost": snap["cost"],
@@ -11479,6 +11512,8 @@ def _build_usage_report() -> dict:
         models.append(entry)
         for field in ("requests", "prompt_tokens", "completion_tokens", "total_tokens", "cost"):
             totals[field] += snap[field]
+        for field in ("cache_read_tokens", "cache_creation_tokens"):
+            totals[field] += snap.get(field, 0) or 0
     totals["cost"] = round(totals["cost"], 8)
     models.sort(key=lambda m: (m["model"], m.get("account") or ""))
 

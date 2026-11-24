@@ -148,11 +148,17 @@ def _parts_to_message(parts: list[dict]) -> tuple[str, list[dict]]:
 def _usage(meta: dict | None) -> dict | None:
     if not meta:
         return None
-    return {
+    out = {
         "prompt_tokens": meta.get("promptTokenCount", 0),
         "completion_tokens": meta.get("candidatesTokenCount", 0),
         "total_tokens": meta.get("totalTokenCount", 0),
     }
+    # Implicit caching (Gemini 2.5+) reports its hits here; promptTokenCount
+    # already includes them, matching OpenAI's cached_tokens semantics.
+    cached = meta.get("cachedContentTokenCount")
+    if isinstance(cached, int):
+        out["prompt_tokens_details"] = {"cached_tokens": cached}
+    return out
 
 
 class GeminiOutbound(OutboundAdapter):

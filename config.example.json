@@ -395,6 +395,15 @@
     "branch": "llmproxy-auto/providers",
     "token": null
   },
+  "prompt_caching": {
+    "enabled": true,
+    "ttl": "5m",
+    "warming": "off",
+    "retention": null,
+    "inject_markers": "auto",
+    "cache_key": true,
+    "passthrough": true
+  },
   "fusion": {
     "enabled": true,
     "panel": null,

@@ -350,8 +350,13 @@ def _responses_to_canonical(body: dict) -> dict:
         payload["parallel_tool_calls"] = body["parallel_tool_calls"]
     if body.get("metadata") is not None:
         payload["metadata"] = body["metadata"]
-    if body.get("prompt_cache_key") is not None:
-        payload["prompt_cache_key"] = body["prompt_cache_key"]
+    # Caching fields ride along untouched: the key and retention are OpenAI's,
+    # prompt_cache_options is OpenAI's explicit mode (GPT-5.6+), and a top-level
+    # cache_control is the automatic form OpenRouter accepts on Responses.
+    for key in ("prompt_cache_key", "prompt_cache_retention", "prompt_cache_options",
+                "cache_control"):
+        if body.get(key) is not None:
+            payload[key] = body[key]
 
     reasoning = body.get("reasoning")
     if isinstance(reasoning, dict) and reasoning.get("effort"):
@@ -458,6 +463,8 @@ def _usage_to_responses(usage) -> dict | None:
     details = usage.get("prompt_tokens_details")
     if isinstance(details, dict) and details.get("cached_tokens") is not None:
         out["input_tokens_details"] = {"cached_tokens": details["cached_tokens"]}
+        if details.get("cache_write_tokens") is not None:
+            out["input_tokens_details"]["cache_write_tokens"] = details["cache_write_tokens"]
     return out
 
 
@@ -837,6 +844,7 @@ register_inbound(ResponsesInbound())
 _OUTBOUND_PASSTHROUGH_KEYS = (
     "model", "temperature", "top_p", "parallel_tool_calls", "user", "metadata",
     "service_tier", "prompt_cache_key", "safety_identifier", "top_logprobs",
+    "prompt_cache_retention", "prompt_cache_options",
 )
 
 
@@ -989,6 +997,8 @@ def _responses_usage_to_canonical(usage) -> dict | None:
     details = usage.get("input_tokens_details")
     if isinstance(details, dict) and details.get("cached_tokens") is not None:
         out["prompt_tokens_details"] = {"cached_tokens": details["cached_tokens"]}
+        if details.get("cache_write_tokens") is not None:
+            out["prompt_tokens_details"]["cache_write_tokens"] = details["cache_write_tokens"]
     out_details = usage.get("output_tokens_details")
     if isinstance(out_details, dict) and out_details.get("reasoning_tokens") is not None:
         out["completion_tokens_details"] = {"reasoning_tokens": out_details["reasoning_tokens"]}

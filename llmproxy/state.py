@@ -146,7 +146,8 @@ class SharedState(Protocol):
     # — usage, tokens and health (one metered credential per key) —
     def record_usage(self, key: str, *, requests: int = 0, prompt: int = 0,
                      completion: int = 0, total: int = 0, cost: float = 0.0,
-                     cost_source: str | None = None) -> None: ...
+                     cost_source: str | None = None, cache_read: int = 0,
+                     cache_creation: int = 0) -> None: ...
     def record_outcome(self, key: str, ok: bool,
                        latency_ms: float | None = None) -> None: ...
     def usage_snapshot(self, key: str) -> tuple[int, int]: ...
@@ -298,10 +299,12 @@ class InMemoryState:
 
     def record_usage(self, key: str, *, requests: int = 0, prompt: int = 0,
                      completion: int = 0, total: int = 0, cost: float = 0.0,
-                     cost_source: str | None = None) -> None:
+                     cost_source: str | None = None, cache_read: int = 0,
+                     cache_creation: int = 0) -> None:
         self._tracker(key).record(
             requests=requests, prompt=prompt, completion=completion,
             total=total, cost=cost, cost_source=cost_source,
+            cache_read=cache_read, cache_creation=cache_creation,
         )
 
     def record_outcome(self, key: str, ok: bool,
@@ -773,7 +776,7 @@ def reset_for_worker() -> None:
 # Cross-process implementation
 # ---------------------------------------------------------------------------
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 # The tables this backend owns so far. Everything not listed here still falls
 # through to the in-process storage inherited from InMemoryState, which is
@@ -809,7 +812,9 @@ CREATE TABLE IF NOT EXISTS usage_model (
   lifetime_completion INTEGER NOT NULL DEFAULT 0,
   lifetime_total      INTEGER NOT NULL DEFAULT 0,
   lifetime_cost       REAL    NOT NULL DEFAULT 0.0,
-  cost_sources        TEXT    NOT NULL DEFAULT '{}'
+  cost_sources        TEXT    NOT NULL DEFAULT '{}',
+  lifetime_cache_read     INTEGER NOT NULL DEFAULT 0,
+  lifetime_cache_creation INTEGER NOT NULL DEFAULT 0
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS outcome (
@@ -1312,7 +1317,8 @@ class SqliteState(InMemoryState):
 
     def record_usage(self, key: str, *, requests: int = 0, prompt: int = 0,
                      completion: int = 0, total: int = 0, cost: float = 0.0,
-                     cost_source: str | None = None) -> None:
+                     cost_source: str | None = None, cache_read: int = 0,
+                     cache_creation: int = 0) -> None:
         import json
 
         from .usage import day_key
@@ -1338,15 +1344,19 @@ class SqliteState(InMemoryState):
             ))
         stmts.append((
             "INSERT INTO usage_model(key, lifetime_requests, lifetime_prompt, "
-            "  lifetime_completion, lifetime_total, lifetime_cost, cost_sources) "
-            "VALUES(?,?,?,?,?,?,?) "
+            "  lifetime_completion, lifetime_total, lifetime_cost, cost_sources, "
+            "  lifetime_cache_read, lifetime_cache_creation) "
+            "VALUES(?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(key) DO UPDATE SET "
             "  lifetime_requests=lifetime_requests+excluded.lifetime_requests, "
             "  lifetime_prompt=lifetime_prompt+excluded.lifetime_prompt, "
             "  lifetime_completion=lifetime_completion+excluded.lifetime_completion, "
             "  lifetime_total=lifetime_total+excluded.lifetime_total, "
-            "  lifetime_cost=lifetime_cost+excluded.lifetime_cost",
-            (key, requests, prompt, completion, total, cost, json.dumps({})),
+            "  lifetime_cost=lifetime_cost+excluded.lifetime_cost, "
+            "  lifetime_cache_read=lifetime_cache_read+excluded.lifetime_cache_read, "
+            "  lifetime_cache_creation=lifetime_cache_creation+excluded.lifetime_cache_creation",
+            (key, requests, prompt, completion, total, cost, json.dumps({}),
+             cache_read or 0, cache_creation or 0),
         ))
         if cost_source:
             # Kept as JSON because it is a small open-ended map read only by the
@@ -1509,7 +1519,8 @@ class SqliteState(InMemoryState):
         out: list[tuple[str, dict]] = []
         for r in conn.execute(
             "SELECT key, lifetime_requests, lifetime_prompt, lifetime_completion, "
-            "       lifetime_total, lifetime_cost, cost_sources FROM usage_model",
+            "       lifetime_total, lifetime_cost, cost_sources, "
+            "       lifetime_cache_read, lifetime_cache_creation FROM usage_model",
         ).fetchall():
             row = self._usage_row_from(r["key"])
             try:
@@ -1523,6 +1534,8 @@ class SqliteState(InMemoryState):
                 "total_tokens": r["lifetime_total"],
                 "cost": round(r["lifetime_cost"], 8),
                 "cost_sources": sources,
+                "cache_read_tokens": r["lifetime_cache_read"],
+                "cache_creation_tokens": r["lifetime_cache_creation"],
                 "tokens_last_60s": row.tok_min,
                 "tokens_today": row.tok_day,
                 "success_rate": row.success_rate,

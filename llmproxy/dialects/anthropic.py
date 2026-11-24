@@ -148,6 +148,16 @@ def _canonical_text_blocks(content) -> list[dict]:
     return [{"type": "text", "text": text}] if text else []
 
 
+def _last_marker(content):
+    """The ``cache_control`` on the last marked part of *content*, if any."""
+    if not isinstance(content, list):
+        return None
+    for part in reversed(content):
+        if isinstance(part, dict) and part.get("cache_control"):
+            return part["cache_control"]
+    return None
+
+
 def _openai_to_anthropic_messages(messages: list[dict]) -> tuple[list, list[dict]]:
     system_chunks: list[str] = []
     system_blocks: list[dict] = []
@@ -162,11 +172,15 @@ def _openai_to_anthropic_messages(messages: list[dict]) -> tuple[list, list[dict
                 system_chunks.append(_text_of(content))
             continue
         if role == "tool":
-            out.append({"role": "user", "content": [{
+            result: dict = {
                 "type": "tool_result",
                 "tool_use_id": msg.get("tool_call_id", ""),
                 "content": _text_of(msg.get("content")),
-            }]})
+            }
+            marker = _last_marker(msg.get("content"))
+            if marker:
+                result["cache_control"] = marker
+            out.append({"role": "user", "content": [result]})
             continue
         if role == "assistant":
             blocks: list[dict] = _canonical_text_blocks(msg.get("content"))
@@ -212,6 +226,10 @@ def _to_anthropic_request(payload: dict) -> dict:
         body["stop_sequences"] = [stop] if isinstance(stop, str) else stop
     if payload.get("stream"):
         body["stream"] = True
+    # Top-level ``cache_control`` is Anthropic's automatic caching: one
+    # breakpoint that the API places on the last cacheable block itself.
+    if isinstance(payload.get("cache_control"), dict):
+        body["cache_control"] = payload["cache_control"]
     tools = []
     for tool in payload.get("tools") or []:
         if tool.get("type") == "function" and tool.get("function"):
@@ -244,10 +262,54 @@ def _cache_usage_fields(usage_in: dict) -> dict:
     out: dict = {}
     read = usage_in.get("cache_read_input_tokens")
     written = usage_in.get("cache_creation_input_tokens")
+    if isinstance(read, int) or isinstance(written, int):
+        details: dict = {"cached_tokens": read if isinstance(read, int) else 0}
+        if isinstance(written, int):
+            # OpenRouter's name for the write side, so one reader serves both.
+            details["cache_write_tokens"] = written
+        out["prompt_tokens_details"] = details
     if isinstance(read, int):
-        out["prompt_tokens_details"] = {"cached_tokens": read}
+        out["cache_read_input_tokens"] = read
     if isinstance(written, int):
         out["cache_creation_input_tokens"] = written
+    if isinstance(usage_in.get("cache_creation"), dict):
+        out["cache_creation"] = usage_in["cache_creation"]
+    return out
+
+
+def _prompt_tokens(usage_in: dict) -> int:
+    """All input tokens, cached or not, as OpenAI counts ``prompt_tokens``.
+
+    Anthropic's ``input_tokens`` counts only what came after the last cache
+    breakpoint; the cached and newly written prefix are reported separately.
+    OpenAI's ``prompt_tokens`` includes its cached tokens, so the canonical
+    figure is the sum, and ``cached_tokens`` stays a subset of it.
+    """
+    total = 0
+    for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+        value = usage_in.get(key)
+        if isinstance(value, int):
+            total += value
+    return total
+
+
+def _anthropic_usage_from_canonical(usage: dict) -> dict:
+    """Canonical usage -> Anthropic counters (``input_tokens`` excludes cache)."""
+    details = usage.get("prompt_tokens_details") or {}
+    read = usage.get("cache_read_input_tokens")
+    if not isinstance(read, int):
+        read = details.get("cached_tokens") if isinstance(details.get("cached_tokens"), int) else 0
+    written = usage.get("cache_creation_input_tokens")
+    if not isinstance(written, int):
+        written = (details.get("cache_write_tokens")
+                   if isinstance(details.get("cache_write_tokens"), int) else 0)
+    prompt = usage.get("prompt_tokens", 0) or 0
+    out: dict = {"input_tokens": max(prompt - read - written, 0)}
+    if read or written or "prompt_tokens_details" in usage:
+        out["cache_read_input_tokens"] = read
+        out["cache_creation_input_tokens"] = written
+    if isinstance(usage.get("cache_creation"), dict):
+        out["cache_creation"] = usage["cache_creation"]
     return out
 
 
@@ -279,9 +341,9 @@ def _anthropic_response_to_openai(data: dict) -> dict:
         "choices": [{"index": 0, "message": message, "finish_reason": finish}],
         "usage": {
             **_cache_usage_fields(usage_in),
-            "prompt_tokens": usage_in.get("input_tokens", 0),
+            "prompt_tokens": _prompt_tokens(usage_in),
             "completion_tokens": usage_in.get("output_tokens", 0),
-            "total_tokens": usage_in.get("input_tokens", 0) + usage_in.get("output_tokens", 0),
+            "total_tokens": _prompt_tokens(usage_in) + usage_in.get("output_tokens", 0),
         },
     }
     return out
@@ -312,7 +374,7 @@ def _openai_response_to_anthropic(data: dict) -> dict:
         "stop_reason": _FINISH_TO_STOP.get(choice.get("finish_reason"), "end_turn"),
         "stop_sequence": None,
         "usage": {
-            "input_tokens": usage.get("prompt_tokens", 0),
+            **_anthropic_usage_from_canonical(usage),
             "output_tokens": usage.get("completion_tokens", 0),
         },
     }
@@ -351,10 +413,15 @@ def _anthropic_to_openai_request(body: dict) -> dict:
                     },
                 })
             elif btype == "tool_result":
+                result_text = _text_of(block.get("content"))
+                marker = block.get("cache_control") or (
+                    _last_marker(block.get("content")))
                 tool_results.append({
                     "role": "tool",
                     "tool_call_id": block.get("tool_use_id", ""),
-                    "content": _text_of(block.get("content")),
+                    # A marked result keeps its breakpoint as a content part.
+                    "content": ([{"type": "text", "text": result_text, "cache_control": marker}]
+                                if marker else result_text),
                 })
         # Only build a parts list when a cache breakpoint is actually present;
         # otherwise flatten to the plain string this has always produced.
@@ -372,6 +439,8 @@ def _anthropic_to_openai_request(body: dict) -> dict:
             messages.extend(tool_results)
 
     payload: dict = {"model": body.get("model", ""), "messages": messages}
+    if isinstance(body.get("cache_control"), dict):
+        payload["cache_control"] = body["cache_control"]
     if body.get("max_tokens") is not None:
         payload["max_tokens"] = body["max_tokens"]
     if body.get("temperature") is not None:
@@ -427,6 +496,11 @@ class AnthropicOutbound(OutboundAdapter):
         user_agent = (forwarded_headers or {}).get("User-Agent")
         if user_agent:
             headers["User-Agent"] = user_agent
+        # A client's beta opt-ins are Anthropic's own feature switches, so they
+        # are the one other header that does mean something here.
+        beta = (forwarded_headers or {}).get("anthropic-beta")
+        if beta:
+            headers["anthropic-beta"] = beta
         return url, headers, _to_anthropic_request(payload)
 
     def translate_response(self, content: bytes) -> bytes:
@@ -491,9 +565,9 @@ class AnthropicOutbound(OutboundAdapter):
         if usage:
             final["usage"] = {
                 **_cache_usage_fields(usage),
-                "prompt_tokens": usage.get("input_tokens", 0),
+                "prompt_tokens": _prompt_tokens(usage),
                 "completion_tokens": usage.get("output_tokens", 0),
-                "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
+                "total_tokens": _prompt_tokens(usage) + usage.get("output_tokens", 0),
             }
         yield final
         yield None
@@ -531,7 +605,7 @@ class AnthropicInbound(InboundAdapter):
             return sse_event("message_start", {"type": "message_start", "message": {
                 "id": msg_id, "type": "message", "role": "assistant", "model": model,
                 "content": [], "stop_reason": None, "stop_sequence": None,
-                "usage": {"input_tokens": usage.get("prompt_tokens", 0), "output_tokens": 0}}})
+                "usage": {**_anthropic_usage_from_canonical(usage), "output_tokens": 0}}})
 
         for chunk in chunks:
             if chunk is None:
@@ -583,7 +657,8 @@ class AnthropicInbound(InboundAdapter):
         yield sse_event("message_delta", {
             "type": "message_delta",
             "delta": {"stop_reason": _FINISH_TO_STOP.get(finish, "end_turn"), "stop_sequence": None},
-            "usage": {"output_tokens": usage.get("completion_tokens", 0)}})
+            "usage": {**(_anthropic_usage_from_canonical(usage) if usage else {}),
+                      "output_tokens": usage.get("completion_tokens", 0)}})
         yield sse_event("message_stop", {"type": "message_stop"})
 
 

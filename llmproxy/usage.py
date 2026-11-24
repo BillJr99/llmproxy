@@ -92,6 +92,7 @@ class ModelUsage:
         "_lifetime_requests", "_lifetime_prompt",
         "_lifetime_completion", "_lifetime_total",
         "_lifetime_cost", "_cost_sources",
+        "_lifetime_cache_read", "_lifetime_cache_creation",
         "_outcomes", "_latencies",                          # health windows
     )
 
@@ -108,6 +109,8 @@ class ModelUsage:
         self._lifetime_total: int = 0
         self._lifetime_cost: float = 0.0
         self._cost_sources: dict[str, int] = {}
+        self._lifetime_cache_read: int = 0
+        self._lifetime_cache_creation: int = 0
         # Rolling health windows, bounded so a long-lived process cannot grow
         # them without limit. Deliberately separate from the quota windows: quota
         # is time-based (what a provider will still let me send), health is
@@ -124,6 +127,8 @@ class ModelUsage:
         total: int = 0,
         cost: float = 0.0,
         cost_source: str | None = None,
+        cache_read: int = 0,
+        cache_creation: int = 0,
     ) -> None:
         """Accumulate one observation.
 
@@ -151,6 +156,8 @@ class ModelUsage:
                 self._lifetime_total += total
             if cost:
                 self._lifetime_cost += cost
+            self._lifetime_cache_read += cache_read or 0
+            self._lifetime_cache_creation += cache_creation or 0
             if cost_source:
                 self._cost_sources[cost_source] = self._cost_sources.get(cost_source, 0) + 1
 
@@ -221,6 +228,8 @@ class ModelUsage:
                 "total_tokens": self._lifetime_total,
                 "cost": round(self._lifetime_cost, 8),
                 "cost_sources": dict(self._cost_sources),
+                "cache_read_tokens": self._lifetime_cache_read,
+                "cache_creation_tokens": self._lifetime_cache_creation,
             }
 
 
@@ -290,6 +299,12 @@ def extract_usage(body) -> dict | None:
     cost = _coerce_cost(usage)
     if cost is not None:
         out["cost"] = cost
+    from .caching import cache_counters
+    read, written = cache_counters(usage)
+    if read:
+        out["cache_read_tokens"] = read
+    if written:
+        out["cache_creation_tokens"] = written
     return out
 
 

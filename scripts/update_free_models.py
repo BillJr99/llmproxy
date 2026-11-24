@@ -913,6 +913,18 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
             "branch": "llmproxy-auto/providers",
             "token": None,
         },
+        # prompt_caching — opt-in request shaping for providers that cache
+        # prompts (see llmproxy/caching.py and the README). A provider entry
+        # may carry its own "prompt_caching" (true/false or the same object).
+        "prompt_caching": {
+            "enabled": True,
+            "ttl": "5m",
+            "warming": "off",
+            "retention": None,
+            "inject_markers": "auto",
+            "cache_key": True,
+            "passthrough": True,
+        },
         "fusion": {
             "enabled": True,
             "panel": None,
