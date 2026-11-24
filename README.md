@@ -1178,7 +1178,7 @@ What each provider needs, and what llmproxy does when caching is enabled:
 | Provider (how it is reached) | How it caches | What llmproxy adds when enabled | What it reports |
 |---|---|---|---|
 | Anthropic (`"protocol": "anthropic"`) | Only prefixes marked with `cache_control` (up to 4 breakpoints); `"ttl": "1h"` for the one-hour cache; a top-level `cache_control` is automatic caching | Breakpoints on the last tool definition, the last system block and the last markable block of the newest turn (3 of the 4), with the configured `ttl`. Nothing when the request already carries any marker, including a top-level one | `cache_read_input_tokens`, `cache_creation_input_tokens`, `cache_creation` (5m / 1h split) |
-| OpenRouter, Claude models (`anthropic/...`) | `cache_control` on content parts, or top-level | The same markers as content parts on the last system message and the newest user message | `prompt_tokens_details.cached_tokens`, `cache_write_tokens` |
+| OpenRouter, Claude models (`anthropic/...`) | `cache_control` on content parts, or top-level | The same markers as content parts on the last system message and the newest user or tool-result message | `prompt_tokens_details.cached_tokens`, `cache_write_tokens` |
 | OpenRouter, other models (OpenAI, DeepSeek, Grok, Moonshot, Groq, Gemini 2.5+) | Automatic | Nothing (no change needed) | `prompt_tokens_details.cached_tokens` |
 | OpenAI (`api.openai.com`, `openai` or `responses` protocol) | Automatic for prompts of 1024 tokens or more; `prompt_cache_key` routes related requests to one cache; `prompt_cache_retention` `"in_memory"` or `"24h"` | A `prompt_cache_key` derived from the conversation (a hash of the [affinity key](#prompt-cache-affinity--keeping-a-conversation-on-one-upstream)) when the client sent none, and `prompt_cache_retention` when `retention` is set | `prompt_tokens_details.cached_tokens` (`input_tokens_details` on Responses) |
 | Gemini (`"protocol": "gemini"`) | Implicit on 2.5 and newer, no request change. Explicit caching needs a separately created `cachedContents` resource, which llmproxy does not manage | Nothing | `cachedContentTokenCount`, surfaced as `prompt_tokens_details.cached_tokens` |
@@ -1186,11 +1186,11 @@ What each provider needs, and what llmproxy does when caching is enabled:
 | Any other OpenAI-compatible provider | Not documented | Nothing, unless that provider sets `"inject_markers": true` (content-part markers, for a gateway that forwards them to Claude) | Whatever it reports in the fields above |
 
 Client-supplied fields (`cache_control` anywhere, `prompt_cache_key`,
-`prompt_cache_retention`, `prompt_cache_options`) are always relayed and always win
-over what llmproxy would add. The Anthropic dialect now also carries a top-level
+`prompt_cache_retention`, `prompt_cache_options`) always win over what llmproxy
+would add, and are relayed as `passthrough` (below) allows. The Anthropic dialect now also carries a top-level
 `cache_control` (automatic caching) and markers on `tool_result` blocks, and the
 Responses dialect carries `prompt_cache_retention`, `prompt_cache_options` and a
-top-level `cache_control`. A provider that rejects these fields can drop them with
+top-level `cache_control`. A provider that rejects even the fields `"auto"` keeps can drop them all with
 `"passthrough": false`.
 
 The one-hour TTL needs no beta header. A client's own `anthropic-beta` header is
@@ -1208,7 +1208,7 @@ an object overrides individual keys):
   "retention": null,
   "inject_markers": "auto",
   "cache_key": true,
-  "passthrough": true
+  "passthrough": "auto"
 },
 "providers": {
   "anthropic": { "...": "...", "protocol": "anthropic", "prompt_caching": { "ttl": "1h" } },
@@ -1225,7 +1225,7 @@ an object overrides individual keys):
 | `retention` | `null` | OpenAI `prompt_cache_retention` to send when the client sent none: `null` (send nothing), `"in_memory"` or `"24h"`. GPT-5.5 accepts only `"24h"`. |
 | `inject_markers` | `"auto"` | `"auto"`: markers where the provider documents them (Anthropic protocol, Claude models on OpenRouter). `true`: also on this OpenAI-compatible provider. `false`: never. |
 | `cache_key` | `true` | Derive a `prompt_cache_key` for OpenAI when the client sent none. |
-| `passthrough` | `true` | Relay client cache fields. `false` strips them for an upstream that rejects them. |
+| `passthrough` | `"auto"` | Client cache fields. `"auto"`: relay all of them to the Anthropic protocol, OpenRouter, `api.openai.com` and any provider with `"inject_markers": true`; on other OpenAI-compatible providers drop the fields such servers reject as unknown (top-level `cache_control`, `prompt_cache_retention`, `prompt_cache_options`) and flatten a marked tool result back to plain text, keeping markers on user, system and assistant parts and `prompt_cache_key`. `true`: relay everything everywhere. `false`: strip every cache field. |
 
 Precedence, later wins: the defaults above, the top-level block, the environment
 variables `LLMPROXY_PROMPT_CACHING` (`true`/`false`), `LLMPROXY_PROMPT_CACHE_TTL`

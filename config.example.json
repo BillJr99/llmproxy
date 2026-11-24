@@ -402,7 +402,7 @@
     "retention": null,
     "inject_markers": "auto",
     "cache_key": true,
-    "passthrough": true
+    "passthrough": "auto"
   },
   "fusion": {
     "enabled": true,

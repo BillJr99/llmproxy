@@ -923,7 +923,7 @@ def regenerate_config_example(sidecar: dict, server_block: dict | None = None,
             "retention": None,
             "inject_markers": "auto",
             "cache_key": True,
-            "passthrough": True,
+            "passthrough": "auto",
         },
         "fusion": {
             "enabled": True,

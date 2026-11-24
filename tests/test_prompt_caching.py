@@ -70,7 +70,7 @@ def test_defaults_are_five_minutes_and_no_warming():
     assert s["ttl"] == "5m"
     assert s["warming"] == "off"
     assert s["retention"] is None
-    assert s["passthrough"] is True
+    assert s["passthrough"] == "auto"
 
 
 @pytest.mark.parametrize("raw,enabled,ttl", [
@@ -314,10 +314,54 @@ def test_passthrough_false_strips_client_cache_fields():
     assert out["messages"][1]["content"][0]["text"] == "q"
 
 
-def test_client_fields_pass_through_by_default():
-    body = _chat(prompt_cache_options={"ttl": "1h"})
-    out, _ = C.apply("openai", GROQ, body, {}, C.resolve_settings({}, {}, environ={}))
+def test_auto_passthrough_relays_everything_to_caching_providers():
+    body = _chat(model="anthropic/claude-sonnet-5", prompt_cache_options={"ttl": "1h"},
+                 cache_control={"type": "ephemeral"})
+    out, _ = C.apply("openai", OPENROUTER, body, {}, C.resolve_settings({}, {}, environ={}))
     assert out["prompt_cache_options"] == {"ttl": "1h"}
+    assert out["cache_control"] == {"type": "ephemeral"}
+
+
+def test_auto_passthrough_drops_risky_fields_on_generic_servers():
+    body = _chat(prompt_cache_options={"ttl": "1h"}, prompt_cache_retention="24h",
+                 cache_control={"type": "ephemeral"}, prompt_cache_key="k")
+    body["messages"].append({"role": "tool", "tool_call_id": "t", "content": [
+        {"type": "text", "text": "result", "cache_control": {"type": "ephemeral"}}]})
+    body["messages"][1]["content"] = [
+        {"type": "text", "text": "q", "cache_control": {"type": "ephemeral"}}]
+    out, _ = C.apply("openai", GROQ, body, {}, C.resolve_settings({}, {}, environ={}))
+    for key in ("prompt_cache_options", "prompt_cache_retention", "cache_control"):
+        assert key not in out
+    assert out["prompt_cache_key"] == "k"                       # always relayed
+    assert out["messages"][-1]["content"] == "result"           # tool content flattened
+    assert out["messages"][1]["content"][0]["cache_control"]    # user markers kept
+    assert isinstance(body["messages"][-1]["content"], list)    # original untouched
+
+
+def test_passthrough_true_relays_everything_everywhere():
+    s = C.resolve_settings({}, {"prompt_caching": {"passthrough": True}}, environ={})
+    body = _chat(prompt_cache_options={"ttl": "1h"})
+    out, _ = C.apply("openai", GROQ, body, {}, s)
+    assert out["prompt_cache_options"] == {"ttl": "1h"}
+
+
+def test_passthrough_false_strips_responses_input_markers():
+    s = C.resolve_settings({}, {"prompt_caching": {"passthrough": False}}, environ={})
+    body = {"model": "m", "input": [{"role": "user", "content": [
+        {"type": "input_text", "text": "x", "cache_control": {"type": "ephemeral"}}]}]}
+    out, _ = C.apply("responses", OPENAI, body, {}, s)
+    assert _markers(out) == []
+
+
+def test_openrouter_marks_the_newest_tool_result():
+    body = _chat(model="anthropic/claude-sonnet-5")
+    body["messages"] += [
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "t", "type": "function", "function": {"name": "a", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "t", "content": "tool output"},
+    ]
+    out, _ = C.apply("openai", OPENROUTER, body, {}, ON)
+    assert out["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
 
 
 def test_non_chat_endpoints_are_never_shaped():
@@ -471,6 +515,17 @@ def test_usage_report_includes_cache_fields(caching_server):
     assert m["cache_creation_tokens"] == 300
     assert body["totals"]["cache_read_tokens"] == 1800
     assert body["totals"]["cache_creation_tokens"] == 300
+
+
+def test_streaming_raw_usage_is_counted(caching_server):
+    """The translated streaming path records the raw canonical usage block."""
+    s = caching_server
+    raw = A._anthropic_response_to_openai(ANTHROPIC_RESPONSE)["usage"]
+    s._record_usage("anthropic", "claude-opus-5-5", usage=raw, config=s.load_config(),
+                    count_request=False)
+    m = s.app.test_client().get("/v1/usage").get_json()["models"][0]
+    assert m["cache_read_tokens"] == 1800
+    assert m["cache_creation_tokens"] == 300
 
 
 def test_empty_usage_report_has_zero_cache_totals(caching_server):

@@ -905,14 +905,21 @@ def _record_usage(
         completion = usage.get("completion_tokens", 0)
         total = usage.get("total_tokens", 0) or (prompt + completion)
         cost, source = compute_cost(provider_name, upstream_model, usage, load_pricing_map())
+    # Normalised by extract_usage on most paths; the translated streaming path
+    # hands over the raw canonical usage, so read the counters from it here.
+    cache_read = cache_creation = 0
+    if usage:
+        cache_read = usage.get("cache_read_tokens") or 0
+        cache_creation = usage.get("cache_creation_tokens") or 0
+        if not (cache_read or cache_creation):
+            cache_read, cache_creation = caching.cache_counters(usage)
 
     get_backend().record_usage(
         key,
         requests=1 if count_request else 0,
         prompt=prompt, completion=completion, total=total,
         cost=cost, cost_source=source,
-        cache_read=(usage or {}).get("cache_read_tokens", 0) or 0,
-        cache_creation=(usage or {}).get("cache_creation_tokens", 0) or 0,
+        cache_read=cache_read, cache_creation=cache_creation,
     )
     _invalidate_snapshot()
 
@@ -1846,7 +1853,7 @@ def _build_upstream_request(outbound, endpoint, base_url, provider_cfg, payload,
     )
     try:
         settings = caching.resolve_settings(load_config(), provider_cfg)
-        if settings["enabled"] or not settings["passthrough"]:
+        if settings["enabled"] or settings["passthrough"] is not True:
             body, headers = caching.apply(
                 outbound.name, provider_cfg, body, headers, settings,
                 endpoint=endpoint, affinity_key=_affinity_key(payload),

@@ -77,9 +77,13 @@ DEFAULTS: dict = {
     "inject_markers": "auto",
     # Derive a prompt_cache_key for OpenAI when the client sent none.
     "cache_key": True,
-    # Relay client-supplied cache fields (cache_control, prompt_cache_key,
-    # prompt_cache_retention, prompt_cache_options). False strips them.
-    "passthrough": True,
+    # Relay client-supplied cache fields. "auto": relay everything to the
+    # providers that document caching fields (Anthropic protocol, OpenRouter,
+    # api.openai.com, or inject_markers true); elsewhere drop the fields an
+    # OpenAI-compatible server is likely to reject (top-level cache_control,
+    # prompt_cache_retention, prompt_cache_options, markers on tool results)
+    # and keep the rest. True relays everything everywhere; False strips all.
+    "passthrough": "auto",
 }
 
 _ENV_ENABLED = "LLMPROXY_PROMPT_CACHING"
@@ -163,7 +167,8 @@ def _validated(settings: dict) -> dict:
     if out.get("inject_markers") not in (True, False, "auto"):
         out["inject_markers"] = "auto"
     out["cache_key"] = bool(out.get("cache_key", True))
-    out["passthrough"] = out.get("passthrough") is not False
+    if out.get("passthrough") not in (True, False, "auto"):
+        out["passthrough"] = "auto"
     return out
 
 
@@ -261,9 +266,43 @@ def _strip_markers(value):
 def strip_client_cache_fields(body: dict) -> dict:
     """A copy of *body* without any client-supplied caching field."""
     out = {k: v for k, v in body.items() if k not in _CLIENT_TOP_LEVEL_FIELDS}
-    for key in ("messages", "system", "tools"):
+    for key in ("messages", "system", "tools", "input"):
         if key in out:
             out[key] = _strip_markers(out[key])
+    return out
+
+
+# Fields the "auto" passthrough drops for an OpenAI-compatible server that does
+# not document caching: they are the ones such servers reject as unknown.
+_AUTO_STRIPPED_TOP_LEVEL = ("cache_control", "prompt_cache_retention", "prompt_cache_options")
+
+
+def _strip_for_generic_server(body: dict) -> dict:
+    """Drop the caching fields a generic OpenAI-compatible server may reject.
+
+    Markers on user, system and assistant content parts and a
+    ``prompt_cache_key`` are kept (llmproxy has always relayed those), but a
+    tool result marked as a parts list is flattened back to the plain string
+    tool content most servers require.
+    """
+    if not any(k in body for k in _AUTO_STRIPPED_TOP_LEVEL) and not any(
+        isinstance(m, dict) and m.get("role") == "tool" and isinstance(m.get("content"), list)
+        and _blocks_have_marker(m.get("content"))
+        for m in body.get("messages") or []
+    ):
+        return body
+    out = {k: v for k, v in body.items() if k not in _AUTO_STRIPPED_TOP_LEVEL}
+    messages = out.get("messages")
+    if isinstance(messages, list):
+        fixed = []
+        for m in messages:
+            if (isinstance(m, dict) and m.get("role") == "tool"
+                    and isinstance(m.get("content"), list) and _blocks_have_marker(m["content"])):
+                text = "".join(p.get("text", "") for p in m["content"]
+                               if isinstance(p, dict) and p.get("type") == "text")
+                m = {**m, "content": text}
+            fixed.append(m)
+        out["messages"] = fixed
     return out
 
 
@@ -347,8 +386,9 @@ def add_chat_breakpoints(body: dict, ttl: str = "5m") -> dict:
     """OpenAI chat body -> a copy with content-part ``cache_control`` markers.
 
     The OpenRouter form: a marker on the last text part of the last system
-    message and of the newest user message. Tool results and assistant turns
-    are left alone, since not every gateway accepts parts there.
+    message and of the newest user or tool-result message, so an agent loop
+    keeps extending the cache through its tool iterations. Assistant turns are
+    left alone.
     """
     if has_client_markers(body):
         return body
@@ -363,9 +403,9 @@ def add_chat_breakpoints(body: dict, ttl: str = "5m") -> dict:
             _mark_chat_message(msg, marker)
             break
     for msg in reversed(messages):
-        if isinstance(msg, dict) and msg.get("role") == "user":
-            _mark_chat_message(msg, marker)
-            break
+        if isinstance(msg, dict) and msg.get("role") in ("user", "tool"):
+            if _mark_chat_message(msg, marker):
+                break
     out["messages"] = messages
     return out
 
@@ -397,13 +437,19 @@ def apply(
         return body, headers
     if endpoint not in ("chat/completions", "messages", "responses"):
         return body, headers
-    if not settings.get("passthrough", True):
+    protocol = protocol or "openai"
+    base_url = provider_cfg.get("base_url") if isinstance(provider_cfg, dict) else None
+    passthrough = settings.get("passthrough", "auto")
+    if passthrough is False:
         body = strip_client_cache_fields(body)
+    elif passthrough == "auto" and protocol in ("openai", "responses") and not (
+        _is_openrouter(base_url) or _is_openai(base_url)
+        or settings.get("inject_markers") is True
+    ):
+        body = _strip_for_generic_server(body)
     if not settings.get("enabled"):
         return body, headers
 
-    protocol = protocol or "openai"
-    base_url = provider_cfg.get("base_url") if isinstance(provider_cfg, dict) else None
     model = str(body.get("model") or "")
     ttl = settings.get("ttl", "5m")
     inject = settings.get("inject_markers", "auto")
