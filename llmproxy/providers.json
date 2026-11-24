@@ -23155,10 +23155,203 @@
       "base_url": "https://aihubmix.com/v1",
       "key_required": true,
       "key_hint": "Create an API key at console.aihubmix.com (docs: docs.aihubmix.com). Keys are sent as a Bearer token.",
-      "_note": "AIHubMix multi-vendor gateway. The OpenAI-compatible API is served at https://aihubmix.com/v1: GET /v1/models returns the standard {id, object, owned_by} list, and POST /v1/chat/completions answers 401 without a key (checked November 2026). https://aihubmix.com/api/v1 is AIHubMix's catalog API only: its /models entries carry model_id instead of id, and /api/v1/chat/completions answers 404, so it cannot be used as base_url. The catalog is large (several hundred ids across vendors, including image and embedding models), so set model_filter to pin the chat models you want.",
-      "believed_free": [],
-      "model_reasoning": {},
-      "free_limits": {}
+      "_note": "AIHubMix multi-vendor gateway. The OpenAI-compatible API is served at https://aihubmix.com/v1: GET /v1/models returns the standard {id, object, owned_by} list, and POST /v1/chat/completions answers 401 without a key (checked November 2026). https://aihubmix.com/api/v1 is AIHubMix's catalog API only: its /models entries carry model_id instead of id, and /api/v1/chat/completions answers 404, so it cannot be used as base_url. The catalog is large (several hundred ids across vendors, including image and embedding models), so set model_filter to pin the chat models you want. Free tier: about 38 ids ending in -free are priced $0/$0 in the /api/v1 catalog and are picked up by the 'free' in id rule; the six legacy ':free' Llama/Mistral ids are priced (0.002-0.02 per 1M tokens) despite their names, so cost_observed_free_tier keeps them out of the free pool.",
+      "believed_free": [
+        "aihubmix/agents-a1-free",
+        "aihubmix/coding-glm-4.6-free",
+        "aihubmix/coding-glm-4.7-free",
+        "aihubmix/coding-glm-5-free",
+        "aihubmix/coding-glm-5-turbo-free",
+        "aihubmix/coding-glm-5.1-free",
+        "aihubmix/coding-glm-5.2-free",
+        "aihubmix/coding-glm-5.3-flash-free",
+        "aihubmix/coding-glm-5.3-free",
+        "aihubmix/coding-glm-5.4-free",
+        "aihubmix/coding-kimi-k3-free",
+        "aihubmix/coding-minimax-m2-free",
+        "aihubmix/coding-minimax-m2.1-free",
+        "aihubmix/coding-minimax-m2.5-free",
+        "aihubmix/coding-minimax-m2.7-free",
+        "aihubmix/coding-minimax-m3-free",
+        "aihubmix/dots-3-note-preview-free",
+        "aihubmix/ernie-5.5-flash-preview-free",
+        "aihubmix/flint-v1.0-free",
+        "aihubmix/gemma-4-26b-a4b-it-free",
+        "aihubmix/gemma-4-31b-it-free",
+        "aihubmix/glm-4.7-flash-free",
+        "aihubmix/intern-s2-free",
+        "aihubmix/k2.6-code-preview-free",
+        "aihubmix/kimi-for-coding-free",
+        "aihubmix/lfm-2.5-2.6b-free",
+        "aihubmix/lfm-3-1.7b-free",
+        "aihubmix/ling-3.2-flash-free",
+        "aihubmix/mimo-v2-flash-free",
+        "aihubmix/nemotron-3-nano-omni-30b-a3b-reasoning-free",
+        "aihubmix/nemotron-3-ultra-550b-a55b-free",
+        "aihubmix/nemotron-3.5-lightning-free",
+        "aihubmix/nemotron-3.5-super-vl-free",
+        "aihubmix/north-mini-code-free",
+        "aihubmix/particle-1-free",
+        "aihubmix/qwen3.6-plus-preview-free",
+        "aihubmix/xiaomi-mimo-v2.6-flash-free",
+        "aihubmix/xiaomi-mimo-v2.6-pro-free"
+      ],
+      "model_reasoning": {
+        "aihubmix/agents-a1-free": "exploratory",
+        "aihubmix/coding-glm-4.6-free": "exploratory",
+        "aihubmix/coding-glm-4.7-free": "exploratory",
+        "aihubmix/coding-glm-5-free": "exploratory",
+        "aihubmix/coding-glm-5-turbo-free": "exploratory",
+        "aihubmix/coding-glm-5.1-free": "exploratory",
+        "aihubmix/coding-glm-5.2-free": "exploratory",
+        "aihubmix/coding-glm-5.3-flash-free": "exploratory",
+        "aihubmix/coding-glm-5.3-free": "exploratory",
+        "aihubmix/coding-glm-5.4-free": "exploratory",
+        "aihubmix/coding-kimi-k3-free": "exploratory",
+        "aihubmix/coding-minimax-m2-free": "exploratory",
+        "aihubmix/coding-minimax-m2.1-free": "exploratory",
+        "aihubmix/coding-minimax-m2.5-free": "exploratory",
+        "aihubmix/coding-minimax-m2.7-free": "exploratory",
+        "aihubmix/coding-minimax-m3-free": "exploratory",
+        "aihubmix/dots-3-note-preview-free": "exploratory",
+        "aihubmix/ernie-5.5-flash-preview-free": "exploratory",
+        "aihubmix/flint-v1.0-free": "exploratory",
+        "aihubmix/gemma-4-26b-a4b-it-free": "standard",
+        "aihubmix/gemma-4-31b-it-free": "standard",
+        "aihubmix/glm-4.7-flash-free": "exploratory",
+        "aihubmix/intern-s2-free": "exploratory",
+        "aihubmix/k2.6-code-preview-free": "exploratory",
+        "aihubmix/kimi-for-coding-free": "exploratory",
+        "aihubmix/lfm-2.5-2.6b-free": "exploratory",
+        "aihubmix/lfm-3-1.7b-free": "exploratory",
+        "aihubmix/ling-3.2-flash-free": "exploratory",
+        "aihubmix/mimo-v2-flash-free": "exploratory",
+        "aihubmix/nemotron-3-nano-omni-30b-a3b-reasoning-free": "deep",
+        "aihubmix/nemotron-3-ultra-550b-a55b-free": "deep",
+        "aihubmix/nemotron-3.5-lightning-free": "exploratory",
+        "aihubmix/nemotron-3.5-super-vl-free": "exploratory",
+        "aihubmix/north-mini-code-free": "exploratory",
+        "aihubmix/particle-1-free": "exploratory",
+        "aihubmix/qwen3.6-plus-preview-free": "exploratory",
+        "aihubmix/xiaomi-mimo-v2.6-flash-free": "exploratory",
+        "aihubmix/xiaomi-mimo-v2.6-pro-free": "exploratory"
+      },
+      "free_limits": {},
+      "cost_observed_free_tier": [
+        "aihubmix/meta-llama/llama-3.1-405b-instruct:free",
+        "aihubmix/meta-llama/llama-3.1-70b-instruct:free",
+        "aihubmix/meta-llama/llama-3.1-8b-instruct:free",
+        "aihubmix/meta-llama/llama-3.2-11b-vision-instruct:free",
+        "aihubmix/meta-llama/llama-3.2-3b-instruct:free",
+        "aihubmix/mistralai/mistral-7b-instruct:free"
+      ],
+      "model_capabilities": {
+        "aihubmix/agents-a1-free": [
+          "vision"
+        ],
+        "aihubmix/coding-glm-4.6-free": [
+          "tools"
+        ],
+        "aihubmix/coding-glm-4.7-free": [
+          "tools"
+        ],
+        "aihubmix/coding-glm-5-free": [
+          "tools"
+        ],
+        "aihubmix/coding-glm-5-turbo-free": [
+          "tools"
+        ],
+        "aihubmix/coding-glm-5.1-free": [
+          "tools"
+        ],
+        "aihubmix/coding-glm-5.2-free": [
+          "tools"
+        ],
+        "aihubmix/coding-glm-5.3-flash-free": [
+          "tools",
+          "vision"
+        ],
+        "aihubmix/coding-glm-5.3-free": [
+          "tools"
+        ],
+        "aihubmix/coding-glm-5.4-free": [
+          "vision"
+        ],
+        "aihubmix/coding-kimi-k3-free": [
+          "tools",
+          "vision"
+        ],
+        "aihubmix/coding-minimax-m2-free": [
+          "tools"
+        ],
+        "aihubmix/coding-minimax-m2.1-free": [
+          "tools"
+        ],
+        "aihubmix/coding-minimax-m2.5-free": [
+          "tools"
+        ],
+        "aihubmix/coding-minimax-m2.7-free": [
+          "tools"
+        ],
+        "aihubmix/coding-minimax-m3-free": [
+          "tools",
+          "vision"
+        ],
+        "aihubmix/dots-3-note-preview-free": [
+          "tools",
+          "vision"
+        ],
+        "aihubmix/gemma-4-26b-a4b-it-free": [
+          "tools",
+          "vision"
+        ],
+        "aihubmix/gemma-4-31b-it-free": [
+          "tools",
+          "vision"
+        ],
+        "aihubmix/glm-4.7-flash-free": [
+          "tools"
+        ],
+        "aihubmix/intern-s2-free": [
+          "vision"
+        ],
+        "aihubmix/k2.6-code-preview-free": [
+          "tools",
+          "vision"
+        ],
+        "aihubmix/kimi-for-coding-free": [
+          "tools",
+          "vision"
+        ],
+        "aihubmix/ling-3.2-flash-free": [
+          "vision"
+        ],
+        "aihubmix/nemotron-3-nano-omni-30b-a3b-reasoning-free": [
+          "tools",
+          "vision"
+        ],
+        "aihubmix/nemotron-3-ultra-550b-a55b-free": [
+          "tools"
+        ],
+        "aihubmix/nemotron-3.5-lightning-free": [
+          "tools"
+        ],
+        "aihubmix/nemotron-3.5-super-vl-free": [
+          "vision"
+        ],
+        "aihubmix/north-mini-code-free": [
+          "tools"
+        ],
+        "aihubmix/particle-1-free": [
+          "vision"
+        ],
+        "aihubmix/xiaomi-mimo-v2.6-flash-free": [
+          "vision"
+        ],
+        "aihubmix/xiaomi-mimo-v2.6-pro-free": [
+          "vision"
+        ]
+      }
     },
     "teamorouter": {
       "display": "TeamoRouter (LLM routing gateway)",
@@ -27729,6 +27922,2538 @@
     "ai21/jamba-mini-1.7": {
       "input_cost_per_token": 2e-07,
       "output_cost_per_token": 4e-07
+    },
+    "aihubmix/agnes-2.5-flash": {
+      "input_cost_per_token": 3e-08,
+      "output_cost_per_token": 1.5e-07
+    },
+    "aihubmix/agnes-2.5-pro": {
+      "input_cost_per_token": 4.5000000000000003e-07,
+      "output_cost_per_token": 9.000000000000001e-07
+    },
+    "aihubmix/agnes-2.5-pro-alpha": {
+      "input_cost_per_token": 4.5000000000000003e-07,
+      "output_cost_per_token": 9.000000000000001e-07
+    },
+    "aihubmix/agnes-3.0-flash": {
+      "input_cost_per_token": 3e-08,
+      "output_cost_per_token": 1.5e-07
+    },
+    "aihubmix/ahm-phi-3-5-mini-instruct": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 3e-06
+    },
+    "aihubmix/ahm-phi-3-5-moe-instruct": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 1.6000000000000001e-06
+    },
+    "aihubmix/ahm-phi-3-5-vision-instruct": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 1.6000000000000001e-06
+    },
+    "aihubmix/ahm-phi-3-medium-128k": {
+      "input_cost_per_token": 6e-06,
+      "output_cost_per_token": 1.8e-05
+    },
+    "aihubmix/ahm-phi-3-medium-4k": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 3e-06
+    },
+    "aihubmix/ahm-phi-3-small-128k": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 3e-06
+    },
+    "aihubmix/aihub-phi-4": {
+      "input_cost_per_token": 1.2e-07,
+      "output_cost_per_token": 4.8e-07
+    },
+    "aihubmix/aihub-phi-4-mini-instruct": {
+      "input_cost_per_token": 1.2e-07,
+      "output_cost_per_token": 4.8e-07
+    },
+    "aihubmix/aihub-phi-4-multimodal-instruct": {
+      "input_cost_per_token": 1.2e-07,
+      "output_cost_per_token": 4.8e-07
+    },
+    "aihubmix/aihubmix-codestral-2501": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "aihubmix/aihubmix-cohere-command-r": {
+      "input_cost_per_token": 6.4e-07,
+      "output_cost_per_token": 1.92e-06
+    },
+    "aihubmix/aihubmix-command-r-08-2024": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 8.000000000000001e-07
+    },
+    "aihubmix/aihubmix-command-r-plus": {
+      "input_cost_per_token": 3.84e-06,
+      "output_cost_per_token": 1.92e-05
+    },
+    "aihubmix/aihubmix-command-r-plus-08-2024": {
+      "input_cost_per_token": 2.8e-06,
+      "output_cost_per_token": 1.12e-05
+    },
+    "aihubmix/aihubmix-jamba-1-5-large": {
+      "input_cost_per_token": 2.2e-06,
+      "output_cost_per_token": 8.8e-06
+    },
+    "aihubmix/aihubmix-llama-3-1-405b-instruct": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 1.5e-05
+    },
+    "aihubmix/aihubmix-llama-3-1-70b-instruct": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 7.8e-07
+    },
+    "aihubmix/aihubmix-llama-3-1-8b-instruct": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/aihubmix-llama-3-2-11b-vision": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "aihubmix/aihubmix-llama-3-2-90b-vision": {
+      "input_cost_per_token": 2.4e-06,
+      "output_cost_per_token": 2.4e-06
+    },
+    "aihubmix/aihubmix-llama-3-70b-instruct": {
+      "input_cost_per_token": 7e-07,
+      "output_cost_per_token": 7e-07
+    },
+    "aihubmix/aihubmix-mistral-large": {
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 1.2e-05
+    },
+    "aihubmix/aihubmix-mistral-large-2407": {
+      "input_cost_per_token": 3e-06,
+      "output_cost_per_token": 9e-06
+    },
+    "aihubmix/aihubmix-mistral-large-2411": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06
+    },
+    "aihubmix/aihubmix-mistral-medium": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/aihubmix-phi-4-mini-reasoning": {
+      "input_cost_per_token": 1.2e-07,
+      "output_cost_per_token": 1.2e-07
+    },
+    "aihubmix/aihubmix-router": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 1.6000000000000001e-06
+    },
+    "aihubmix/alicloud-deepseek-v3.2": {
+      "input_cost_per_token": 2.7400000000000004e-07,
+      "output_cost_per_token": 4.1099999999999996e-07
+    },
+    "aihubmix/alicloud-glm-4.7": {
+      "input_cost_per_token": 4.1095999999999997e-07,
+      "output_cost_per_token": 1.917785936e-06
+    },
+    "aihubmix/alicloud-glm-5": {
+      "input_cost_per_token": 5.634e-07,
+      "output_cost_per_token": 2.5352999999999997e-06
+    },
+    "aihubmix/alicloud-kimi-k2-instruct": {
+      "input_cost_per_token": 5.480000000000001e-07,
+      "output_cost_per_token": 2.1920000000000004e-06
+    },
+    "aihubmix/alicloud-kimi-k2-thinking": {
+      "input_cost_per_token": 5.480000000000001e-07,
+      "output_cost_per_token": 2.1920000000000004e-06
+    },
+    "aihubmix/alicloud-minimax-m2.5": {
+      "input_cost_per_token": 2.876e-07,
+      "output_cost_per_token": 1.1504e-06
+    },
+    "aihubmix/anthropic-opus-4-6": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 2.5e-05
+    },
+    "aihubmix/auto": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/azure-deepseek-v3.2": {
+      "input_cost_per_token": 5.8e-07,
+      "output_cost_per_token": 1.6800280000000001e-06
+    },
+    "aihubmix/azure-deepseek-v3.2-speciale": {
+      "input_cost_per_token": 5.8e-07,
+      "output_cost_per_token": 1.6800280000000001e-06
+    },
+    "aihubmix/bai-qwen3-vl-235b-a22b-instruct": {
+      "input_cost_per_token": 2.7400000000000004e-07,
+      "output_cost_per_token": 1.0960000000000002e-06
+    },
+    "aihubmix/baidu/ernie-4.5-300b-a47b": {
+      "input_cost_per_token": 3.2e-07,
+      "output_cost_per_token": 1.28e-06
+    },
+    "aihubmix/bytedance-seed/seed-oss-36b-instruct": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 5.34e-07
+    },
+    "aihubmix/cbs-glm-4.7": {
+      "input_cost_per_token": 2.25e-06,
+      "output_cost_per_token": 2.749995e-06
+    },
+    "aihubmix/cc-deepseek-v3": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 3e-07
+    },
+    "aihubmix/cc-deepseek-v3.1": {
+      "input_cost_per_token": 5.6e-07,
+      "output_cost_per_token": 1.68e-06
+    },
+    "aihubmix/cc-doubao-seed-code-preview-latest": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/cc-ernie-4.5-300b-a47b": {
+      "input_cost_per_token": 3.2e-07,
+      "output_cost_per_token": 1.28e-06
+    },
+    "aihubmix/cc-glm-4.6": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 2.2e-07
+    },
+    "aihubmix/cc-glm-4.7": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 2.2e-07
+    },
+    "aihubmix/cc-glm-5": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 2.2e-07
+    },
+    "aihubmix/cc-glm-5-turbo": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 2.2e-07
+    },
+    "aihubmix/cc-glm-5.1": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 2.2e-07
+    },
+    "aihubmix/cc-k2.6-code-preview": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/cc-kimi-dev-72b": {
+      "input_cost_per_token": 3.2e-07,
+      "output_cost_per_token": 1.28e-06
+    },
+    "aihubmix/cc-kimi-for-coding": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/cc-kimi-k2-instruct": {
+      "input_cost_per_token": 1.1e-06,
+      "output_cost_per_token": 3.2999999999999997e-06
+    },
+    "aihubmix/cc-kimi-k2-instruct-0905": {
+      "input_cost_per_token": 1.1e-06,
+      "output_cost_per_token": 3.2999999999999997e-06
+    },
+    "aihubmix/cc-kimi-k2-thinking": {
+      "input_cost_per_token": 5.480000000000001e-07,
+      "output_cost_per_token": 2.1920000000000004e-06
+    },
+    "aihubmix/cc-minimax-m2": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 1.0000000000000001e-07
+    },
+    "aihubmix/cc-minimax-m2.1": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 1.0000000000000001e-07
+    },
+    "aihubmix/cc-minimax-m2.5": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 1.0000000000000001e-07
+    },
+    "aihubmix/cc-minimax-m2.5-highspeed": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 1.0000000000000001e-07
+    },
+    "aihubmix/cc-minimax-m2.7": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 1.0000000000000001e-07
+    },
+    "aihubmix/cc-minimax-m2.7-highspeed": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 1.0000000000000001e-07
+    },
+    "aihubmix/cc-minimax-m3": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 1.0000000000000001e-07
+    },
+    "aihubmix/cerebras-llama-3.3-70b": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/chatglm_lite": {
+      "input_cost_per_token": 2.858e-07,
+      "output_cost_per_token": 2.858e-07
+    },
+    "aihubmix/chatglm_pro": {
+      "input_cost_per_token": 1.4286000000000002e-06,
+      "output_cost_per_token": 1.4286000000000002e-06
+    },
+    "aihubmix/chatglm_std": {
+      "input_cost_per_token": 7.144e-07,
+      "output_cost_per_token": 7.144e-07
+    },
+    "aihubmix/chatglm_turbo": {
+      "input_cost_per_token": 7.144e-07,
+      "output_cost_per_token": 7.144e-07
+    },
+    "aihubmix/chutesai/mistral-small-3.1-24b-instruct-2503": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 8.000000000000001e-07
+    },
+    "aihubmix/claude-2": {
+      "input_cost_per_token": 8.8e-06,
+      "output_cost_per_token": 8.8e-06
+    },
+    "aihubmix/claude-2.0": {
+      "input_cost_per_token": 8.8e-06,
+      "output_cost_per_token": 3.96e-05
+    },
+    "aihubmix/claude-2.1": {
+      "input_cost_per_token": 8.8e-06,
+      "output_cost_per_token": 3.96e-05
+    },
+    "aihubmix/claude-3-haiku-20240229": {
+      "input_cost_per_token": 2.75e-07,
+      "output_cost_per_token": 2.75e-07
+    },
+    "aihubmix/claude-3-haiku-20240307": {
+      "input_cost_per_token": 2.75e-07,
+      "output_cost_per_token": 1.375e-06
+    },
+    "aihubmix/claude-3-haiku@20240307": {
+      "input_cost_per_token": 2.75e-07,
+      "output_cost_per_token": 1.375e-06
+    },
+    "aihubmix/claude-3-opus-20240229": {
+      "input_cost_per_token": 1.65e-05,
+      "output_cost_per_token": 8.25e-05
+    },
+    "aihubmix/claude-3-opus@20240229": {
+      "input_cost_per_token": 1.65e-05,
+      "output_cost_per_token": 8.25e-05
+    },
+    "aihubmix/claude-3-sonnet-20240229": {
+      "input_cost_per_token": 3.2999999999999997e-06,
+      "output_cost_per_token": 1.65e-05
+    },
+    "aihubmix/claude-fable-5": {
+      "input_cost_per_token": 1.1e-05,
+      "output_cost_per_token": 5.5e-05
+    },
+    "aihubmix/claude-fable-5-1": {
+      "input_cost_per_token": 1.1e-05,
+      "output_cost_per_token": 5.5e-05
+    },
+    "aihubmix/claude-fable-5-2": {
+      "input_cost_per_token": 8.8e-06,
+      "output_cost_per_token": 4.4e-05
+    },
+    "aihubmix/claude-haiku-4-5": {
+      "input_cost_per_token": 1.1e-06,
+      "output_cost_per_token": 5.5e-06
+    },
+    "aihubmix/claude-haiku-5-5": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 5e-07
+    },
+    "aihubmix/claude-instant-1": {
+      "input_cost_per_token": 1.793e-06,
+      "output_cost_per_token": 1.793e-06
+    },
+    "aihubmix/claude-instant-1.2": {
+      "input_cost_per_token": 8.8e-07,
+      "output_cost_per_token": 3.96e-06
+    },
+    "aihubmix/claude-opus-4-1": {
+      "input_cost_per_token": 1.65e-05,
+      "output_cost_per_token": 8.25e-05
+    },
+    "aihubmix/claude-opus-4-5": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 2.5e-05
+    },
+    "aihubmix/claude-opus-4-5-think": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 2.5e-05
+    },
+    "aihubmix/claude-opus-4-6": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 2.5e-05
+    },
+    "aihubmix/claude-opus-4-6-think": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 2.5e-05
+    },
+    "aihubmix/claude-opus-4-7": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 2.5e-05
+    },
+    "aihubmix/claude-opus-4-7-think": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 2.5e-05
+    },
+    "aihubmix/claude-opus-4-8": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 2.5e-05
+    },
+    "aihubmix/claude-opus-4-8-think": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 2.5e-05
+    },
+    "aihubmix/claude-opus-5": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 2.5e-05
+    },
+    "aihubmix/claude-opus-5-5": {
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 2e-05
+    },
+    "aihubmix/claude-sonnet-4-5": {
+      "input_cost_per_token": 3.2999999999999997e-06,
+      "output_cost_per_token": 1.65e-05
+    },
+    "aihubmix/claude-sonnet-4-5-think": {
+      "input_cost_per_token": 3.2999999999999997e-06,
+      "output_cost_per_token": 1.65e-05
+    },
+    "aihubmix/claude-sonnet-4-6": {
+      "input_cost_per_token": 3e-06,
+      "output_cost_per_token": 1.5e-05
+    },
+    "aihubmix/claude-sonnet-4-6-think": {
+      "input_cost_per_token": 3e-06,
+      "output_cost_per_token": 1.5e-05
+    },
+    "aihubmix/claude-sonnet-5": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/claude-sonnet-5-5": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/cloudflare-glm-5.2": {
+      "input_cost_per_token": 1.4e-06,
+      "output_cost_per_token": 4.4002e-06
+    },
+    "aihubmix/code-davinci-edit-001": {
+      "input_cost_per_token": 2e-05,
+      "output_cost_per_token": 2e-05
+    },
+    "aihubmix/codestral-latest": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "aihubmix/codex-mini-latest": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 6e-06
+    },
+    "aihubmix/coding-glm-4.5-air": {
+      "input_cost_per_token": 1.4e-08,
+      "output_cost_per_token": 8.400000000000001e-08
+    },
+    "aihubmix/coding-glm-4.6": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 2.2e-07
+    },
+    "aihubmix/coding-glm-4.7": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 2.2e-07
+    },
+    "aihubmix/coding-glm-5": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 2.2e-07
+    },
+    "aihubmix/coding-glm-5-turbo": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 2.2e-07
+    },
+    "aihubmix/coding-glm-5.1": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 2.2e-07
+    },
+    "aihubmix/coding-glm-5.2": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 2.2e-07
+    },
+    "aihubmix/coding-glm-5.3": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 2.2e-07
+    },
+    "aihubmix/coding-glm-5.3-flash": {
+      "input_cost_per_token": 2.817e-08,
+      "output_cost_per_token": 9.8595e-08
+    },
+    "aihubmix/coding-glm-5.4": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 2.2e-07
+    },
+    "aihubmix/coding-kimi-k3": {
+      "input_cost_per_token": 4.4e-07,
+      "output_cost_per_token": 1.6133299999999998e-06
+    },
+    "aihubmix/coding-kimi-k3.1-pro": {
+      "input_cost_per_token": 8.8e-07,
+      "output_cost_per_token": 3.23e-06
+    },
+    "aihubmix/coding-kimi-k3.1-pro-highspeed": {
+      "input_cost_per_token": 1.76e-06,
+      "output_cost_per_token": 6.46e-06
+    },
+    "aihubmix/coding-minimax-m2": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/coding-minimax-m2.1": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/coding-minimax-m2.5": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/coding-minimax-m2.5-highspeed": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/coding-minimax-m2.7": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/coding-minimax-m2.7-highspeed": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/coding-minimax-m3": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/coding-minimax-m3.1-flash": {
+      "input_cost_per_token": 3.3000000000000004e-08,
+      "output_cost_per_token": 1.3200000000000002e-07
+    },
+    "aihubmix/coding-qwen4-max-preview": {
+      "input_cost_per_token": 3.53e-07,
+      "output_cost_per_token": 1.059e-06
+    },
+    "aihubmix/coding-xiaomi-mimo-v2.6-flash": {
+      "input_cost_per_token": 8e-08,
+      "output_cost_per_token": 1.6e-07
+    },
+    "aihubmix/coding-xiaomi-mimo-v2.6-pro": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "aihubmix/cohere-command-a": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/command": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/command-a-03-2025": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/command-a-plus-05-2026": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/command-light": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/command-light-nightly": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/command-nightly": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/command-r": {
+      "input_cost_per_token": 6.4e-07,
+      "output_cost_per_token": 1.92e-06
+    },
+    "aihubmix/command-r-08-2024": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 8.000000000000001e-07
+    },
+    "aihubmix/command-r-plus": {
+      "input_cost_per_token": 3.84e-06,
+      "output_cost_per_token": 1.92e-05
+    },
+    "aihubmix/command-r-plus-08-2024": {
+      "input_cost_per_token": 2.8e-06,
+      "output_cost_per_token": 1.12e-05
+    },
+    "aihubmix/computer-use-preview": {
+      "input_cost_per_token": 3e-06,
+      "output_cost_per_token": 1.2e-05
+    },
+    "aihubmix/davinci": {
+      "input_cost_per_token": 2e-05,
+      "output_cost_per_token": 2e-05
+    },
+    "aihubmix/davinci-002": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/deepinfra-gemma-4-26b-a4b-it": {
+      "input_cost_per_token": 8.8e-08,
+      "output_cost_per_token": 3.85e-07
+    },
+    "aihubmix/deepinfra-llama-3.1-8b-instant": {
+      "input_cost_per_token": 3.3000000000000004e-08,
+      "output_cost_per_token": 5.4978e-08
+    },
+    "aihubmix/deepinfra-llama-3.3-70b-instant-turbo": {
+      "input_cost_per_token": 1.1e-07,
+      "output_cost_per_token": 3.52e-07
+    },
+    "aihubmix/deepinfra-llama-4-maverick-17b-128e-instruct": {
+      "input_cost_per_token": 3.3e-07,
+      "output_cost_per_token": 1.32e-06
+    },
+    "aihubmix/deepinfra-llama-4-scout-17b-16e-instruct": {
+      "input_cost_per_token": 8.8e-08,
+      "output_cost_per_token": 3.3e-07
+    },
+    "aihubmix/deepinfra-nvidia-nemotron-3-nano-30b-a3b2": {
+      "input_cost_per_token": 6.600000000000001e-08,
+      "output_cost_per_token": 2.6400000000000003e-07
+    },
+    "aihubmix/deepseek-ai/deepseek-coder-v2-instruct": {
+      "input_cost_per_token": 1.6e-07,
+      "output_cost_per_token": 3.2e-07
+    },
+    "aihubmix/deepseek-ai/deepseek-llm-67b-chat": {
+      "input_cost_per_token": 1.6e-07,
+      "output_cost_per_token": 1.6e-07
+    },
+    "aihubmix/deepseek-ai/deepseek-prover-v2-671b": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 1.0000000000000001e-07
+    },
+    "aihubmix/deepseek-ai/deepseek-r1-distill-llama-70b": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/deepseek-ai/deepseek-r1-distill-llama-8b": {
+      "input_cost_per_token": 1e-08,
+      "output_cost_per_token": 1e-08
+    },
+    "aihubmix/deepseek-ai/deepseek-r1-distill-qwen-1.5b": {
+      "input_cost_per_token": 1e-08,
+      "output_cost_per_token": 1e-08
+    },
+    "aihubmix/deepseek-ai/deepseek-r1-distill-qwen-14b": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 1.0000000000000001e-07
+    },
+    "aihubmix/deepseek-ai/deepseek-r1-distill-qwen-32b": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/deepseek-ai/deepseek-r1-distill-qwen-7b": {
+      "input_cost_per_token": 1e-08,
+      "output_cost_per_token": 1e-08
+    },
+    "aihubmix/deepseek-ai/deepseek-r1-zero": {
+      "input_cost_per_token": 2.2e-06,
+      "output_cost_per_token": 2.2e-06
+    },
+    "aihubmix/deepseek-ai/deepseek-v2-chat": {
+      "input_cost_per_token": 1.6e-07,
+      "output_cost_per_token": 3.2e-07
+    },
+    "aihubmix/deepseek-ai/deepseek-v2.5": {
+      "input_cost_per_token": 1.6e-07,
+      "output_cost_per_token": 3.2e-07
+    },
+    "aihubmix/deepseek-ai/deepseek-vl2": {
+      "input_cost_per_token": 1.6e-07,
+      "output_cost_per_token": 1.6e-07
+    },
+    "aihubmix/deepseek-ai/janus-pro-7b": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/deepseek-r1-distill-llama-70b": {
+      "input_cost_per_token": 8.000000000000001e-07,
+      "output_cost_per_token": 1.6000000000000001e-06
+    },
+    "aihubmix/deepseek-r1-distill-qianfan-llama-8b": {
+      "input_cost_per_token": 1.3700000000000002e-07,
+      "output_cost_per_token": 5.480000000000001e-07
+    },
+    "aihubmix/deepseek-v3.1-think": {
+      "input_cost_per_token": 5.6e-07,
+      "output_cost_per_token": 1.68e-06
+    },
+    "aihubmix/deepseek-v3.2": {
+      "input_cost_per_token": 5.8e-07,
+      "output_cost_per_token": 1.6800280000000001e-06
+    },
+    "aihubmix/deepseek-v4-flash": {
+      "input_cost_per_token": 1.4199999999999997e-07,
+      "output_cost_per_token": 2.8399999999999995e-07
+    },
+    "aihubmix/deepseek-v4-flash-0731": {
+      "input_cost_per_token": 1.4199999999999997e-07,
+      "output_cost_per_token": 2.8399999999999995e-07
+    },
+    "aihubmix/deepseek-v4-flash-0731-fast": {
+      "input_cost_per_token": 2.8e-07,
+      "output_cost_per_token": 1.4e-06
+    },
+    "aihubmix/deepseek-v4-flash-vision-exp": {
+      "input_cost_per_token": 1.55e-07,
+      "output_cost_per_token": 6.2e-07
+    },
+    "aihubmix/deepseek-v4-pro": {
+      "input_cost_per_token": 1.69e-06,
+      "output_cost_per_token": 3.38e-06
+    },
+    "aihubmix/deepseek-v4-pro-0813": {
+      "input_cost_per_token": 6.918e-07,
+      "output_cost_per_token": 2.0754e-06
+    },
+    "aihubmix/deepseek-v4.1-flash": {
+      "input_cost_per_token": 1.55e-07,
+      "output_cost_per_token": 6.2e-07
+    },
+    "aihubmix/deepseek-v4.1-flash-1017": {
+      "input_cost_per_token": 1.55e-07,
+      "output_cost_per_token": 6.2e-07
+    },
+    "aihubmix/doubao-1-5-pro-256k-250115": {
+      "input_cost_per_token": 6.84e-07,
+      "output_cost_per_token": 1.2312000000000002e-06
+    },
+    "aihubmix/doubao-1-5-pro-32k-250115": {
+      "input_cost_per_token": 1.08e-07,
+      "output_cost_per_token": 2.7e-07
+    },
+    "aihubmix/doubao-1-5-thinking-vision-pro-250428": {
+      "input_cost_per_token": 3e-06,
+      "output_cost_per_token": 9e-06
+    },
+    "aihubmix/doubao-1.5-lite-32k": {
+      "input_cost_per_token": 4.1096e-08,
+      "output_cost_per_token": 8.2192e-08
+    },
+    "aihubmix/doubao-1.5-pro-256k": {
+      "input_cost_per_token": 6.84932e-07,
+      "output_cost_per_token": 1.2328776e-06
+    },
+    "aihubmix/doubao-1.5-pro-32k": {
+      "input_cost_per_token": 1.0959e-07,
+      "output_cost_per_token": 2.7397500000000004e-07
+    },
+    "aihubmix/doubao-1.5-thinking-pro": {
+      "input_cost_per_token": 5.479460000000001e-07,
+      "output_cost_per_token": 2.1917840000000003e-06
+    },
+    "aihubmix/doubao-1.5-vision-pro-32k": {
+      "input_cost_per_token": 4.6000000000000004e-07,
+      "output_cost_per_token": 1.38e-06
+    },
+    "aihubmix/doubao-lite-128k": {
+      "input_cost_per_token": 1.0959e-07,
+      "output_cost_per_token": 1.3698750000000002e-07
+    },
+    "aihubmix/doubao-lite-32k": {
+      "input_cost_per_token": 4.1096e-08,
+      "output_cost_per_token": 8.2192e-08
+    },
+    "aihubmix/doubao-lite-4k": {
+      "input_cost_per_token": 4.1096e-08,
+      "output_cost_per_token": 8.2192e-08
+    },
+    "aihubmix/doubao-pro-128k": {
+      "input_cost_per_token": 8.000000000000001e-07,
+      "output_cost_per_token": 1.44e-06
+    },
+    "aihubmix/doubao-pro-256k": {
+      "input_cost_per_token": 6.84932e-07,
+      "output_cost_per_token": 1.2328776e-06
+    },
+    "aihubmix/doubao-pro-32k": {
+      "input_cost_per_token": 1.0959e-07,
+      "output_cost_per_token": 2.7397500000000004e-07
+    },
+    "aihubmix/doubao-pro-4k": {
+      "input_cost_per_token": 1.4e-07,
+      "output_cost_per_token": 3.5e-07
+    },
+    "aihubmix/doubao-seed-1-6": {
+      "input_cost_per_token": 1.0959e-07,
+      "output_cost_per_token": 1.0959000000000002e-06
+    },
+    "aihubmix/doubao-seed-1-6-250615": {
+      "input_cost_per_token": 1.0959e-07,
+      "output_cost_per_token": 1.0959000000000002e-06
+    },
+    "aihubmix/doubao-seed-1-6-flash": {
+      "input_cost_per_token": 2.0548e-08,
+      "output_cost_per_token": 2.0547999999999998e-07
+    },
+    "aihubmix/doubao-seed-1-6-flash-250615": {
+      "input_cost_per_token": 2.0548e-08,
+      "output_cost_per_token": 2.0547999999999998e-07
+    },
+    "aihubmix/doubao-seed-1-6-lite": {
+      "input_cost_per_token": 4.1096e-08,
+      "output_cost_per_token": 3.28768e-07
+    },
+    "aihubmix/doubao-seed-1-6-thinking": {
+      "input_cost_per_token": 1.0959e-07,
+      "output_cost_per_token": 1.0959000000000002e-06
+    },
+    "aihubmix/doubao-seed-1-6-thinking-250615": {
+      "input_cost_per_token": 1.0959e-07,
+      "output_cost_per_token": 1.0959000000000002e-06
+    },
+    "aihubmix/doubao-seed-1-6-vision-250815": {
+      "input_cost_per_token": 1.0959e-07,
+      "output_cost_per_token": 1.0959000000000002e-06
+    },
+    "aihubmix/doubao-seed-2-0-code-preview": {
+      "input_cost_per_token": 4.822e-07,
+      "output_cost_per_token": 2.411e-06
+    },
+    "aihubmix/doubao-seed-2-0-lite-260215": {
+      "input_cost_per_token": 9.041e-08,
+      "output_cost_per_token": 5.424600000000001e-07
+    },
+    "aihubmix/doubao-seed-2-0-lite-260428": {
+      "input_cost_per_token": 9.041e-08,
+      "output_cost_per_token": 5.424600000000001e-07
+    },
+    "aihubmix/doubao-seed-2-0-mini-260428": {
+      "input_cost_per_token": 3.0136e-08,
+      "output_cost_per_token": 3.0136e-07
+    },
+    "aihubmix/doubao-seed-2-0-pro": {
+      "input_cost_per_token": 4.958e-07,
+      "output_cost_per_token": 2.479e-06
+    },
+    "aihubmix/doubao-seed-2-1-pro": {
+      "input_cost_per_token": 9.295e-07,
+      "output_cost_per_token": 4.6475e-06
+    },
+    "aihubmix/doubao-seed-2-1-pro-260628": {
+      "input_cost_per_token": 9.295e-07,
+      "output_cost_per_token": 4.6475e-06
+    },
+    "aihubmix/doubao-seed-2-1-turbo": {
+      "input_cost_per_token": 4.6475e-07,
+      "output_cost_per_token": 2.32375e-06
+    },
+    "aihubmix/doubao-seed-code-preview-latest": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/ernie-4.5": {
+      "input_cost_per_token": 6.8e-08,
+      "output_cost_per_token": 2.72e-07
+    },
+    "aihubmix/ernie-4.5-0.3b": {
+      "input_cost_per_token": 1.36e-08,
+      "output_cost_per_token": 5.44e-08
+    },
+    "aihubmix/ernie-4.5-turbo-128k-preview": {
+      "input_cost_per_token": 1.08e-07,
+      "output_cost_per_token": 4.32e-07
+    },
+    "aihubmix/ernie-4.5-turbo-latest": {
+      "input_cost_per_token": 1.1e-07,
+      "output_cost_per_token": 4.4e-07
+    },
+    "aihubmix/ernie-4.5-turbo-vl": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "aihubmix/ernie-5.0": {
+      "input_cost_per_token": 8.219199999999999e-07,
+      "output_cost_per_token": 3.2876799999999998e-06
+    },
+    "aihubmix/ernie-5.0-thinking-exp": {
+      "input_cost_per_token": 8.219199999999999e-07,
+      "output_cost_per_token": 3.2876799999999998e-06
+    },
+    "aihubmix/ernie-5.0-thinking-preview": {
+      "input_cost_per_token": 8.219199999999999e-07,
+      "output_cost_per_token": 3.2876799999999998e-06
+    },
+    "aihubmix/ernie-5.1": {
+      "input_cost_per_token": 5.634e-07,
+      "output_cost_per_token": 2.5352999999999997e-06
+    },
+    "aihubmix/ernie-5.5-flash-preview": {
+      "input_cost_per_token": 1.4699999999999998e-07,
+      "output_cost_per_token": 5.879999999999999e-07
+    },
+    "aihubmix/ernie-x1-turbo": {
+      "input_cost_per_token": 1.36e-07,
+      "output_cost_per_token": 5.44e-07
+    },
+    "aihubmix/ernie-x1.1-preview": {
+      "input_cost_per_token": 1.36e-07,
+      "output_cost_per_token": 5.44e-07
+    },
+    "aihubmix/gemini-2.5-flash-image": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 2.499e-06
+    },
+    "aihubmix/gemini-2.5-flash-preview-05-20-nothink": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 2.499e-06
+    },
+    "aihubmix/gemini-2.5-flash-preview-05-20-search": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 2.499e-06
+    },
+    "aihubmix/gemini-2.5-flash-search": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 2.499e-06
+    },
+    "aihubmix/gemini-2.5-pro": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gemini-2.5-pro-exp-03-25": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gemini-2.5-pro-preview-03-25": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gemini-2.5-pro-preview-03-25-search": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gemini-2.5-pro-preview-05-06": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gemini-2.5-pro-preview-05-06-search": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gemini-2.5-pro-preview-06-05": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gemini-2.5-pro-preview-06-05-search": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gemini-2.5-pro-search": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gemini-3-flash-preview": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 3e-06
+    },
+    "aihubmix/gemini-3-flash-preview-search": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 3e-06
+    },
+    "aihubmix/gemini-3-pro-image": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1.2e-05
+    },
+    "aihubmix/gemini-3-pro-image-preview": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1.2e-05
+    },
+    "aihubmix/gemini-3.1-flash-image": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 3e-06
+    },
+    "aihubmix/gemini-3.1-flash-image-preview": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 3e-06
+    },
+    "aihubmix/gemini-3.1-flash-lite": {
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 1.5e-06
+    },
+    "aihubmix/gemini-3.1-flash-lite-image": {
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 1.5e-06
+    },
+    "aihubmix/gemini-3.1-flash-lite-nothink": {
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 1.5e-06
+    },
+    "aihubmix/gemini-3.1-pro-preview": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1.2e-05
+    },
+    "aihubmix/gemini-3.1-pro-preview-customtools": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1.2e-05
+    },
+    "aihubmix/gemini-3.1-pro-preview-search": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1.2e-05
+    },
+    "aihubmix/gemini-3.5-flash": {
+      "input_cost_per_token": 7.5e-07,
+      "output_cost_per_token": 3.75e-06
+    },
+    "aihubmix/gemini-3.5-flash-lite": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 2.499999e-06
+    },
+    "aihubmix/gemini-3.6-flash": {
+      "input_cost_per_token": 7.5e-07,
+      "output_cost_per_token": 3.75e-06
+    },
+    "aihubmix/gemini-3.7-flash": {
+      "input_cost_per_token": 7.5e-07,
+      "output_cost_per_token": 3.75e-06
+    },
+    "aihubmix/gemini-3.8-flash": {
+      "input_cost_per_token": 7.5e-07,
+      "output_cost_per_token": 3.75e-06
+    },
+    "aihubmix/gemini-4-argon": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gemini-4-carbon": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gemini-4-hydrogen": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 7.5e-06
+    },
+    "aihubmix/gemini-4-neon": {
+      "input_cost_per_token": 3e-06,
+      "output_cost_per_token": 1.5e-05
+    },
+    "aihubmix/gemini-exp-1114": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 5e-06
+    },
+    "aihubmix/gemini-exp-1121": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 5e-06
+    },
+    "aihubmix/gemini-exp-1206": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 5e-06
+    },
+    "aihubmix/gemini-nano-banana-2.1": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 7.5e-06
+    },
+    "aihubmix/gemini-pro": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/gemini-pro-vision": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 1e-06
+    },
+    "aihubmix/gemma-3-12b-it": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/gemma-3-1b-it": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/gemma-3-27b-it": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/gemma-3-4b-it": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/gemma-3n-e4b-it": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/gemma-4-26b-a4b-it": {
+      "input_cost_per_token": 1.4e-07,
+      "output_cost_per_token": 3.9998e-07
+    },
+    "aihubmix/gemma-4-31b-it": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "aihubmix/gemma-7b-it": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 1.0000000000000001e-07
+    },
+    "aihubmix/glm-3-turbo": {
+      "input_cost_per_token": 7.1e-07,
+      "output_cost_per_token": 7.1e-07
+    },
+    "aihubmix/glm-4": {
+      "input_cost_per_token": 1.42e-05,
+      "output_cost_per_token": 1.42e-05
+    },
+    "aihubmix/glm-4-flash": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 1.0000000000000001e-07
+    },
+    "aihubmix/glm-4-plus": {
+      "input_cost_per_token": 8e-06,
+      "output_cost_per_token": 8e-06
+    },
+    "aihubmix/glm-4.5": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 1.6000000000000001e-06
+    },
+    "aihubmix/glm-4.5-air": {
+      "input_cost_per_token": 1.4e-07,
+      "output_cost_per_token": 8.4e-07
+    },
+    "aihubmix/glm-4.5-airx": {
+      "input_cost_per_token": 1.1e-06,
+      "output_cost_per_token": 4.51e-06
+    },
+    "aihubmix/glm-4.5-x": {
+      "input_cost_per_token": 2.2e-06,
+      "output_cost_per_token": 8.91e-06
+    },
+    "aihubmix/glm-4.5v": {
+      "input_cost_per_token": 2.7400000000000004e-07,
+      "output_cost_per_token": 1.0960000000000002e-06
+    },
+    "aihubmix/glm-4.6": {
+      "input_cost_per_token": 2.73974e-07,
+      "output_cost_per_token": 1.095896e-06
+    },
+    "aihubmix/glm-4.6v": {
+      "input_cost_per_token": 1.3700000000000002e-07,
+      "output_cost_per_token": 4.1099999999999996e-07
+    },
+    "aihubmix/glm-4.7": {
+      "input_cost_per_token": 2.73974e-07,
+      "output_cost_per_token": 1.095896e-06
+    },
+    "aihubmix/glm-4v": {
+      "input_cost_per_token": 1.42e-05,
+      "output_cost_per_token": 1.42e-05
+    },
+    "aihubmix/glm-4v-plus": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/glm-5-turbo": {
+      "input_cost_per_token": 1.2e-06,
+      "output_cost_per_token": 3.9996e-06
+    },
+    "aihubmix/glm-5.1": {
+      "input_cost_per_token": 8.45e-07,
+      "output_cost_per_token": 3.38e-06
+    },
+    "aihubmix/glm-5.2": {
+      "input_cost_per_token": 1.1268e-06,
+      "output_cost_per_token": 3.9438e-06
+    },
+    "aihubmix/glm-5.2-fast-preview": {
+      "input_cost_per_token": 2.254e-06,
+      "output_cost_per_token": 7.889e-06
+    },
+    "aihubmix/glm-5.3": {
+      "input_cost_per_token": 1.1268e-06,
+      "output_cost_per_token": 3.9438e-06
+    },
+    "aihubmix/glm-5.3-flash": {
+      "input_cost_per_token": 1.1268e-07,
+      "output_cost_per_token": 3.9438e-07
+    },
+    "aihubmix/glm-5.3-flashx": {
+      "input_cost_per_token": 2.8199999999999996e-07,
+      "output_cost_per_token": 9.87e-07
+    },
+    "aihubmix/glm-5.3-prime": {
+      "input_cost_per_token": 2.35e-06,
+      "output_cost_per_token": 8.23e-06
+    },
+    "aihubmix/glm-5v-turbo": {
+      "input_cost_per_token": 7.042000000000001e-07,
+      "output_cost_per_token": 3.09848e-06
+    },
+    "aihubmix/glm-zero-preview": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/google-gemma-3-12b-it": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/google-gemma-3-27b-it": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/google-gemma-3-4b-it": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/google/gemini-exp-1114": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 5e-06
+    },
+    "aihubmix/google/gemma-2-27b-it": {
+      "input_cost_per_token": 8.000000000000001e-07,
+      "output_cost_per_token": 8.000000000000001e-07
+    },
+    "aihubmix/gpt-3.5-turbo": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 1.5e-06
+    },
+    "aihubmix/gpt-3.5-turbo-1106": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/gpt-3.5-turbo-16k": {
+      "input_cost_per_token": 3e-06,
+      "output_cost_per_token": 4e-06
+    },
+    "aihubmix/gpt-3.5-turbo-instruct": {
+      "input_cost_per_token": 1.5e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/gpt-4": {
+      "input_cost_per_token": 3e-05,
+      "output_cost_per_token": 6e-05
+    },
+    "aihubmix/gpt-4-0613": {
+      "input_cost_per_token": 3e-05,
+      "output_cost_per_token": 6e-05
+    },
+    "aihubmix/gpt-4-1106-preview": {
+      "input_cost_per_token": 1e-05,
+      "output_cost_per_token": 3e-05
+    },
+    "aihubmix/gpt-4-turbo": {
+      "input_cost_per_token": 1e-05,
+      "output_cost_per_token": 3e-05
+    },
+    "aihubmix/gpt-4-turbo-2024-04-09": {
+      "input_cost_per_token": 1e-05,
+      "output_cost_per_token": 3e-05
+    },
+    "aihubmix/gpt-4.1": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 8e-06
+    },
+    "aihubmix/gpt-4.1-mini": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 1.6000000000000001e-06
+    },
+    "aihubmix/gpt-4.1-nano": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "aihubmix/gpt-4o": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gpt-4o-2024-05-13": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 1.5e-05
+    },
+    "aihubmix/gpt-4o-2024-08-06": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gpt-4o-2024-08-06-global": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gpt-4o-2024-11-20": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gpt-4o-mini": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/gpt-4o-mini-2024-07-18": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/gpt-4o-mini-audio-preview": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/gpt-4o-mini-global": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/gpt-4o-mini-search-preview": {
+      "input_cost_per_token": 1.5e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/gpt-4o-search-preview": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gpt-4o-zh": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gpt-5": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gpt-5-chat-latest": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 3e-05
+    },
+    "aihubmix/gpt-5-codex": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gpt-5-mini": {
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/gpt-5-nano": {
+      "input_cost_per_token": 5.0000000000000004e-08,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "aihubmix/gpt-5-pro": {
+      "input_cost_per_token": 1.5e-05,
+      "output_cost_per_token": 0.00012
+    },
+    "aihubmix/gpt-5.1": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gpt-5.1-chat-latest": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 3e-05
+    },
+    "aihubmix/gpt-5.1-codex": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gpt-5.1-codex-max": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gpt-5.1-codex-mini": {
+      "input_cost_per_token": 2.5e-07,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/gpt-5.2": {
+      "input_cost_per_token": 1.75e-06,
+      "output_cost_per_token": 1.4e-05
+    },
+    "aihubmix/gpt-5.2-chat-latest": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 3e-05
+    },
+    "aihubmix/gpt-5.2-codex": {
+      "input_cost_per_token": 1.75e-06,
+      "output_cost_per_token": 1.4e-05
+    },
+    "aihubmix/gpt-5.2-high": {
+      "input_cost_per_token": 1.75e-06,
+      "output_cost_per_token": 1.4e-05
+    },
+    "aihubmix/gpt-5.2-low": {
+      "input_cost_per_token": 1.75e-06,
+      "output_cost_per_token": 1.4e-05
+    },
+    "aihubmix/gpt-5.2-pro": {
+      "input_cost_per_token": 2.1e-05,
+      "output_cost_per_token": 0.000168
+    },
+    "aihubmix/gpt-5.3-chat-latest": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 3e-05
+    },
+    "aihubmix/gpt-5.3-codex": {
+      "input_cost_per_token": 1.75e-06,
+      "output_cost_per_token": 1.4e-05
+    },
+    "aihubmix/gpt-5.4": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1.5e-05
+    },
+    "aihubmix/gpt-5.4-high": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1.5e-05
+    },
+    "aihubmix/gpt-5.4-low": {
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1.5e-05
+    },
+    "aihubmix/gpt-5.4-mini": {
+      "input_cost_per_token": 7.5e-07,
+      "output_cost_per_token": 4.5e-06
+    },
+    "aihubmix/gpt-5.4-nano": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 1.25e-06
+    },
+    "aihubmix/gpt-5.4-pro": {
+      "input_cost_per_token": 3e-05,
+      "output_cost_per_token": 0.00018
+    },
+    "aihubmix/gpt-5.5": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 3e-05
+    },
+    "aihubmix/gpt-5.5-pro": {
+      "input_cost_per_token": 3e-05,
+      "output_cost_per_token": 0.00018
+    },
+    "aihubmix/gpt-5.6-luna": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "aihubmix/gpt-5.6-sol": {
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 2e-05
+    },
+    "aihubmix/gpt-5.6-sol-disc": {
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 2e-05
+    },
+    "aihubmix/gpt-5.6-sol-pro": {
+      "input_cost_per_token": 8e-06,
+      "output_cost_per_token": 4e-05
+    },
+    "aihubmix/gpt-5.6-terra": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1.2e-05
+    },
+    "aihubmix/gpt-6-astra": {
+      "input_cost_per_token": 1e-05,
+      "output_cost_per_token": 5e-05
+    },
+    "aihubmix/gpt-6-luna": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 5e-07
+    },
+    "aihubmix/gpt-6-sol": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gpt-6.1-sol": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gpt-6.1-terra": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 5e-06
+    },
+    "aihubmix/gpt-6.2-astra": {
+      "input_cost_per_token": 8e-06,
+      "output_cost_per_token": 4e-05
+    },
+    "aihubmix/gpt-6.2-sol": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/gpt-chat-latest": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 3e-05
+    },
+    "aihubmix/gpt-oss-120b": {
+      "input_cost_per_token": 1.8e-07,
+      "output_cost_per_token": 9.000000000000001e-07
+    },
+    "aihubmix/gpt-oss-20b": {
+      "input_cost_per_token": 1.1e-07,
+      "output_cost_per_token": 5.5e-07
+    },
+    "aihubmix/grok-2-1212": {
+      "input_cost_per_token": 1.8000000000000001e-06,
+      "output_cost_per_token": 9e-06
+    },
+    "aihubmix/grok-2-vision-1212": {
+      "input_cost_per_token": 1.8000000000000001e-06,
+      "output_cost_per_token": 9e-06
+    },
+    "aihubmix/grok-3-beta": {
+      "input_cost_per_token": 3e-06,
+      "output_cost_per_token": 1.5e-05
+    },
+    "aihubmix/grok-3-fast": {
+      "input_cost_per_token": 5.5e-06,
+      "output_cost_per_token": 2.75e-05
+    },
+    "aihubmix/grok-3-fast-beta": {
+      "input_cost_per_token": 5.5e-06,
+      "output_cost_per_token": 2.75e-05
+    },
+    "aihubmix/grok-3-mini": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 5.01e-07
+    },
+    "aihubmix/grok-3-mini-beta": {
+      "input_cost_per_token": 3.3e-07,
+      "output_cost_per_token": 5.511e-07
+    },
+    "aihubmix/grok-3-mini-fast-beta": {
+      "input_cost_per_token": 3.3e-07,
+      "output_cost_per_token": 2.20011e-06
+    },
+    "aihubmix/grok-4": {
+      "input_cost_per_token": 3.2999999999999997e-06,
+      "output_cost_per_token": 1.65e-05
+    },
+    "aihubmix/grok-4-1-fast-non-reasoning": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 5e-07
+    },
+    "aihubmix/grok-4-1-fast-reasoning": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 5e-07
+    },
+    "aihubmix/grok-4-20-non-reasoning": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06
+    },
+    "aihubmix/grok-4-20-reasoning": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06
+    },
+    "aihubmix/grok-4.20-beta-0309-non-reasoning": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06
+    },
+    "aihubmix/grok-4.20-beta-0309-reasoning": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06
+    },
+    "aihubmix/grok-4.20-multi-agent-0309": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06
+    },
+    "aihubmix/grok-4.20-multi-agent-beta-0309": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06
+    },
+    "aihubmix/grok-4.3": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 2.5e-06
+    },
+    "aihubmix/grok-4.5": {
+      "input_cost_per_token": 2.2e-06,
+      "output_cost_per_token": 6.5999999999999995e-06
+    },
+    "aihubmix/grok-4.6": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06
+    },
+    "aihubmix/grok-4.7": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06
+    },
+    "aihubmix/grok-build-0.1": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/grok-code-fast-1": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/grok-vision-beta": {
+      "input_cost_per_token": 5.6e-06,
+      "output_cost_per_token": 1.6800000000000002e-05
+    },
+    "aihubmix/groq-llama-3.1-8b-instant": {
+      "input_cost_per_token": 5.5e-08,
+      "output_cost_per_token": 8.8e-08
+    },
+    "aihubmix/groq-llama-3.3-70b-versatile": {
+      "input_cost_per_token": 6.490000000000001e-07,
+      "output_cost_per_token": 8.690109999999999e-07
+    },
+    "aihubmix/groq-llama-4-maverick-17b-128e-instruct": {
+      "input_cost_per_token": 2.2e-07,
+      "output_cost_per_token": 6.6e-07
+    },
+    "aihubmix/groq-llama-4-scout-17b-16e-instruct": {
+      "input_cost_per_token": 1.22e-07,
+      "output_cost_per_token": 3.6599999999999997e-07
+    },
+    "aihubmix/gryphe/mythomax-l2-13b": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "aihubmix/hy3": {
+      "input_cost_per_token": 1.562e-07,
+      "output_cost_per_token": 6.248e-07
+    },
+    "aihubmix/hy4": {
+      "input_cost_per_token": 8.823e-07,
+      "output_cost_per_token": 2.647e-06
+    },
+    "aihubmix/hy4-flash": {
+      "input_cost_per_token": 8.1e-08,
+      "output_cost_per_token": 3.24e-07
+    },
+    "aihubmix/hy4-preview": {
+      "input_cost_per_token": 8.45e-07,
+      "output_cost_per_token": 2.5350000000000003e-06
+    },
+    "aihubmix/inclusionai/ling-1t": {
+      "input_cost_per_token": 5.480000000000001e-07,
+      "output_cost_per_token": 2.1920000000000004e-06
+    },
+    "aihubmix/inclusionai/ling-flash-2.0": {
+      "input_cost_per_token": 1.36e-07,
+      "output_cost_per_token": 5.44e-07
+    },
+    "aihubmix/inclusionai/ling-mini-2.0": {
+      "input_cost_per_token": 6.8e-08,
+      "output_cost_per_token": 2.72e-07
+    },
+    "aihubmix/inclusionai/ring-1t": {
+      "input_cost_per_token": 5.480000000000001e-07,
+      "output_cost_per_token": 2.1920000000000004e-06
+    },
+    "aihubmix/inclusionai/ring-flash-2.0": {
+      "input_cost_per_token": 1.36e-07,
+      "output_cost_per_token": 5.44e-07
+    },
+    "aihubmix/inkling-2-small": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1e-06
+    },
+    "aihubmix/jina-deepsearch-v1": {
+      "input_cost_per_token": 5.0000000000000004e-08,
+      "output_cost_per_token": 5.0000000000000004e-08
+    },
+    "aihubmix/kimi-k2-instruct": {
+      "input_cost_per_token": 5.4e-07,
+      "output_cost_per_token": 2.16e-06
+    },
+    "aihubmix/kimi-k2-thinking": {
+      "input_cost_per_token": 5.480000000000001e-07,
+      "output_cost_per_token": 2.1920000000000004e-06
+    },
+    "aihubmix/kimi-k2-turbo-preview": {
+      "input_cost_per_token": 1.2e-06,
+      "output_cost_per_token": 4.8e-06
+    },
+    "aihubmix/kimi-k2.5": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 3e-06
+    },
+    "aihubmix/kimi-k2.6": {
+      "input_cost_per_token": 9.499999999999999e-07,
+      "output_cost_per_token": 3.9994999999999996e-06
+    },
+    "aihubmix/kimi-k2.7-code": {
+      "input_cost_per_token": 9.499999999999999e-07,
+      "output_cost_per_token": 3.9994999999999996e-06
+    },
+    "aihubmix/kimi-k2.7-code-highspeed": {
+      "input_cost_per_token": 1.8999999999999998e-06,
+      "output_cost_per_token": 7.998999999999999e-06
+    },
+    "aihubmix/kimi-k3": {
+      "input_cost_per_token": 2.84e-06,
+      "output_cost_per_token": 1.42e-05
+    },
+    "aihubmix/kimi-k3.1-pro": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/kimi-k3.1-pro-highspeed": {
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 2.1e-05
+    },
+    "aihubmix/kimi-thinking-preview": {
+      "input_cost_per_token": 3e-05,
+      "output_cost_per_token": 3e-05
+    },
+    "aihubmix/laguna-s-2.1": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/laguna-xs-2.1": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/learnlm-1.5-pro-experimental": {
+      "input_cost_per_token": 1.25e-06,
+      "output_cost_per_token": 5e-06
+    },
+    "aihubmix/ling-3.0-flash": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 1.8e-07
+    },
+    "aihubmix/ling-3.1-flash": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 9.000000000000001e-07
+    },
+    "aihubmix/llama-3.1-405b-instruct": {
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 4e-06
+    },
+    "aihubmix/llama-3.1-405b-reasoning": {
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 4e-06
+    },
+    "aihubmix/llama-3.1-70b": {
+      "input_cost_per_token": 4.4e-07,
+      "output_cost_per_token": 4.4e-07
+    },
+    "aihubmix/llama-3.1-70b-versatile": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/llama-3.1-8b-instant": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/llama-3.2-11b-vision-preview": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/llama-3.2-1b-preview": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/llama-3.2-3b-preview": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/llama-3.2-90b-vision-preview": {
+      "input_cost_per_token": 2.4e-06,
+      "output_cost_per_token": 2.4e-06
+    },
+    "aihubmix/llama-3.3-70b": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/llama-4-maverick": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/llama-4-scout": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/llama2-70b-4096": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 5e-07
+    },
+    "aihubmix/llama2-70b-40960": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 5e-07
+    },
+    "aihubmix/llama2-7b-2048": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 1.0000000000000001e-07
+    },
+    "aihubmix/llama3-70b-8192": {
+      "input_cost_per_token": 7e-07,
+      "output_cost_per_token": 9.37288e-07
+    },
+    "aihubmix/llama3-70b-8192(33)": {
+      "input_cost_per_token": 2.65e-06,
+      "output_cost_per_token": 2.65e-06
+    },
+    "aihubmix/llama3-8b-8192": {
+      "input_cost_per_token": 6e-08,
+      "output_cost_per_token": 1.2e-07
+    },
+    "aihubmix/llama3-8b-8192(33)": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 3e-07
+    },
+    "aihubmix/llama3-groq-70b-8192-tool-use-preview": {
+      "input_cost_per_token": 8.899999999999999e-10,
+      "output_cost_per_token": 8.899999999999999e-10
+    },
+    "aihubmix/llama3-groq-8b-8192-tool-use-preview": {
+      "input_cost_per_token": 1.9000000000000002e-10,
+      "output_cost_per_token": 1.9000000000000002e-10
+    },
+    "aihubmix/llama3.1-8b": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/longcat-2.0": {
+      "input_cost_per_token": 7.746e-07,
+      "output_cost_per_token": 3.0984e-06
+    },
+    "aihubmix/longcat-flash-chat": {
+      "input_cost_per_token": 1.4e-07,
+      "output_cost_per_token": 7e-07
+    },
+    "aihubmix/mai-thinking-1": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 8e-06
+    },
+    "aihubmix/mercury-2.5-preview": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 7.5e-07
+    },
+    "aihubmix/meta-llama-3-70b": {
+      "input_cost_per_token": 4.795e-06,
+      "output_cost_per_token": 4.795e-06
+    },
+    "aihubmix/meta-llama-3-8b": {
+      "input_cost_per_token": 5.480000000000001e-07,
+      "output_cost_per_token": 5.480000000000001e-07
+    },
+    "aihubmix/meta-llama/llama-3.1-405b-instruct:free": {
+      "input_cost_per_token": 2e-08,
+      "output_cost_per_token": 2e-08
+    },
+    "aihubmix/meta-llama/llama-3.1-70b-instruct:free": {
+      "input_cost_per_token": 2e-08,
+      "output_cost_per_token": 2e-08
+    },
+    "aihubmix/meta-llama/llama-3.1-8b-instruct:free": {
+      "input_cost_per_token": 2e-08,
+      "output_cost_per_token": 2e-08
+    },
+    "aihubmix/meta-llama/llama-3.2-11b-vision-instruct:free": {
+      "input_cost_per_token": 2e-08,
+      "output_cost_per_token": 2e-08
+    },
+    "aihubmix/meta-llama/llama-3.2-3b-instruct:free": {
+      "input_cost_per_token": 2e-08,
+      "output_cost_per_token": 2e-08
+    },
+    "aihubmix/meta-llama/llama-3.2-90b-vision-instruct": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 5e-07
+    },
+    "aihubmix/meta/llama-3.1-405b-instruct": {
+      "input_cost_per_token": 5e-06,
+      "output_cost_per_token": 5e-06
+    },
+    "aihubmix/meta/llama3-8b-chat": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 3e-07
+    },
+    "aihubmix/mimo-v2.6-flash": {
+      "input_cost_per_token": 1.55e-07,
+      "output_cost_per_token": 3.1e-07
+    },
+    "aihubmix/mimo-v2.6-pro": {
+      "input_cost_per_token": 4.8e-07,
+      "output_cost_per_token": 9.6e-07
+    },
+    "aihubmix/mimo-v2.6-pro-ultraspeed": {
+      "input_cost_per_token": 4.8e-06,
+      "output_cost_per_token": 9.6e-06
+    },
+    "aihubmix/minimax-m2.1": {
+      "input_cost_per_token": 2.88e-07,
+      "output_cost_per_token": 1.152e-06
+    },
+    "aihubmix/minimax-m2.5": {
+      "input_cost_per_token": 2.88e-07,
+      "output_cost_per_token": 1.152e-06
+    },
+    "aihubmix/minimax-m2.5-highspeed": {
+      "input_cost_per_token": 2.88e-07,
+      "output_cost_per_token": 1.152e-06
+    },
+    "aihubmix/minimax-m2.7": {
+      "input_cost_per_token": 2.958e-07,
+      "output_cost_per_token": 1.1832e-06
+    },
+    "aihubmix/minimax-m3": {
+      "input_cost_per_token": 2.88e-07,
+      "output_cost_per_token": 1.152e-06
+    },
+    "aihubmix/minimax-m3.1-flash": {
+      "input_cost_per_token": 1.65e-07,
+      "output_cost_per_token": 6.6e-07
+    },
+    "aihubmix/minimax-text-01": {
+      "input_cost_per_token": 1.4e-07,
+      "output_cost_per_token": 1.12e-06
+    },
+    "aihubmix/minimaxai/minimax-m1-80k": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 2.4e-06
+    },
+    "aihubmix/mistral-large-2407": {
+      "input_cost_per_token": 3e-06,
+      "output_cost_per_token": 9e-06
+    },
+    "aihubmix/mistral-large-3": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 1.5e-06
+    },
+    "aihubmix/mistral-large-4-0": {
+      "input_cost_per_token": 1.3600000000000001e-06,
+      "output_cost_per_token": 4.17996e-06
+    },
+    "aihubmix/mistralai/mistral-7b-instruct:free": {
+      "input_cost_per_token": 2e-09,
+      "output_cost_per_token": 2e-09
+    },
+    "aihubmix/mm-minimax-m2.7-highspeed": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 1.0000000000000001e-07
+    },
+    "aihubmix/moonshot-v1-128k": {
+      "input_cost_per_token": 1e-05,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/moonshot-v1-128k-vision-preview": {
+      "input_cost_per_token": 1e-05,
+      "output_cost_per_token": 1e-05
+    },
+    "aihubmix/moonshot-v1-32k": {
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 4e-06
+    },
+    "aihubmix/moonshot-v1-32k-vision-preview": {
+      "input_cost_per_token": 4e-06,
+      "output_cost_per_token": 4e-06
+    },
+    "aihubmix/moonshot-v1-8k": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/moonshot-v1-8k-vision-preview": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/moonshotai/kimi-dev-72b": {
+      "input_cost_per_token": 3.2e-07,
+      "output_cost_per_token": 1.28e-06
+    },
+    "aihubmix/moonshotai/moonlight-16b-a3b-instruct": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/muse-spark-1.1": {
+      "input_cost_per_token": 1.375e-06,
+      "output_cost_per_token": 4.675e-06
+    },
+    "aihubmix/muse-spark-1.2": {
+      "input_cost_per_token": 1.375e-06,
+      "output_cost_per_token": 4.675e-06
+    },
+    "aihubmix/muse-spark-1.3": {
+      "input_cost_per_token": 1.375e-06,
+      "output_cost_per_token": 4.675e-06
+    },
+    "aihubmix/muse-wonder": {
+      "input_cost_per_token": 4.4e-06,
+      "output_cost_per_token": 2.2e-05
+    },
+    "aihubmix/nvidia-llama-3.1-nemotron-70b-instruct": {
+      "input_cost_per_token": 1.32e-06,
+      "output_cost_per_token": 1.32e-06
+    },
+    "aihubmix/nvidia-llama-3.3-nemotron-super-49b-v1.5": {
+      "input_cost_per_token": 1.1e-07,
+      "output_cost_per_token": 4.4e-07
+    },
+    "aihubmix/nvidia-nemotron-3-nano-30b-a3b": {
+      "input_cost_per_token": 6.600000000000001e-08,
+      "output_cost_per_token": 2.6400000000000003e-07
+    },
+    "aihubmix/nvidia-nemotron-3-super-120b-a12b": {
+      "input_cost_per_token": 1.1e-07,
+      "output_cost_per_token": 5.5e-07
+    },
+    "aihubmix/nvidia-nemotron-nano-12b-v2-vl": {
+      "input_cost_per_token": 2.2e-07,
+      "output_cost_per_token": 6.6e-07
+    },
+    "aihubmix/nvidia-nemotron-nano-9b-v2": {
+      "input_cost_per_token": 4.4e-08,
+      "output_cost_per_token": 1.76e-07
+    },
+    "aihubmix/nvidia/llama-3_1-nemotron-ultra-253b-v1": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 5e-07
+    },
+    "aihubmix/o1": {
+      "input_cost_per_token": 1.5e-05,
+      "output_cost_per_token": 6e-05
+    },
+    "aihubmix/o1-2024-12-17": {
+      "input_cost_per_token": 1.5e-05,
+      "output_cost_per_token": 6e-05
+    },
+    "aihubmix/o1-global": {
+      "input_cost_per_token": 1.5e-05,
+      "output_cost_per_token": 6e-05
+    },
+    "aihubmix/o1-mini": {
+      "input_cost_per_token": 1.1e-06,
+      "output_cost_per_token": 4.4e-06
+    },
+    "aihubmix/o1-mini-2024-09-12": {
+      "input_cost_per_token": 3e-06,
+      "output_cost_per_token": 1.2e-05
+    },
+    "aihubmix/o1-preview": {
+      "input_cost_per_token": 1.5e-05,
+      "output_cost_per_token": 6e-05
+    },
+    "aihubmix/o1-preview-2024-09-12": {
+      "input_cost_per_token": 1.5e-05,
+      "output_cost_per_token": 6e-05
+    },
+    "aihubmix/o1-pro": {
+      "input_cost_per_token": 0.00015,
+      "output_cost_per_token": 0.0006
+    },
+    "aihubmix/o3": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 8e-06
+    },
+    "aihubmix/o3-deep-research": {
+      "input_cost_per_token": 1e-05,
+      "output_cost_per_token": 4e-05
+    },
+    "aihubmix/o3-global": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 8e-06
+    },
+    "aihubmix/o3-mini": {
+      "input_cost_per_token": 1.1e-06,
+      "output_cost_per_token": 4.4e-06
+    },
+    "aihubmix/o3-mini-global": {
+      "input_cost_per_token": 1.1e-06,
+      "output_cost_per_token": 4.4e-06
+    },
+    "aihubmix/o3-pro": {
+      "input_cost_per_token": 2e-05,
+      "output_cost_per_token": 8e-05
+    },
+    "aihubmix/o3-pro-global": {
+      "input_cost_per_token": 2e-05,
+      "output_cost_per_token": 8e-05
+    },
+    "aihubmix/o4-mini": {
+      "input_cost_per_token": 1.1e-06,
+      "output_cost_per_token": 4.4e-06
+    },
+    "aihubmix/pro/thudm/glm-4.1v-9b-thinking": {
+      "input_cost_per_token": 4e-08,
+      "output_cost_per_token": 1.6e-07
+    },
+    "aihubmix/qianfan-chinese-llama-2-13b": {
+      "input_cost_per_token": 8.219999999999999e-07,
+      "output_cost_per_token": 8.219999999999999e-07
+    },
+    "aihubmix/qianfan-llama-vl-8b": {
+      "input_cost_per_token": 2.7400000000000004e-07,
+      "output_cost_per_token": 6.85e-07
+    },
+    "aihubmix/qianfan-qi-vl": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/qwen-3-235b-a22b-instruct-2507": {
+      "input_cost_per_token": 2.8e-07,
+      "output_cost_per_token": 1.4e-06
+    },
+    "aihubmix/qwen-3-235b-a22b-thinking-2507": {
+      "input_cost_per_token": 2.8e-07,
+      "output_cost_per_token": 2.8e-06
+    },
+    "aihubmix/qwen-3-32b": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 1.6000000000000001e-06
+    },
+    "aihubmix/qwen-3.8-27b": {
+      "input_cost_per_token": 1.1e-06,
+      "output_cost_per_token": 1.6499999999999999e-06
+    },
+    "aihubmix/qwen-flash": {
+      "input_cost_per_token": 2.0545999999999997e-08,
+      "output_cost_per_token": 2.0546000000000001e-07
+    },
+    "aihubmix/qwen-flash-2025-07-28": {
+      "input_cost_per_token": 2.0545999999999997e-08,
+      "output_cost_per_token": 2.0546000000000001e-07
+    },
+    "aihubmix/qwen-long": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "aihubmix/qwen-max": {
+      "input_cost_per_token": 3.8e-07,
+      "output_cost_per_token": 1.52e-06
+    },
+    "aihubmix/qwen-max-0125": {
+      "input_cost_per_token": 3.8e-07,
+      "output_cost_per_token": 1.52e-06
+    },
+    "aihubmix/qwen-max-longcontext": {
+      "input_cost_per_token": 7e-06,
+      "output_cost_per_token": 2.1e-05
+    },
+    "aihubmix/qwen-mt-plus": {
+      "input_cost_per_token": 4.92e-07,
+      "output_cost_per_token": 1.476e-06
+    },
+    "aihubmix/qwen-mt-turbo": {
+      "input_cost_per_token": 1.92e-07,
+      "output_cost_per_token": 5.349120000000001e-07
+    },
+    "aihubmix/qwen-plus": {
+      "input_cost_per_token": 1.126e-07,
+      "output_cost_per_token": 1.1259999999999999e-06
+    },
+    "aihubmix/qwen-plus-2025-04-28": {
+      "input_cost_per_token": 1.126e-07,
+      "output_cost_per_token": 1.1259999999999999e-06
+    },
+    "aihubmix/qwen-plus-2025-07-28": {
+      "input_cost_per_token": 1.126e-07,
+      "output_cost_per_token": 1.1259999999999999e-06
+    },
+    "aihubmix/qwen-plus-latest": {
+      "input_cost_per_token": 1.126e-07,
+      "output_cost_per_token": 1.1259999999999999e-06
+    },
+    "aihubmix/qwen-qwq-32b": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 8.000000000000001e-07
+    },
+    "aihubmix/qwen-turbo": {
+      "input_cost_per_token": 4.6e-08,
+      "output_cost_per_token": 9.2e-08
+    },
+    "aihubmix/qwen-turbo-2024-11-01": {
+      "input_cost_per_token": 4.6e-08,
+      "output_cost_per_token": 9.2e-08
+    },
+    "aihubmix/qwen-turbo-2025-04-28": {
+      "input_cost_per_token": 4.6e-08,
+      "output_cost_per_token": 9.2e-08
+    },
+    "aihubmix/qwen-turbo-latest": {
+      "input_cost_per_token": 4.6e-08,
+      "output_cost_per_token": 9.2e-08
+    },
+    "aihubmix/qwen/qvq-72b-preview": {
+      "input_cost_per_token": 1.2e-06,
+      "output_cost_per_token": 1.2e-06
+    },
+    "aihubmix/qwen/qwen2-1.5b-instruct": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/qwen/qwen2-57b-a14b-instruct": {
+      "input_cost_per_token": 2.4e-07,
+      "output_cost_per_token": 2.4e-07
+    },
+    "aihubmix/qwen/qwen2-72b-instruct": {
+      "input_cost_per_token": 8.000000000000001e-07,
+      "output_cost_per_token": 8.000000000000001e-07
+    },
+    "aihubmix/qwen/qwen2-7b-instruct": {
+      "input_cost_per_token": 8e-08,
+      "output_cost_per_token": 8e-08
+    },
+    "aihubmix/qwen/qwen2.5-32b-instruct": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 6e-07
+    },
+    "aihubmix/qwen/qwen2.5-72b-instruct": {
+      "input_cost_per_token": 8.000000000000001e-07,
+      "output_cost_per_token": 8.000000000000001e-07
+    },
+    "aihubmix/qwen/qwen2.5-72b-instruct-128k": {
+      "input_cost_per_token": 8.000000000000001e-07,
+      "output_cost_per_token": 8.000000000000001e-07
+    },
+    "aihubmix/qwen/qwen2.5-7b-instruct": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "aihubmix/qwen/qwen2.5-coder-32b-instruct": {
+      "input_cost_per_token": 1.6e-07,
+      "output_cost_per_token": 1.6e-07
+    },
+    "aihubmix/qwen/qwen2.5-vl-32b-instruct": {
+      "input_cost_per_token": 2.4e-07,
+      "output_cost_per_token": 2.4e-07
+    },
+    "aihubmix/qwen/qwen2.5-vl-72b-instruct": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 5e-07
+    },
+    "aihubmix/qwen/qwen3-14b": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 5e-07
+    },
+    "aihubmix/qwen/qwen3-30b-a3b": {
+      "input_cost_per_token": 1e-06,
+      "output_cost_per_token": 1e-06
+    },
+    "aihubmix/qwen/qwen3-32b": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 8.000000000000001e-07
+    },
+    "aihubmix/qwen/qwen3-8b": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/qwen/qwq-32b": {
+      "input_cost_per_token": 1.4e-07,
+      "output_cost_per_token": 5.6e-07
+    },
+    "aihubmix/qwen/qwq-32b-preview": {
+      "input_cost_per_token": 1.6e-07,
+      "output_cost_per_token": 1.6e-07
+    },
+    "aihubmix/qwen2-vl-72b-instruct": {
+      "input_cost_per_token": 2.1800000000000003e-06,
+      "output_cost_per_token": 6.54e-06
+    },
+    "aihubmix/qwen2-vl-7b-instruct": {
+      "input_cost_per_token": 2.8e-07,
+      "output_cost_per_token": 7e-07
+    },
+    "aihubmix/qwen2.5-14b-instruct": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "aihubmix/qwen2.5-32b-instruct": {
+      "input_cost_per_token": 6e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "aihubmix/qwen2.5-3b-instruct": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 8.000000000000001e-07
+    },
+    "aihubmix/qwen2.5-72b-instruct": {
+      "input_cost_per_token": 8.000000000000001e-07,
+      "output_cost_per_token": 2.4e-06
+    },
+    "aihubmix/qwen2.5-7b-instruct": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 8.000000000000001e-07
+    },
+    "aihubmix/qwen2.5-coder-1.5b-instruct": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "aihubmix/qwen2.5-coder-7b-instruct": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "aihubmix/qwen2.5-math-1.5b-instruct": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/qwen2.5-math-72b-instruct": {
+      "input_cost_per_token": 8.000000000000001e-07,
+      "output_cost_per_token": 2.4e-06
+    },
+    "aihubmix/qwen2.5-math-7b-instruct": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "aihubmix/qwen2.5-vl-72b-instruct": {
+      "input_cost_per_token": 2.4e-06,
+      "output_cost_per_token": 7.2000000000000005e-06
+    },
+    "aihubmix/qwen3-0.6b": {
+      "input_cost_per_token": 4.6e-08,
+      "output_cost_per_token": 4.6000000000000004e-07
+    },
+    "aihubmix/qwen3-1.7b": {
+      "input_cost_per_token": 4.6e-08,
+      "output_cost_per_token": 4.6000000000000004e-07
+    },
+    "aihubmix/qwen3-14b": {
+      "input_cost_per_token": 1.6e-07,
+      "output_cost_per_token": 1.6000000000000001e-06
+    },
+    "aihubmix/qwen3-235b-a22b-2507": {
+      "input_cost_per_token": 3.5e-07,
+      "output_cost_per_token": 1.4e-06
+    },
+    "aihubmix/qwen3-235b-a22b-instruct-2507": {
+      "input_cost_per_token": 2.8e-07,
+      "output_cost_per_token": 1.12e-06
+    },
+    "aihubmix/qwen3-235b-a22b-thinking-2507": {
+      "input_cost_per_token": 2.8e-07,
+      "output_cost_per_token": 2.8e-06
+    },
+    "aihubmix/qwen3-30b-a3b": {
+      "input_cost_per_token": 1.2e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "aihubmix/qwen3-30b-a3b-instruct-2507": {
+      "input_cost_per_token": 1.0280000000000001e-07,
+      "output_cost_per_token": 4.1120000000000003e-07
+    },
+    "aihubmix/qwen3-30b-a3b-thinking-2507": {
+      "input_cost_per_token": 1.2e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "aihubmix/qwen3-32b": {
+      "input_cost_per_token": 1.6e-07,
+      "output_cost_per_token": 6.4e-07
+    },
+    "aihubmix/qwen3-4b": {
+      "input_cost_per_token": 4.6e-08,
+      "output_cost_per_token": 4.6000000000000004e-07
+    },
+    "aihubmix/qwen3-8b": {
+      "input_cost_per_token": 8e-08,
+      "output_cost_per_token": 8.000000000000001e-07
+    },
+    "aihubmix/qwen3-coder-30b-a3b-instruct": {
+      "input_cost_per_token": 2.0547799999999998e-07,
+      "output_cost_per_token": 8.219119999999999e-07
+    },
+    "aihubmix/qwen3-coder-480b-a35b-instruct": {
+      "input_cost_per_token": 8.219159999999999e-07,
+      "output_cost_per_token": 3.2876639999999997e-06
+    },
+    "aihubmix/qwen3-coder-flash": {
+      "input_cost_per_token": 1.36986e-07,
+      "output_cost_per_token": 5.47944e-07
+    },
+    "aihubmix/qwen3-coder-next": {
+      "input_cost_per_token": 1.3700000000000002e-07,
+      "output_cost_per_token": 5.480000000000001e-07
+    },
+    "aihubmix/qwen3-coder-plus": {
+      "input_cost_per_token": 5.47944e-07,
+      "output_cost_per_token": 2.191776e-06
+    },
+    "aihubmix/qwen3-coder-plus-2025-07-22": {
+      "input_cost_per_token": 5.47944e-07,
+      "output_cost_per_token": 2.191776e-06
+    },
+    "aihubmix/qwen3-max-2026-01-23": {
+      "input_cost_per_token": 4.508e-07,
+      "output_cost_per_token": 1.8032e-06
+    },
+    "aihubmix/qwen3-max-preview": {
+      "input_cost_per_token": 8.459999999999999e-07,
+      "output_cost_per_token": 3.3839999999999997e-06
+    },
+    "aihubmix/qwen3-next-80b-a3b-thinking": {
+      "input_cost_per_token": 1.4199999999999997e-07,
+      "output_cost_per_token": 1.42e-06
+    },
+    "aihubmix/qwen3-vl-plus": {
+      "input_cost_per_token": 1.3700000000000002e-07,
+      "output_cost_per_token": 1.37e-06
+    },
+    "aihubmix/qwen3.5-122b-a10b": {
+      "input_cost_per_token": 1.126e-07,
+      "output_cost_per_token": 9.008e-07
+    },
+    "aihubmix/qwen3.5-27b": {
+      "input_cost_per_token": 8.459999999999999e-08,
+      "output_cost_per_token": 6.767999999999999e-07
+    },
+    "aihubmix/qwen3.5-35b-a3b": {
+      "input_cost_per_token": 5.6399999999999995e-08,
+      "output_cost_per_token": 4.5119999999999996e-07
+    },
+    "aihubmix/qwen3.5-397b-a17b": {
+      "input_cost_per_token": 1.644e-07,
+      "output_cost_per_token": 9.864e-07
+    },
+    "aihubmix/qwen3.5-flash": {
+      "input_cost_per_token": 2.8199999999999998e-08,
+      "output_cost_per_token": 2.8199999999999996e-07
+    },
+    "aihubmix/qwen3.5-plus": {
+      "input_cost_per_token": 1.096e-07,
+      "output_cost_per_token": 6.576e-07
+    },
+    "aihubmix/qwen3.6-27b": {
+      "input_cost_per_token": 4.22e-07,
+      "output_cost_per_token": 2.532e-06
+    },
+    "aihubmix/qwen3.6-35b-a3b": {
+      "input_cost_per_token": 2.54e-07,
+      "output_cost_per_token": 1.524e-06
+    },
+    "aihubmix/qwen3.6-flash": {
+      "input_cost_per_token": 1.6900000000000002e-07,
+      "output_cost_per_token": 1.014e-06
+    },
+    "aihubmix/qwen3.6-plus": {
+      "input_cost_per_token": 2.8199999999999996e-07,
+      "output_cost_per_token": 1.6919999999999999e-06
+    },
+    "aihubmix/qwen3.7-flash": {
+      "input_cost_per_token": 2.8199999999999998e-08,
+      "output_cost_per_token": 1.1279999999999999e-07
+    },
+    "aihubmix/qwen3.7-max": {
+      "input_cost_per_token": 1.69e-06,
+      "output_cost_per_token": 5.070000000000001e-06
+    },
+    "aihubmix/qwen3.7-plus": {
+      "input_cost_per_token": 2.8199999999999996e-07,
+      "output_cost_per_token": 1.1279999999999998e-06
+    },
+    "aihubmix/qwen3.8-2.4t-a95b": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 6e-06
+    },
+    "aihubmix/qwen3.8-27b": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.5e-06
+    },
+    "aihubmix/qwen3.8-flash": {
+      "input_cost_per_token": 1.126e-07,
+      "output_cost_per_token": 3.80025e-07
+    },
+    "aihubmix/qwen3.8-max": {
+      "input_cost_per_token": 1.69e-06,
+      "output_cost_per_token": 5.070000000000001e-06
+    },
+    "aihubmix/qwen3.8-max-2026-09-02": {
+      "input_cost_per_token": 1.69e-06,
+      "output_cost_per_token": 5.070000000000001e-06
+    },
+    "aihubmix/qwen3.8-omni-flash": {
+      "input_cost_per_token": 1.126e-07,
+      "output_cost_per_token": 3.80025e-07
+    },
+    "aihubmix/qwen4-max": {
+      "input_cost_per_token": 1.47e-06,
+      "output_cost_per_token": 4.41e-06
+    },
+    "aihubmix/sf-kimi-k2-thinking": {
+      "input_cost_per_token": 5.480000000000001e-07,
+      "output_cost_per_token": 2.1920000000000004e-06
+    },
+    "aihubmix/solar-pro4": {
+      "input_cost_per_token": 3e-07,
+      "output_cost_per_token": 1.2e-06
+    },
+    "aihubmix/step-2-16k": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/step-3.5-flash": {
+      "input_cost_per_token": 1.1e-07,
+      "output_cost_per_token": 3.3e-07
+    },
+    "aihubmix/step-3.7-flash": {
+      "input_cost_per_token": 2.2e-07,
+      "output_cost_per_token": 1.32e-06
+    },
+    "aihubmix/step-5-preview": {
+      "input_cost_per_token": 1.08e-06,
+      "output_cost_per_token": 3.0888e-06
+    },
+    "aihubmix/stepfun-ai/step3": {
+      "input_cost_per_token": 1.1e-06,
+      "output_cost_per_token": 2.75e-06
+    },
+    "aihubmix/tencent/hunyuan-a13b-instruct": {
+      "input_cost_per_token": 1.4e-07,
+      "output_cost_per_token": 5.6e-07
+    },
+    "aihubmix/tencent/hunyuan-mt-7b": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 2.0000000000000002e-07
+    },
+    "aihubmix/text-ada-001": {
+      "input_cost_per_token": 4.0000000000000003e-07,
+      "output_cost_per_token": 4.0000000000000003e-07
+    },
+    "aihubmix/text-babbage-001": {
+      "input_cost_per_token": 5e-07,
+      "output_cost_per_token": 5e-07
+    },
+    "aihubmix/text-curie-001": {
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 2e-06
+    },
+    "aihubmix/text-davinci-002": {
+      "input_cost_per_token": 2e-05,
+      "output_cost_per_token": 2e-05
+    },
+    "aihubmix/text-davinci-003": {
+      "input_cost_per_token": 2e-05,
+      "output_cost_per_token": 2e-05
+    },
+    "aihubmix/text-davinci-edit-001": {
+      "input_cost_per_token": 2e-05,
+      "output_cost_per_token": 2e-05
+    },
+    "aihubmix/thudm/glm-4-32b-0414": {
+      "input_cost_per_token": 8e-08,
+      "output_cost_per_token": 8e-08
+    },
+    "aihubmix/thudm/glm-4-9b-0414": {
+      "input_cost_per_token": 5.0000000000000004e-08,
+      "output_cost_per_token": 5.0000000000000004e-08
+    },
+    "aihubmix/thudm/glm-4.1v-9b-thinking": {
+      "input_cost_per_token": 1.0000000000000001e-07,
+      "output_cost_per_token": 1.0000000000000001e-07
+    },
+    "aihubmix/thudm/glm-z1-32b-0414": {
+      "input_cost_per_token": 8e-08,
+      "output_cost_per_token": 8e-08
+    },
+    "aihubmix/thudm/glm-z1-9b-0414": {
+      "input_cost_per_token": 5.0000000000000004e-08,
+      "output_cost_per_token": 5.0000000000000004e-08
+    },
+    "aihubmix/tngtech/deepseek-r1t-chimera": {
+      "input_cost_per_token": 2e-08,
+      "output_cost_per_token": 2e-08
+    },
+    "aihubmix/unsloth/gemma-3-12b-it": {
+      "input_cost_per_token": 2.0000000000000002e-07,
+      "output_cost_per_token": 8.000000000000001e-07
+    },
+    "aihubmix/unsloth/gemma-3-27b-it": {
+      "input_cost_per_token": 2.2e-07,
+      "output_cost_per_token": 2.2e-07
+    },
+    "aihubmix/wizardlm/wizardcoder-python-34b-v1.0": {
+      "input_cost_per_token": 9.000000000000001e-07,
+      "output_cost_per_token": 9.000000000000001e-07
+    },
+    "aihubmix/zai-glm-5-turbo": {
+      "input_cost_per_token": 1.2e-06,
+      "output_cost_per_token": 3.9996e-06
     },
     "cerebras/gemma-4-31b": {
       "input_cost_per_token": 9.9e-07,

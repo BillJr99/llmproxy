@@ -51,6 +51,15 @@ _VARIANT_RE = re.compile(r"[:\-](?:{})$".format("|".join(_VARIANT_SUFFIXES)))
 # Prefixes some providers wrap around an otherwise-standard model path.
 _PATH_PREFIXES = ("@cf/", "accounts/fireworks/models/")
 
+# Route prefixes a gateway puts in front of the model name itself, naming the
+# plan or client a route is billed under rather than different weights:
+# AIHubMix serves ``coding-glm-5.4`` / ``coding-glm-5.4-free`` (its coding-plan
+# routes) and ``cc-glm-5`` (its Claude Code routes) alongside plain ``glm-5.4``.
+# Without this they normalise to ``codingglm54`` / ``ccglm5`` and never join the
+# benchmark key ``glm54``. Anchored to the start of the last path segment and to
+# a hyphen, so ``qwen3-coder`` and ``kimi-for-coding`` are left alone.
+_ROUTE_PREFIX_RE = re.compile(r"^(?:coding|cc)-")
+
 # Qualifiers that describe the tuning rather than the model family, dropped so
 # the same weights served under slightly different names still join.
 _TRAILING_QUALIFIERS = re.compile(
@@ -74,6 +83,7 @@ def normalize_model_id(model_id: str) -> str:
         s = s.replace(prefix, "")
     s = _VARIANT_RE.sub("", s)
     s = s.split("/")[-1]
+    s = _ROUTE_PREFIX_RE.sub("", s)
     s = _VARIANT_RE.sub("", s)
     s = _TRAILING_QUALIFIERS.sub("", s)
     return re.sub(r"[^a-z0-9]", "", s)

@@ -269,3 +269,41 @@ def test_the_wildcard_survives_the_hoisted_hot_loop_path(tmp_path, monkeypatch):
     ])
     picked = {pn for pn, _cfg, _um in S._get_free_model_candidates()}
     assert picked == {"google"}
+
+
+# ── a price on record beats an id that spells "free" ────────────────────────
+#
+# Policy for every provider: "free" in an id is ignored when the pricing block
+# records a price above zero for that provider's copy. A recorded price of
+# exactly zero is still free, and no recorded price keeps the name rule.
+
+def _with_prices(S, monkeypatch, prices: dict):
+    monkeypatch.setattr(S, "load_pricing_map", lambda *a, **k: prices)
+    return S
+
+
+def test_a_positive_price_beats_a_free_suffix(S, monkeypatch):
+    _with_prices(S, monkeypatch, {"gmi/vendor/m:free": (2e-08, 2e-08)})
+    assert S._is_model_free("gmi", "vendor/m:free", S.load_config()) is False
+
+
+def test_one_positive_category_is_enough(S, monkeypatch):
+    _with_prices(S, monkeypatch, {"gmi/vendor/m:free": (0.0, 1e-07)})
+    assert S._is_model_free("gmi", "vendor/m:free", S.load_config()) is False
+
+
+def test_a_recorded_zero_price_is_still_free(S, monkeypatch):
+    _with_prices(S, monkeypatch, {"gmi/vendor/m:free": (0.0, 0.0)})
+    assert S._is_model_free("gmi", "vendor/m:free", S.load_config()) is True
+
+
+def test_the_price_is_per_provider(S, monkeypatch):
+    """A price on one gateway says nothing about another's copy."""
+    _with_prices(S, monkeypatch, {"gmi/vendor/m:free": (2e-08, 2e-08)})
+    assert S._is_model_free("google", "vendor/m:free", S.load_config()) is True
+
+
+def test_an_explicit_believed_free_entry_still_wins(tmp_path, monkeypatch):
+    S = _server(tmp_path, monkeypatch, believed_free=["gmi/vendor/m:free"])
+    _with_prices(S, monkeypatch, {"gmi/vendor/m:free": (2e-08, 2e-08)})
+    assert S._is_model_free("gmi", "vendor/m:free", S.load_config()) is True

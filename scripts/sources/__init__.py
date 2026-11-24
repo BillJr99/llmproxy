@@ -4,6 +4,7 @@ Each source emits Evidence records (see scripts.sources.base.Evidence).
 Sources are registered in ALL_SOURCES so the CLI can enumerate them.
 """
 
+from .aihubmix import AihubmixSource
 from .api_models import ApiModelsSource
 from .base import Evidence, Source
 from .community import CommunitySource
@@ -27,6 +28,8 @@ ALL_SOURCES: dict[str, type[Source]] = {
     "requesty": RequestySource,
     # Public catalog: needs no API key, so it also runs in CI.
     "xkiro": XkiroSource,
+    # Public priced catalog (aihubmix.com/api/v1/models): no API key either.
+    "aihubmix": AihubmixSource,
     # Public pricing feed (new-api /api/pricing): needs no API key either.
     "tokenrouter": TokenRouterSource,
     # Active cost probe. Excluded from the default source set because it sends

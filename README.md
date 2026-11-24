@@ -338,7 +338,14 @@ curl http://localhost:8080/v1/models/llmproxy/free | jq '._candidates'
 `llmproxy/free` (also accepted: the `llmproxy/free` slash form) pools every model across all providers
 whose upstream ID contains the word `free` (case-insensitive) **or** whose upstream
 ID (or full `provider/upstream` ID) appears in the resolved `believed_free` list
-— see [where routing metadata lives](#routing-metadata). Its pool is
+— see [where routing metadata lives](#routing-metadata). A price on record beats
+the name, for every provider: an ID that contains `free` is **not** treated as
+free when the `pricing` block in `providers.json` records a price above zero for
+that provider's copy (`provider/upstream`) in any category. A recorded price of
+exactly zero is still free, and a model with no recorded price keeps the
+name-based rule. Gateways re-serve other vendors' `:free` IDs at a real per-token
+price, so the suffix alone says nothing about what *that* provider charges. An
+explicit `believed_free` entry is a deliberate decision and still wins. Its pool is
 **capacity-aware**: among healthy candidates, models with more remaining
 free-tier quota are preferred, while
 load is still spread (see [`free_limits`](#free_limits)). Failover then follows the
@@ -3920,6 +3927,14 @@ recognised variant suffix (`:free`, `:batch`, `:nitro`, `:extended`, `:floor`)
 are treated this way, so an ordinary model whose gateway publishes a thin
 listing still inherits everything known about those weights elsewhere.
 
+**Gateway route prefixes are dropped before the join.** Some gateways put the
+plan or client a route is billed under in front of the model name: AIHubMix
+serves `coding-glm-5.4` / `coding-glm-5.4-free` (coding-plan routes) and
+`cc-glm-5` (Claude Code routes) alongside plain `glm-5.4`. A leading `coding-`
+or `cc-` on the last path segment is stripped, so those ids join the same
+benchmark key (`glm54`) as every other provider's copy. Only that exact leading
+form is stripped; `qwen3-coder` and `kimi-for-coding` are unchanged.
+
 #### When the tier is empty
 
 Until the first refresh completes — or if nothing qualifies — `llmproxy/flagship`
@@ -4277,6 +4292,7 @@ land those changes durably in the repository.
 | `fireworks`  | high       | When `FIREWORKS_API_KEY` is set, reads Fireworks' `/inference/v1/models` and flags models marked `is_free`/`serverless_billing: free` or zero-priced as free. |
 | `requesty`   | high       | When `REQUESTY_API_KEY` is set, reads Requesty's `/v1/models` pricing — zero-priced models are free; paid models contribute per-token prices to the `pricing` block. |
 | `xkiro`      | high       | Reads xKiro's public `/v1/models` catalog. No API key is required, so this one also runs in CI: models marked `access_tier: "free"` with zero input/output price are flagged free, paid models contribute per-token prices to the `pricing` block, and any `believed_free` id the catalog has dropped is reported as no longer free. |
+| `aihubmix`   | high       | Reads AIHubMix's public priced catalog at `aihubmix.com/api/v1/models` (no API key, so it also runs in CI). A chat model (`types` includes `llm`) is free only when input and output prices are reported and every reported price — input, output, cache and each context tier — is zero; any price above zero makes it paid even when its ID says `free`, and paid models contribute per-token prices (converted from per 1M) to the `pricing` block. A model with no pricing gets no opinion, and any `believed_free` ID the catalog has dropped is reported as no longer free. |
 | `tokenrouter`| high       | Reads TokenRouter's public pricing feed (`https://api.tokenrouter.com/api/pricing`, the data behind tokenrouter.com/models). No API key is required, so it also runs in CI. new-api ratios are converted to dollars (input $/1M = `model_ratio` × 2 × the default group ratio; output = input × `completion_ratio`) and written to the `pricing` block under `tokenrouter/<model>`; a zero-priced model on the OpenAI chat endpoint is flagged free, and a `believed_free` id that stops being free is reported. Name your config entry `tokenrouter` so these prices apply. |
 | `community`  | low        | Pulls the [tashfeenahmed/freellmapi](https://github.com/tashfeenahmed/freellmapi) community list as a sanity signal. |
 | `probe`      | high · **opt-in** | Sends a tiny real chat request to each `believed_free` model and flags any that report a cost. Off by default; enable with `probe_cost: true` in `config.json` or the `--probe` flag. Spends a little quota. |

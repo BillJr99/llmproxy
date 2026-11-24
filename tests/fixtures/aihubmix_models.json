@@ -1,0 +1,11 @@
+{"data": [
+  {"model_id": "coding-glm-5.4-free", "types": "llm", "pricing": {"input": 0, "output": 0}, "context_length": 1048576, "tool_call": true, "input_modalities": "text,image"},
+  {"model_id": "meta-llama/llama-3.1-8b-instruct:free", "types": "llm", "pricing": {"input": 0.02, "output": 0.02}, "context_length": 0, "input_modalities": ""},
+  {"model_id": "cache-priced-free", "types": "llm", "pricing": {"input": 0, "output": 0, "cache_read": 0.01}, "input_modalities": "text"},
+  {"model_id": "tiered-free", "types": "llm", "pricing": {"input": 0, "output": 0, "tiers": [{"input": 0.5, "output": 1, "tier": {"size": 32000, "type": "context"}}]}},
+  {"model_id": "gpt-4o-mini", "types": "llm", "pricing": {"cache_read": 0.075, "input": 0.15, "output": 0.6}, "input_modalities": "text,image"},
+  {"model_id": "glm-4.7", "types": "llm", "pricing": {"input": 0.273974, "output": 1.095896}, "tool_call": true, "input_modalities": "text"},
+  {"model_id": "unpriced-model", "types": "llm"},
+  {"model_id": "doubao-seedream-5-5", "types": "image_generation", "pricing": {"input": 0, "output": 0}},
+  {"model_id": "search-free", "types": "llm,search", "pricing": {"input": 0, "output": 0}}
+]}

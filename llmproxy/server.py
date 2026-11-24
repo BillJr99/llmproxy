@@ -4997,7 +4997,8 @@ def _build_models_list(providers: dict, config: dict, timeout: int, models_ttl: 
         suffixes: list[str] = []
         uid_lower = upstream_id.lower()
         if (
-            "free" in uid_lower
+            ("free" in uid_lower
+             and not _has_positive_price(f"{provider_name}/{uid_lower}"))
             or uid_lower in believed_free
             or f"{provider_name}/{uid_lower}" in believed_free
         ):
@@ -9220,6 +9221,22 @@ def _is_cost_observed(provider_name: str, upstream_id: str, config: dict) -> boo
     return f"{provider_name}/{upstream_id}".lower() in _normalized_cost_observed(config)
 
 
+def _has_positive_price(qualified: str) -> bool:
+    """Whether a price above zero is on record for *qualified* (provider/model).
+
+    The policy for every provider: an id that literally contains "free" is NOT
+    taken at its word when the pricing block (providers.json "pricing",
+    written by the scraper from each provider's own catalog or the LiteLLM cost
+    map) records a price above zero for it in any category. A recorded price of
+    exactly zero is still free, and a model with no recorded price keeps the
+    name-based rule. Gateways re-serve other vendors' ``:free`` ids at a real
+    per-token price (AIHubMix's legacy ``meta-llama/...:free`` ids, for one), so
+    the suffix alone says nothing about what THIS provider charges.
+    """
+    price = load_pricing_map().get(qualified.lower())
+    return bool(price) and any(p > 0 for p in price)
+
+
 def _is_model_free_with(
     provider_name: str,
     upstream_id: str,
@@ -9248,8 +9265,10 @@ def _is_model_free_with(
     if qualified in cost_observed:
         return False
     uid = upstream_id.lower()
-    if "free" in uid or qualified in believed_free:
+    if qualified in believed_free:
         return True
+    if "free" in uid:
+        return not _has_positive_price(qualified)
     # A BARE match is only honoured when the entry was written by a person, who
     # meant "this model, wherever I have it". An entry a provider template
     # declared is scoped to that provider, and matching it bare is how one
