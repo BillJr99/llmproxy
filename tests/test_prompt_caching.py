@@ -135,7 +135,8 @@ def test_global_provider_and_env_layers():
     # Environment beats the file, the provider entry beats the environment.
     env = {"LLMPROXY_PROMPT_CACHING": "off", "LLMPROXY_PROMPT_CACHE_TTL": "5m"}
     assert C.resolve_settings(cfg, {}, environ=env)["enabled"] is False
-    assert C.resolve_settings(cfg, {}, environ=env)["ttl"] == "5m"
+    assert C.resolve_settings(cfg, {}, environ=env)["ttl"] == "off"
+    assert C.resolve_settings(cfg, {}, environ={"LLMPROXY_PROMPT_CACHE_TTL": "5m"})["ttl"] == "5m"
     assert C.resolve_settings(cfg, {"prompt_caching": True}, environ=env)["enabled"] is True
     env = {"LLMPROXY_PROMPT_CACHE_RETENTION": "24h"}
     assert C.resolve_settings({}, {}, environ=env)["retention"] == "24h"
