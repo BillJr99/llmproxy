@@ -107,6 +107,12 @@
       "api_key": "sk-xt-...",
       "model_filter": null
     },
+    "aihubmix": {
+      "_note": "AIHubMix multi-vendor gateway. The OpenAI-compatible API is served at https://aihubmix.com/v1: GET /v1/models returns the standard {id, object, owned_by} list, and POST /v1/chat/completions answers 401 without a key (checked November 2026). https://aihubmix.com/api/v1 is AIHubMix's catalog API only: its /models entries carry model_id instead of id, and /api/v1/chat/completions answers 404, so it cannot be used as base_url. The catalog is large (several hundred ids across vendors, including image and embedding models), so set model_filter to pin the chat models you want.",
+      "base_url": "https://aihubmix.com/v1",
+      "api_key": "...",
+      "model_filter": null
+    },
     "teamorouter": {
       "base_url": "https://api.teamorouter.com/v1",
       "api_key": "sk-teamo-...",

@@ -28,6 +28,7 @@
     "requesty",
     "bai",
     "xkiro",
+    "aihubmix",
     "teamorouter",
     "tokenharbor",
     "tokenrouter",
@@ -23148,6 +23149,16 @@
         "xkiro/google/gemini-3.8-flash",
         "xkiro/z-ai/glm-4.5-flash"
       ]
+    },
+    "aihubmix": {
+      "display": "AIHubMix (multi-vendor gateway)",
+      "base_url": "https://aihubmix.com/v1",
+      "key_required": true,
+      "key_hint": "Create an API key at console.aihubmix.com (docs: docs.aihubmix.com). Keys are sent as a Bearer token.",
+      "_note": "AIHubMix multi-vendor gateway. The OpenAI-compatible API is served at https://aihubmix.com/v1: GET /v1/models returns the standard {id, object, owned_by} list, and POST /v1/chat/completions answers 401 without a key (checked November 2026). https://aihubmix.com/api/v1 is AIHubMix's catalog API only: its /models entries carry model_id instead of id, and /api/v1/chat/completions answers 404, so it cannot be used as base_url. The catalog is large (several hundred ids across vendors, including image and embedding models), so set model_filter to pin the chat models you want.",
+      "believed_free": [],
+      "model_reasoning": {},
+      "free_limits": {}
     },
     "teamorouter": {
       "display": "TeamoRouter (LLM routing gateway)",

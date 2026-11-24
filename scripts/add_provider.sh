@@ -3,13 +3,16 @@
 # add_provider.sh — add a provider to an llmproxy config without running the
 # full `llmproxy --setup` wizard.
 #
-# Prompts for the provider, its API key and the config file path, then merges
-# providers.<key> into config.json — the same file and the same shape the wizard
-# writes. If the chosen provider is missing from this checkout's
+# Prompts for the server (local by default, or any ssh destination), the
+# provider (pick by number or type to filter), its API key and the config file
+# path, backs the existing config up to /tmp, then merges providers.<key> into
+# config.json — the same file and the same shape the wizard writes. For a remote
+# server the prompts run here and the backup and merge run there over ssh. If the chosen provider is missing from this checkout's
 # llmproxy/providers.json, it also offers to add it there (and to provider_order)
 # and to regenerate config.example.json, so the script works on older checkouts.
 #
-# Requires: python3 (already required to run llmproxy) and curl. No jq.
+# Requires: python3 (already required to run llmproxy) and curl; ssh, and
+# python3 on the remote host, for a remote server. No jq.
 #
 # Usage: scripts/add_provider.sh
 #
@@ -18,7 +21,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 SIDECAR="$REPO_ROOT/llmproxy/providers.json"
-DEFAULT_CONFIG="${LLMPROXY_CONFIG:-$HOME/.config/llmproxy/config.json}"
 
 command -v python3 >/dev/null 2>&1 || { echo "error: python3 is required but not on PATH." >&2; exit 1; }
 command -v curl    >/dev/null 2>&1 || { echo "error: curl is required but not on PATH." >&2; exit 1; }
@@ -44,6 +46,12 @@ BUILTIN = OrderedDict([
         "base_url": "https://api.xkiro.com/v1",
         "key_required": True,
         "key_hint": "Create an API key at xkiro.com — keys look like sk-xt-... (docs: docs.xkiro.com)",
+    }),
+    ("aihubmix", {
+        "display": "AIHubMix (multi-vendor gateway)",
+        "base_url": "https://aihubmix.com/v1",
+        "key_required": True,
+        "key_hint": "Create an API key at console.aihubmix.com (docs: docs.aihubmix.com). Chat is served from aihubmix.com/v1; aihubmix.com/api/v1 is a catalog-only API with no /chat/completions.",
     }),
     ("teamorouter", {
         "display": "TeamoRouter (LLM routing gateway)",
@@ -190,10 +198,22 @@ def main():
         else:
             sys.stdout.write(str(val))
 
+    elif cmd == "template":
+        # template <sidecar> <key>  — the template as JSON, for merge
+        json.dump(menu(args[0])["templates"].get(args[1], {}), sys.stdout,
+                  ensure_ascii=False)
+
     elif cmd == "merge":
-        # merge <config> <sidecar> <provider_key> <template_key> <base_url> <api_key>
-        cfg_path, sidecar, pkey, tkey, base_url, api_key = args
-        tpl = menu(sidecar)["templates"].get(tkey, {})
+        # merge <config> <provider_key> <base_url>
+        # The template JSON and the API key arrive in the environment
+        # (ADD_PROVIDER_TEMPLATE, ADD_PROVIDER_API_KEY), never on the command
+        # line, where any local user could read the key from `ps`. Taking the
+        # template as JSON rather than a sidecar path also lets merge run on a
+        # remote host that has no llmproxy checkout.
+        cfg_path, pkey, base_url = args
+        api_key = os.environ.get("ADD_PROVIDER_API_KEY", "")
+        tpl = json.loads(os.environ.get("ADD_PROVIDER_TEMPLATE") or "{}",
+                         object_pairs_hook=OrderedDict)
 
         config = OrderedDict()
         if os.path.exists(cfg_path):
@@ -307,32 +327,85 @@ helper() { python3 "$HELPER" "$@"; }
 [ -f "$SIDECAR" ] || { echo "error: llmproxy/providers.json not found at $SIDECAR." >&2; exit 1; }
 
 MENU_JSON="$(helper menu "$SIDECAR")"
-mapfile -t KEYS < <(printf '%s' "$MENU_JSON" | python3 -c '
+# key <TAB> display <TAB> base_url, one row per template, in menu order.
+mapfile -t ROWS < <(printf '%s' "$MENU_JSON" | python3 -c '
 import json, sys
-for key in json.load(sys.stdin)["templates"]:
-    print(key)')
+for key, tpl in json.load(sys.stdin)["templates"].items():
+    disp = str(tpl.get("display") or key).replace("\t", " ")
+    print("\t".join([key, disp, str(tpl.get("base_url") or "")]))')
+KEYS=(); DISPLAYS=(); URLS=()
+for row in "${ROWS[@]}"; do
+  IFS=$'\t' read -r k d u <<<"$row"
+  KEYS+=("$k"); DISPLAYS+=("$d"); URLS+=("${u:-}")
+done
 
 echo
 echo "llmproxy — add a provider"
 echo "========================="
-echo
-i=1
-for k in "${KEYS[@]}"; do
-  printf '%3d) %-42s %s\n' "$i" "$(helper field "$SIDECAR" "$k" display)" \
-                                "$(helper field "$SIDECAR" "$k" base_url)"
-  i=$((i + 1))
-done
-echo
 
-while :; do
-  read -r -p "Select a provider [1-${#KEYS[@]}]: " choice
+# ── Target server ────────────────────────────────────────────────────────────
+# "local" edits this machine's config. Anything else is an ssh destination
+# (host, user@host or an ~/.ssh/config alias): the prompts all run here, and the
+# backup and merge run on that host over ssh. The API key travels inside the
+# ssh session's stdin, never on a command line.
+echo
+read -r -p "Server to add it to (local, or an ssh host such as user@host) [local]: " TARGET
+TARGET="${TARGET:-local}"
+case "$TARGET" in local|localhost|127.0.0.1|::1) TARGET=local ;; esac
+if [ "$TARGET" != "local" ]; then
+  command -v ssh >/dev/null 2>&1 || { echo "error: ssh is required for a remote server." >&2; exit 1; }
+  echo "  Checking ssh access to $TARGET …"
+  ssh -n -o ConnectTimeout=15 "$TARGET" 'command -v python3 >/dev/null 2>&1' \
+    || { echo "error: cannot reach $TARGET over ssh, or python3 is not installed there." >&2; exit 1; }
+fi
+
+# Run a bash script read from stdin on the target (this machine or $TARGET).
+run_on_target() {
+  if [ "$TARGET" = "local" ]; then bash -s; else ssh -T -o ConnectTimeout=15 "$TARGET" bash -s; fi
+}
+
+# ── Provider menu (pick by number, or type text to filter) ──────────────────
+print_rows() {
+  local idx
+  for idx in "$@"; do
+    printf '%3d) %-42s %s\n' "$((idx + 1))" "${DISPLAYS[idx]}" "${URLS[idx]}"
+  done
+}
+ALL_IDX=("${!KEYS[@]}")
+echo
+print_rows "${ALL_IDX[@]}"
+echo
+echo "Enter a number to choose, text to filter by key, name or URL (e.g. 'hub'),"
+echo "or press Enter to show the full list again."
+SEL=""
+while [ -z "$SEL" ]; do
+  read -r -p "Select a provider [1-${#KEYS[@]} or filter text]: " choice
   case "$choice" in
-    ''|*[!0-9]*) echo "  Enter a number." ;;
-    *) if [ "$choice" -ge 1 ] && [ "$choice" -le "${#KEYS[@]}" ]; then break; fi
-       echo "  Out of range." ;;
+    '') print_rows "${ALL_IDX[@]}" ;;
+    *[!0-9]*)
+      q="${choice,,}"
+      matches=()
+      for i in "${ALL_IDX[@]}"; do
+        hay="${KEYS[i]} ${DISPLAYS[i]} ${URLS[i]}"
+        [[ "${hay,,}" == *"$q"* ]] && matches+=("$i")
+      done
+      if [ "${#matches[@]}" -eq 0 ]; then
+        echo "  No provider matches '$choice'."
+      elif [ "${#matches[@]}" -eq 1 ]; then
+        read -r -p "  Use ${DISPLAYS[matches[0]]}? [Y/n]: " yn
+        case "${yn:-Y}" in [Nn]*) ;; *) SEL="${matches[0]}" ;; esac
+      else
+        print_rows "${matches[@]}"
+      fi
+      ;;
+    *) if [ "$choice" -ge 1 ] && [ "$choice" -le "${#KEYS[@]}" ]; then
+         SEL="$((choice - 1))"
+       else
+         echo "  Out of range."
+       fi ;;
   esac
 done
-TPL_KEY="${KEYS[$((choice - 1))]}"
+TPL_KEY="${KEYS[SEL]}"
 
 DISPLAY="$(helper field "$SIDECAR" "$TPL_KEY" display)"
 BASE_URL="$(helper field "$SIDECAR" "$TPL_KEY" base_url)"
@@ -385,24 +458,61 @@ else
   [ -n "$API_KEY" ] || { echo "error: this provider requires an API key." >&2; exit 1; }
 fi
 
-# ── Config file path ─────────────────────────────────────────────────────────
+# ── Config file path (resolved on the target, so ~ means that host's home) ──
+if [ "$TARGET" = "local" ]; then
+  DEFAULT_CONFIG="${LLMPROXY_CONFIG:-~/.config/llmproxy/config.json}"
+else
+  DEFAULT_CONFIG="~/.config/llmproxy/config.json"
+fi
 echo
-read -r -p "Config file [$DEFAULT_CONFIG]: " CONFIG_PATH
+read -r -p "Config file on $TARGET [$DEFAULT_CONFIG]: " CONFIG_PATH
 CONFIG_PATH="${CONFIG_PATH:-$DEFAULT_CONFIG}"
-case "$CONFIG_PATH" in "~"/*) CONFIG_PATH="$HOME/${CONFIG_PATH#\~/}" ;; esac
 
-if [ ! -f "$CONFIG_PATH" ]; then
-  read -r -p "$CONFIG_PATH does not exist. Create it? [Y/n]: " yn
+# Prints "yes <path>" or "no <path>" with ~ expanded on the target.
+PROBE="$({
+  printf 'CONFIG_PATH=%q\n' "$CONFIG_PATH"
+  cat <<'SH_EOF'
+case "$CONFIG_PATH" in "~") CONFIG_PATH="$HOME" ;; "~"/*) CONFIG_PATH="$HOME/${CONFIG_PATH#\~/}" ;; esac
+if [ -f "$CONFIG_PATH" ]; then echo "yes $CONFIG_PATH"; else echo "no $CONFIG_PATH"; fi
+SH_EOF
+} | run_on_target)"
+CONFIG_PATH="${PROBE#* }"
+if [ "${PROBE%% *}" != "yes" ]; then
+  read -r -p "$CONFIG_PATH does not exist on $TARGET. Create it? [Y/n]: " yn
   case "${yn:-Y}" in [Nn]*) echo "Aborted."; exit 1 ;; esac
 fi
 
-# ── Merge ────────────────────────────────────────────────────────────────────
-RESULT="$(helper merge "$CONFIG_PATH" "$SIDECAR" "$PROVIDER_KEY" "$TPL_KEY" "$BASE_URL" "$API_KEY")"
+# ── Back up to /tmp, then merge (on the target) ─────────────────────────────
+TPL_JSON="$(helper template "$SIDECAR" "$TPL_KEY")"
+OUT="$({
+  echo 'set -euo pipefail'
+  printf 'CONFIG_PATH=%q\nPROVIDER_KEY=%q\nBASE_URL=%q\n' "$CONFIG_PATH" "$PROVIDER_KEY" "$BASE_URL"
+  printf 'export ADD_PROVIDER_API_KEY=%q\n' "$API_KEY"
+  printf 'export ADD_PROVIDER_TEMPLATE=%q\n' "$TPL_JSON"
+  printf 'export SUBST_ACCOUNT_ID=%q SUBST_GATEWAY_ID=%q\n' "${SUBST_ACCOUNT_ID:-}" "${SUBST_GATEWAY_ID:-}"
+  echo 'T="$(mktemp -d)"; trap '"'"'rm -rf "$T"'"'"' EXIT'
+  echo "cat > \"\$T/helper.py\" <<'PY_EOF'"
+  cat "$HELPER"
+  echo 'PY_EOF'
+  cat <<'SH_EOF'
+if [ -f "$CONFIG_PATH" ]; then
+  # mktemp creates the file 0600; cp keeps that mode, since the copy holds keys.
+  BK="$(mktemp "/tmp/llmproxy-config.$(date +%Y%m%d-%H%M%S).XXXXXX")"
+  cp "$CONFIG_PATH" "$BK"
+  echo "backup $BK"
+fi
+echo "result $(python3 "$T/helper.py" merge "$CONFIG_PATH" "$PROVIDER_KEY" "$BASE_URL")"
+SH_EOF
+} | run_on_target)"
+BACKUP="$(printf '%s\n' "$OUT" | sed -n 's/^backup //p')"
+RESULT="$(printf '%s\n' "$OUT" | sed -n 's/^result //p')"
+[ -n "$RESULT" ] || { echo "error: the merge on $TARGET did not complete." >&2; exit 1; }
 echo
+[ -n "$BACKUP" ] && echo "Backed up the original config on $TARGET to $BACKUP (and $CONFIG_PATH.bak)."
 if [ "$RESULT" = "updated" ]; then
-  echo "Updated provider '$PROVIDER_KEY' in $CONFIG_PATH (previous version saved to $CONFIG_PATH.bak)."
+  echo "Updated provider '$PROVIDER_KEY' in $CONFIG_PATH on $TARGET."
 else
-  echo "Added provider '$PROVIDER_KEY' to $CONFIG_PATH."
+  echo "Added provider '$PROVIDER_KEY' to $CONFIG_PATH on $TARGET."
 fi
 
 # ── Reachability check ───────────────────────────────────────────────────────
@@ -411,7 +521,7 @@ MODELS_URL="${MODELS_URL//\{account_id\}/${SUBST_ACCOUNT_ID:-}}"
 MODELS_URL="${MODELS_URL//\{gateway_id\}/${SUBST_GATEWAY_ID:-}}"
 FETCH_URL="${MODELS_URL:-$BASE_URL/models}"
 echo
-echo "Checking $FETCH_URL …"
+echo "Checking $FETCH_URL from this machine …"
 BODY="$TMPDIR_RUN/models.json"
 HTTP_CODE="$(curl -sS -o "$BODY" -w '%{http_code}' --max-time 45 \
   -H 'Accept: application/json' \
@@ -446,4 +556,4 @@ if [ "$IN_FILE" != "1" ]; then
 fi
 
 echo
-echo "Done. Restart llmproxy to pick up the new provider."
+echo "Done. Restart llmproxy on $TARGET to pick up the new provider."

@@ -4050,6 +4050,7 @@ The wizard currently offers ready-made templates for these providers:
 | Requesty (LLM router)                      | `requesty`              | `https://router.requesty.ai/v1`                                                |
 | B.AI (unified LLM API)                     | `bai`                   | `https://api.b.ai/v1`                                                          |
 | xKiro (multi-vendor gateway)               | `xkiro`                 | `https://api.xkiro.com/v1`                                                     |
+| AIHubMix (multi-vendor gateway)            | `aihubmix`              | `https://aihubmix.com/v1` (not `/api/v1`, which is catalog-only)               |
 | TeamoRouter (LLM routing gateway)          | `teamorouter`           | `https://api.teamorouter.com/v1`                                               |
 | Token Harbor (multi-vendor gateway)        | `tokenharbor`           | `https://tokenharbor.ai/v1`                                                    |
 | TokenRouter (multi-vendor gateway)         | `tokenrouter`           | `https://api.tokenrouter.com/v1`                                               |
@@ -4122,18 +4123,30 @@ entry the wizard would, without launching the TUI:
 scripts/add_provider.sh
 ```
 
-It lists every template from `llmproxy/providers.json`, then prompts for the
-provider name (the model-ID prefix), the base URL, any `{account_id}` /
-`{gateway_id}` substitutions, the API key, and the config file path — defaulting
-to `$LLMPROXY_CONFIG` or `~/.config/llmproxy/config.json`, and offering to create
-it if missing.  It carries `protocol`, `models_url`, `models_id_field`,
-`models_keep_task`, `_note` and `example_model_filter` across from the template,
-backs the old config up to `config.json.bak`, writes atomically, and leaves the
-result `chmod 600`.  Other providers and every other top-level key are preserved,
+It first asks which server to configure: press Enter for `local` (this machine),
+or give any ssh destination (`host`, `user@host`, or an `~/.ssh/config` alias).
+It then lists every template from `llmproxy/providers.json`. Pick one by number,
+or type text (part of the key, name or URL, such as `hub` for AIHubMix) to narrow
+the list; a single match asks for confirmation, and Enter on its own shows the
+full list again. It then prompts for the provider name (the model-ID prefix), the
+base URL, any `{account_id}` / `{gateway_id}` substitutions, the API key (typed
+hidden), and the config file path — defaulting to `$LLMPROXY_CONFIG` (local only)
+or `~/.config/llmproxy/config.json`, and offering to create it if missing.  It
+carries `protocol`, `models_url`, `models_id_field`, `models_keep_task`, `_note`
+and `example_model_filter` across from the template, copies the existing config
+to `/tmp/llmproxy-config.<timestamp>.<random>` (mode `600`, since it holds keys)
+and to `config.json.bak`, writes atomically, and leaves the result `chmod 600`.
+
+For a remote server every prompt still runs on your machine; the script then
+opens one ssh session that resolves `~` against the remote home, makes the
+`/tmp` backup and does the merge there. The remote host needs `python3` but no
+llmproxy checkout. The API key is sent inside that session's input stream, never
+as a command-line argument, so it does not show up in `ps` on either machine.
+Restart the llmproxy container on that host afterwards.  Other providers and every other top-level key are preserved,
 and re-running it updates just the one entry.  A `${VAR}` reference typed at the
 key prompt is stored verbatim and resolved from the environment at request time.
 
-It finishes by calling `<base_url>/models` to report how many models the provider
+It finishes by calling `<base_url>/models` from your machine to report how many models the provider
 advertises — a non-200 is reported but does not block the write.  If the provider
 you pick is missing from this checkout's `providers.json` (the script carries its
 own copy of the newest templates), it offers to add it there and to
