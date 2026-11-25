@@ -4170,7 +4170,6 @@ The wizard currently offers ready-made templates for these providers:
 | Moonshot AI (Kimi)                         | `moonshot`              | `https://api.moonshot.ai/v1`                                                   |
 | MiniMax                                    | `minimax`               | `https://api.minimax.io/v1`                                                    |
 | Atria ASI                                  | `atria-asi`             | `https://api.atria-asi.ai/v1`                                                  |
-| Unbiased AI                                | `unbiased-ai`           | `https://api.unbiased.ai/v1`                                                   |
 | Kilo AI (multi-vendor gateway)             | `kilo`                   | `https://api.kilo.ai/api/gateway`                                             |
 | ModelScope (Alibaba API-Inference)         | `modelscope`            | `https://api-inference.modelscope.cn/v1`                                       |
 | Aion Labs                                  | `aion-labs`             | `https://api.aionlabs.ai/v1`                                                   |
@@ -4281,7 +4280,6 @@ own copy of the newest templates), it offers to add it there and to
 > | **Cloudflare Workers AI** | HTTP 405 — no `GET /v1/models` | `models_url` → `…/ai/models/search`, `models_id_field: "name"`, `models_keep_task: "Text Generation"` |
 > | **Cloudflare AI Gateway** | HTTP 401 — gateway proxies inference only, no catalog | `model_filter` (synthesized); a 401 also means the API token is missing/under-scoped for Workers AI |
 > | **Hugging Face Inference** | Returns HTML rather than JSON for `/v1/models` | `model_filter` (synthesized) |
-> | **Unbiased AI** | HTTP 404 `unknown_url` — no catalog endpoint. An *unauthenticated* probe returns 401 on every path, because the gateway checks the key before routing, so a 401 there means a missing key rather than a missing endpoint | `model_filter: ["pareto"]` (synthesized) |
 > | **Open WebUI** (self-hosted, e.g. behind a custom domain) | HTTP 200 but HTML — the OpenAI API lives under `/api` | set `base_url` to `https://<host>/api` |
 
 ---

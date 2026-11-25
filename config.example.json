@@ -149,14 +149,6 @@
       "api_key": "atr_...",
       "model_filter": null
     },
-    "unbiased-ai": {
-      "_note": "OpenAI-compatible. The endpoint also answers Anthropic's /v1/messages and accepts either Authorization: Bearer or x-api-key, but the OpenAI pair is what llmproxy sends by default, so no 'protocol' is set. GET /v1/models is NOT available: an authenticated request returns 404 with code 'unknown_url' (unauthenticated, every path returns 401, because the gateway checks the key before routing \u2014 so a 401 here means no key, not a missing endpoint). Model discovery therefore finds nothing. This provider therefore ships example_model_filter [\"pareto\"], so config.example.json carries \"model_filter\": [\"pareto\"] and a copied example works as is: when a /models fetch fails, llmproxy synthesizes the model list from model_filter, which is the supported way to use a provider that publishes no catalog. A hand-written config still needs the filter set, or the provider contributes nothing. Pricing and limits, checked September 2026: one model, 'pareto', a blend of frontier and open models. Unbiased's own pricing page lists $2.50/Mtok input, $0.25/Mtok cached input and $7.50/Mtok output, and states that subscriptions (Personal, Personal Max, pay-as-you-go) carry a usage allowance rather than unlimited usage. There is NO free tier, so nothing here belongs in believed_free, free_limits or free_allowance: listing pareto as free would put a paid model at the front of the free rotation and bill real credits. No per-minute or per-day rate limits are published on the pricing page, the model card or the docs, so free_limits stays empty for lack of a figure rather than because the limits are unlimited. The per-token rates above match the 'openrouter/unbiased/pareto' entry already carried in the top-level pricing block (2.5e-06 / 7.5e-06), which is where paid rates live; that block is rebuilt each scraper run from the LiteLLM baseline plus live-source overrides, so a direct 'unbiased-ai/pareto' key hand-added there would not survive the next run.",
-      "base_url": "https://api.unbiased.ai/v1",
-      "api_key": "sk_...",
-      "model_filter": [
-        "pareto"
-      ]
-    },
     "typesafe": {
       "_note": "Jev is a decision model, not a chat model: it answers typed questions (noul / choice / score) about a state and returns probabilities, never text. Two ways in: POST /v1/systemone with the native TypeSafe body {model, state, questions} for full control, or a chat/Responses request whose response_format JSON schema is made of decisions (booleans, 0..1 probabilities, enums, bounded integers), which the 'typesafe' protocol turns into questions and answers as that JSON object. Either way it is never offered by /v1/models or picked by any virtual model; name it directly as 'typesafe/jev-latest'. /models lists aliases under 'models[].name'.",
       "base_url": "https://api.typesafe.ai/v1",

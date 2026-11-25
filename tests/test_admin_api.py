@@ -235,18 +235,21 @@ def test_from_template_carries_a_free_allowance(client, cfg_path):
 def test_from_template_seeds_model_filter_from_the_template(client, cfg_path):
     """GUARD: a curated model list is inert unless it reaches the config.
 
-    Unbiased AI publishes no catalog (an authenticated GET /v1/models returns
-    404 'unknown_url'), so discovery finds nothing and llmproxy has nothing to
-    synthesize from unless model_filter names its one model. The template has
-    carried example_model_filter since the entry was added, but both
-    template-to-config paths hardcoded null, so adding the provider from a
-    template produced an entry that loaded cleanly and then sat inert.
+    A provider whose catalog lists ids that cannot serve completions (Agnes
+    AI's image and video models) or that publishes no catalog at all relies on
+    the template's example_model_filter. Both template-to-config paths once
+    hardcoded null, so adding such a provider from a template produced an
+    entry that loaded cleanly and then misbehaved or sat inert.
     """
+    from llmproxy.providers import load_data
+
+    expected = load_data()["providers"]["agnes-ai"]["example_model_filter"]
+    assert expected
     resp = client.post("/admin/api/providers/from-template", json={
-        "template_key": "unbiased-ai", "name": "ub", "api_key": "sk_x",
+        "template_key": "agnes-ai", "name": "ag", "api_key": "sk-x",
     })
     assert resp.status_code == 201
-    assert _read_config(cfg_path)["providers"]["ub"]["model_filter"] == ["pareto"]
+    assert _read_config(cfg_path)["providers"]["ag"]["model_filter"] == expected
 
 
 def test_from_template_leaves_model_filter_null_without_a_curated_list(client, cfg_path):
