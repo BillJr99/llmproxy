@@ -81,14 +81,6 @@ CONFIG_EXAMPLE_PATH = REPO_ROOT / "config.example.json"
 # key and the two non-negative per-token costs test_pricing_block_shape checks.
 # Drop an entry once a live source starts carrying the model.
 _PINNED_PRICING: dict[str, dict[str, float]] = {
-    # unbiased.ai/pricing: $2.50/Mtok in, $7.50/Mtok out (cached input $0.25/Mtok
-    # is not modelled here — the block carries two costs). Corroborated by the
-    # openrouter/unbiased/pareto entry the baseline already supplies at the same
-    # rates. Unbiased publishes no catalog, so no live source will ever cover it.
-    "unbiased-ai/pareto": {
-        "input_cost_per_token": 2.5e-06,
-        "output_cost_per_token": 7.5e-06,
-    },
     # docs.typesafe.ai/models: Jev 1.13 is $0.042/Mtok, charged per input token
     # only ("Output tokens are free"). jev-latest and jev-preview are aliases of
     # jev-1.13.0 today; re-check this when TypeSafe ships a new release.
@@ -130,7 +122,6 @@ _PLACEHOLDER_KEYS: dict[str, str] = {
     "tokenharbor": "thk_live_...",
     "tokenrouter": "sk-...",
     "atria-asi": "atr_...",
-    "unbiased-ai": "sk_...",
     "modelscope": "ms-...",
     "agnes-ai": "sk-...",
 }

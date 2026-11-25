@@ -83,12 +83,6 @@ BUILTIN = OrderedDict([
         "key_required": True,
         "key_hint": "Create an API key at api.atria-asi.ai/console/keys (Google sign-in). Keys look like atr_... (docs: api.atria-asi.ai/docs)",
     }),
-    ("unbiased-ai", {
-        "display": "Unbiased AI",
-        "base_url": "https://api.unbiased.ai/v1",
-        "key_required": True,
-        "key_hint": "Create an API key at platform.unbiased.ai (signup is reviewed by hand). Keys look like sk_...",
-    }),
     ("kilo", {
         "display": "Kilo AI (multi-vendor gateway)",
         "base_url": "https://api.kilo.ai/api/gateway",

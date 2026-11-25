@@ -1,10 +1,9 @@
 """A provider with no catalog endpoint is still usable via `model_filter`.
 
-Some upstreams publish no `GET /v1/models` at all. Unbiased AI is the case that
-prompted this file: an authenticated request returns `404 unknown_url`, while an
-*unauthenticated* one returns `401` on every path, because the gateway checks
-the key before routing — so probing without a key cannot tell you whether the
-endpoint exists.
+Some upstreams publish no `GET /v1/models` at all: an authenticated request
+returns `404 unknown_url`, while an *unauthenticated* one returns `401` on every
+path, because the gateway checks the key before routing — so probing without a
+key cannot tell you whether the endpoint exists.
 
 When discovery fails outright, llmproxy synthesizes the model list from
 `model_filter` rather than leaving the provider contributing nothing. The
@@ -44,17 +43,17 @@ class _Resp:
         return self._payload
 
 
-UNBIASED = {"base_url": "https://api.unbiased.ai/v1", "api_key": "k"}
+NOCATALOG = {"base_url": "https://nocatalog.example/v1", "api_key": "k"}
 
 
 def test_a_404_catalog_synthesizes_from_model_filter(monkeypatch):
     """The reported case: no catalog, so name the models yourself."""
     monkeypatch.setattr(S.requests, "get", lambda *a, **k: _Resp(
         {"error": {"message": "Not found", "code": "unknown_url"}}, status=404))
-    cfg = {**UNBIASED, "model_filter": ["pareto"]}
-    models = S._fetch_provider_models("unbiased-ai", cfg, 5)
-    assert [m["id"] for m in models] == ["unbiased-ai__pareto"]
-    assert models[0]["_route"] == ("unbiased-ai", "pareto")
+    cfg = {**NOCATALOG, "model_filter": ["m1"]}
+    models = S._fetch_provider_models("nocatalog", cfg, 5)
+    assert [m["id"] for m in models] == ["nocatalog__m1"]
+    assert models[0]["_route"] == ("nocatalog", "m1")
 
 
 def test_a_404_catalog_without_a_filter_contributes_nothing(monkeypatch):
@@ -64,7 +63,7 @@ def test_a_404_catalog_without_a_filter_contributes_nothing(monkeypatch):
     """
     monkeypatch.setattr(S.requests, "get", lambda *a, **k: _Resp(
         {"error": {"message": "Not found"}}, status=404))
-    assert S._fetch_provider_models("unbiased-ai", dict(UNBIASED), 5) == []
+    assert S._fetch_provider_models("nocatalog", dict(NOCATALOG), 5) == []
 
 
 def test_a_connection_failure_also_synthesizes(monkeypatch):
@@ -72,9 +71,9 @@ def test_a_connection_failure_also_synthesizes(monkeypatch):
     def boom(*a, **k):
         raise requests.exceptions.ConnectionError("no route to host")
     monkeypatch.setattr(S.requests, "get", boom)
-    cfg = {**UNBIASED, "model_filter": ["pareto"]}
-    assert [m["id"] for m in S._fetch_provider_models("unbiased-ai", cfg, 5)] == \
-        ["unbiased-ai__pareto"]
+    cfg = {**NOCATALOG, "model_filter": ["m1"]}
+    assert [m["id"] for m in S._fetch_provider_models("nocatalog", cfg, 5)] == \
+        ["nocatalog__m1"]
 
 
 def test_a_working_catalog_that_filters_to_zero_is_left_alone(monkeypatch):
@@ -85,17 +84,17 @@ def test_a_working_catalog_that_filters_to_zero_is_left_alone(monkeypatch):
     """
     monkeypatch.setattr(S.requests, "get", lambda *a, **k: _Resp(
         {"data": [{"id": "something-else"}, {"id": "another"}]}))
-    cfg = {**UNBIASED, "model_filter": ["pareto"]}
-    assert S._fetch_provider_models("unbiased-ai", cfg, 5) == []
+    cfg = {**NOCATALOG, "model_filter": ["m1"]}
+    assert S._fetch_provider_models("nocatalog", cfg, 5) == []
 
 
 def test_a_working_catalog_is_used_in_preference_to_the_filter(monkeypatch):
     """The filter restricts a live catalog; it does not replace it."""
     monkeypatch.setattr(S.requests, "get", lambda *a, **k: _Resp(
-        {"data": [{"id": "pareto"}, {"id": "other"}]}))
-    cfg = {**UNBIASED, "model_filter": ["pareto"]}
-    models = S._fetch_provider_models("unbiased-ai", cfg, 5)
-    assert [m["id"] for m in models] == ["unbiased-ai__pareto"]
+        {"data": [{"id": "m1"}, {"id": "other"}]}))
+    cfg = {**NOCATALOG, "model_filter": ["m1"]}
+    models = S._fetch_provider_models("nocatalog", cfg, 5)
+    assert [m["id"] for m in models] == ["nocatalog__m1"]
 
 
 # ── the dead key stays dead ─────────────────────────────────────────────────
@@ -109,16 +108,6 @@ def test_no_template_ships_the_dead_fallback_models_key():
     offenders = [k for k, v in providers.items()
                  if isinstance(v, dict) and "fallback_models" in v]
     assert offenders == []
-
-
-def test_the_unbiased_template_documents_the_real_behaviour():
-    """Its note claimed a working /v1/models, which sent users hunting."""
-    from llmproxy.providers import load_data
-
-    providers = load_data().get("providers", {})
-    note = providers["unbiased-ai"]["_note"]
-    assert "model_filter" in note
-    assert "not available" in note.lower() or "unknown_url" in note
 
 
 def test_the_scaffolding_script_no_longer_emits_the_dead_key():
@@ -168,7 +157,7 @@ def test_an_empty_catalog_is_reachable_not_a_failure(monkeypatch):
     reports unreachable. The admin "Test connection" button relies on this."""
     monkeypatch.setattr(S.requests, "get", lambda *a, **k: _Resp({"data": []}))
     models, reachable, error = S._fetch_provider_models_with_status(
-        "unbiased-ai", dict(UNBIASED), 5)
+        "nocatalog", dict(NOCATALOG), 5)
     assert (models, reachable, error) == ([], True, None)
 
 
@@ -177,6 +166,6 @@ def test_a_failed_fetch_reports_unreachable_with_the_error(monkeypatch):
         raise requests.exceptions.ConnectionError("no route to host")
     monkeypatch.setattr(S.requests, "get", boom)
     models, reachable, error = S._fetch_provider_models_with_status(
-        "unbiased-ai", dict(UNBIASED), 5)
+        "nocatalog", dict(NOCATALOG), 5)
     assert models == [] and reachable is False
     assert error.startswith("ConnectionError")

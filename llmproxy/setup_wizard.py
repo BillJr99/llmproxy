@@ -407,8 +407,8 @@ def _setup_from_template(providers: dict) -> tuple[str, dict] | None:
     api_key = new_key if new_key else existing_key
 
     # Seed the filter from the template. A provider that publishes no catalog
-    # (Unbiased AI) contributes nothing without it, because discovery finds
-    # nothing to synthesize from; one whose catalog carries ids that cannot
+    # contributes nothing without it, because discovery finds nothing to
+    # synthesize from; one whose catalog carries ids that cannot
     # serve completions (Agnes AI's image and video models) would otherwise put
     # them in the rotation. Templates without a curated list still get None,
     # which means "allow everything the catalog returns".
