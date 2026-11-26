@@ -44,7 +44,7 @@ CHUNK_OBJECT = "chat.completion.chunk"
 # which are legal inside JSON strings).
 _LINE_SPLIT = re.compile(r"\r\n|\n|\r")
 # An event ends at a blank line; tolerate mixed CRLF/LF terminators.
-_EVENT_SEP = re.compile(rb"\r?\n\r?\n")
+_EVENT_SEP = re.compile(rb"(?:\r\n|\n|\r(?!\n)){2}")
 
 
 class ChunkNormalizer:
@@ -262,8 +262,13 @@ def _normalize_event(raw: bytes, state: ChunkNormalizer) -> bytes:
         return raw
     others = [ln for ln in lines if ln and not ln.startswith("data:")]
     out = "".join(f"{ln}\n" for ln in others)
-    out += "data: " + json.dumps(fixed, ensure_ascii=False, separators=(",", ":")) + "\n\n"
-    return out.encode("utf-8")
+    try:
+        out += "data: " + json.dumps(fixed, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+        return out.encode("utf-8")
+    except (ValueError, TypeError, UnicodeEncodeError):
+        # e.g. a JSON-escaped lone surrogate: relay the event as received.
+        logger.warning("[stream_normalize] could not re-serialize event; relaying unchanged", exc_info=True)
+        return raw
 
 
 def normalize_sse_stream(byte_iter: Iterable[bytes], model: str = "") -> Iterator[bytes]:

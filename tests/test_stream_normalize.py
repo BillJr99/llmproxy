@@ -361,3 +361,24 @@ def test_large_single_buffer_is_linear():
     out = _events(raw)
     assert len(out) == 20000
     assert _t.perf_counter() - t0 < 2.0
+
+
+# --- review round 2 (codex follow-up) ----------------------------------------
+
+def test_cr_only_event_separators():
+    ev = json.dumps({"id": "c", "object": "chat.completion.chunk", "created": 1, "model": "m",
+                     "choices": [{"index": 0, "delta": {"content": "x"}, "finish_reason": None}]})
+    raw = f"data: {ev}\r\rdata: {ev}\r\r".encode()
+    out = _events(raw)
+    assert len(out) == 2 and b"".join(out) == raw
+
+
+def test_crlf_within_event_is_not_a_separator():
+    raw = b'event: x\r\ndata: {"choices":[{"index":0,"delta":{"content":"a"}}]}\r\n\r\n'
+    out = _events(raw, split=3)
+    assert b"".join(out) == raw
+
+
+def test_lone_surrogate_needing_repair_relays_raw():
+    raw = b'data: {"choices":[{"delta":{"content":"\\ud800"}}]}\n\n'
+    assert b"".join(_events(raw)) == raw
