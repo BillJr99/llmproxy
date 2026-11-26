@@ -293,3 +293,71 @@ def test_non_chat_endpoint_is_not_normalized(monkeypatch, tmp_path):
             {"model": "m1", "prompt": "x"}, 5,
         )
     assert b"".join(resp.response) == raw
+
+
+# --- review round 1 (agy): regressions ---------------------------------------
+
+def _events(stream: bytes, split: int | None = None):
+    parts = [stream] if split is None else [stream[i:i + split] for i in range(0, len(stream), split)]
+    return list(normalize_sse_stream(parts))
+
+
+def test_unicode_line_separators_in_content_are_not_split():
+    chunk = {"id": "c", "object": "chat.completion.chunk", "created": 1, "model": "m",
+             "choices": [{"index": 0, "delta": {"content": "a b c\u0085d"}, "finish_reason": None}]}
+    raw = ("data: " + json.dumps(chunk, ensure_ascii=False) + "\n\n").encode()
+    assert b"".join(_events(raw)) == raw
+
+
+def test_malformed_string_indices_do_not_raise():
+    for bad in ("--1", "²", "-1", -1, "1.5"):
+        chunk = {"choices": [{"index": bad, "delta": {"tool_calls": [{"index": bad, "id": "x",
+                 "function": {"name": "f", "arguments": "{}"}}]}}]}
+        fixed, changed = ChunkNormalizer().normalize(chunk)
+        assert changed
+        assert fixed["choices"][0]["index"] == 0
+        assert fixed["choices"][0]["delta"]["tool_calls"][0]["index"] == 0
+
+
+def test_idless_named_calls_in_separate_chunks_get_distinct_indices():
+    st = ChunkNormalizer()
+    a, _ = st.normalize({"choices": [{"delta": {"tool_calls": [{"function": {"name": "a", "arguments": "{"}}]}}]})
+    frag, _ = st.normalize({"choices": [{"delta": {"tool_calls": [{"function": {"arguments": "}"}}]}}]})
+    b, _ = st.normalize({"choices": [{"delta": {"tool_calls": [{"function": {"name": "b", "arguments": "{}"}}]}}]})
+    assert a["choices"][0]["delta"]["tool_calls"][0]["index"] == 0
+    assert frag["choices"][0]["delta"]["tool_calls"][0]["index"] == 0
+    assert b["choices"][0]["delta"]["tool_calls"][0]["index"] == 1
+
+
+def test_idless_first_call_then_id_call_do_not_collide():
+    st = ChunkNormalizer()
+    st.normalize({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"name": "a", "arguments": "{}"}}]}}]})
+    b, _ = st.normalize({"choices": [{"delta": {"tool_calls": [{"id": "call_2", "function": {"name": "b", "arguments": "{}"}}]}}]})
+    assert b["choices"][0]["delta"]["tool_calls"][0]["index"] == 1
+
+
+def test_empty_type_is_repaired():
+    fixed, changed = ChunkNormalizer().normalize(
+        {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "x", "type": "",
+         "function": {"name": "f", "arguments": "{}"}}]}}]})
+    assert changed and fixed["choices"][0]["delta"]["tool_calls"][0]["type"] == "function"
+
+
+def test_mixed_terminators_split_into_separate_events():
+    def c(t):
+        return json.dumps({"id": "c", "object": "chat.completion.chunk", "created": 1, "model": "m",
+                           "choices": [{"index": 0, "delta": {"content": t}, "finish_reason": None}]})
+    raw = f"data: {c('x')}\r\n\ndata: {c('y')}\n\r\ndata: [DONE]\n\n".encode()
+    out = _events(raw)
+    assert len(out) == 3 and b"".join(out) == raw
+
+
+def test_large_single_buffer_is_linear():
+    import time as _t
+    ev = ("data: " + json.dumps({"id": "c", "object": "chat.completion.chunk", "created": 1, "model": "m",
+          "choices": [{"index": 0, "delta": {"content": "hello"}, "finish_reason": None}]}) + "\n\n").encode()
+    raw = ev * 20000
+    t0 = _t.perf_counter()
+    out = _events(raw)
+    assert len(out) == 20000
+    assert _t.perf_counter() - t0 < 2.0

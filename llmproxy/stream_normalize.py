@@ -32,12 +32,19 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import Iterable, Iterator
 
 logger = logging.getLogger("llmproxy.stream_normalize")
 
 CHUNK_OBJECT = "chat.completion.chunk"
+
+# SSE line endings only (str.splitlines also splits on U+2028 and friends,
+# which are legal inside JSON strings).
+_LINE_SPLIT = re.compile(r"\r\n|\n|\r")
+# An event ends at a blank line; tolerate mixed CRLF/LF terminators.
+_EVENT_SEP = re.compile(rb"\r?\n\r?\n")
 
 
 class ChunkNormalizer:
@@ -56,6 +63,10 @@ class ChunkNormalizer:
         self._tool_ids: dict[int, dict[str, int]] = {}
         # choice index -> index of the tool call the last delta belonged to
         self._last_tool: dict[int, int] = {}
+        # choice index -> next unused tool call index
+        self._next_tool: dict[int, int] = {}
+        # choice index -> tool call indices that already carried a function name
+        self._named: dict[int, set[int]] = {}
 
     def normalize(self, chunk) -> tuple[dict | None, bool]:
         return normalize_chat_chunk(chunk, self)
@@ -68,9 +79,17 @@ def _as_int(value) -> int | None:
         return value
     if isinstance(value, float) and value.is_integer():
         return int(value)
-    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
-        return int(value.strip())
+    if isinstance(value, str):
+        v = value.strip()
+        if v.isascii() and re.fullmatch(r"-?[0-9]+", v):
+            return int(v)
     return None
+
+
+def _as_index(value) -> int | None:
+    """A usable array index: a non-negative integer, else ``None``."""
+    i = _as_int(value)
+    return i if i is not None and i >= 0 else None
 
 
 def _set(d: dict, key: str, value) -> bool:
@@ -84,32 +103,42 @@ def _set(d: dict, key: str, value) -> bool:
 def _normalize_tool_calls(calls: list, choice_index: int, state: ChunkNormalizer) -> bool:
     changed = False
     ids = state._tool_ids.setdefault(choice_index, {})
+    named = state._named.setdefault(choice_index, set())
     for pos, call in enumerate(calls):
         if not isinstance(call, dict):
             continue
         call_id = call.get("id") if isinstance(call.get("id"), str) and call.get("id") else None
-        idx = _as_int(call.get("index"))
+        fn = call.get("function")
+        name = fn.get("name") if isinstance(fn, dict) else None
+        has_name = isinstance(name, str) and bool(name)
+        nxt = state._next_tool.get(choice_index, 0)
+        idx = _as_index(call.get("index"))
         if idx is None:
+            last = state._last_tool.get(choice_index)
             if call_id is not None and call_id in ids:
                 idx = ids[call_id]
             elif call_id is not None:
                 # A new call: the next free slot, so parallel calls that each
                 # arrive without an index still get distinct ones.
-                idx = max(max(ids.values(), default=-1) + 1, pos)
-            elif choice_index in state._last_tool and pos == 0 and len(calls) == 1:
-                # An id-less continuation fragment belongs to the call in progress.
-                idx = state._last_tool[choice_index]
+                idx = max(nxt, pos)
+            elif last is not None and pos == 0 and len(calls) == 1 and not (has_name and last in named):
+                # An id-less continuation fragment belongs to the call in progress
+                # (unless it names a function and that call already has a name).
+                idx = last
+            elif has_name and last is not None:
+                idx = max(nxt, pos)
             else:
                 idx = pos
         changed |= _set(call, "index", idx)
         if call_id is not None:
             ids.setdefault(call_id, idx)
+        if has_name:
+            named.add(idx)
         state._last_tool[choice_index] = idx
+        state._next_tool[choice_index] = max(nxt, idx + 1)
 
-        fn = call.get("function")
         if isinstance(fn, dict):
-            name = fn.get("name")
-            if isinstance(name, str) and name and not isinstance(call.get("type"), str):
+            if has_name and not (isinstance(call.get("type"), str) and call.get("type")):
                 changed |= _set(call, "type", "function")
             args = fn.get("arguments")
             if args is None:
@@ -152,7 +181,7 @@ def normalize_chat_chunk(chunk, state: ChunkNormalizer | None = None) -> tuple[d
     for pos, choice in enumerate(chunk["choices"]):
         if not isinstance(choice, dict):
             continue
-        idx = _as_int(choice.get("index"))
+        idx = _as_index(choice.get("index"))
         changed |= _set(choice, "index", pos if idx is None else idx)
         delta = choice.get("delta")
         if not isinstance(delta, dict):
@@ -191,26 +220,25 @@ def normalize_chat_chunk(chunk, state: ChunkNormalizer | None = None) -> tuple[d
     return chunk, changed
 
 
-def _split_events(buf: bytearray) -> Iterator[bytes]:
-    """Pop every complete SSE event (terminated by a blank line) off ``buf``."""
-    while True:
-        cut: tuple[int, int] | None = None
-        for sep in (b"\r\n\r\n", b"\n\n"):
-            i = buf.find(sep)
-            if i != -1 and (cut is None or i < cut[0]):
-                cut = (i, len(sep))
-        if cut is None:
-            return
-        end = cut[0] + cut[1]
-        event = bytes(buf[:end])
-        del buf[:end]
-        yield event
+def _split_events(buf: bytearray) -> list[bytes]:
+    """Pop every complete SSE event (terminated by a blank line) off ``buf``.
+
+    One linear scan per call, then a single trim of the consumed prefix.
+    """
+    events: list[bytes] = []
+    pos = 0
+    for m in _EVENT_SEP.finditer(buf):
+        events.append(bytes(buf[pos:m.end()]))
+        pos = m.end()
+    if pos:
+        del buf[:pos]
+    return events
 
 
 def _normalize_event(raw: bytes, state: ChunkNormalizer) -> bytes:
     """Return the bytes to relay for one complete SSE event (``b""`` drops it)."""
     text = raw.decode("utf-8", "replace")
-    lines = text.splitlines()
+    lines = _LINE_SPLIT.split(text)
     data_lines = [ln for ln in lines if ln.startswith("data:")]
     if not data_lines:
         return raw  # comment / keep-alive / bare event: relay as-is
@@ -222,7 +250,11 @@ def _normalize_event(raw: bytes, state: ChunkNormalizer) -> bytes:
     except (ValueError, TypeError):
         logger.debug("[stream_normalize] dropping non-JSON data event: %r", data[:120])
         return b""
-    fixed, changed = state.normalize(parsed)
+    try:
+        fixed, changed = state.normalize(parsed)
+    except Exception:  # never let a repair bug kill a stream: relay as received
+        logger.warning("[stream_normalize] normalizer error; relaying event unchanged", exc_info=True)
+        return raw
     if fixed is None:
         logger.debug("[stream_normalize] dropping non-chunk data event: %r", data[:120])
         return b""
