@@ -87,6 +87,7 @@ from flask import (
 from . import USER_AGENT, __version__, caching
 from . import fusion as _fusion
 from . import route_report as _route_report
+from . import stream_normalize as _stream_normalize
 from .config import (
     DEFAULT_FREE_TIER_CONFIG,
     RESERVED_PROVIDER_NAMES,
@@ -5332,8 +5333,18 @@ def _translated_stream_response(
                         if chunk:
                             yield chunk
 
+                norm = (
+                    _stream_normalize.ChunkNormalizer(model=upstream_model)
+                    if outbound.is_identity and _stream_normalize_enabled(config)
+                    else None
+                )
+
                 def teed(canon):
                     for c in canon:
+                        if norm is not None and isinstance(c, dict) and (
+                            isinstance(c.get("choices"), list) or isinstance(c.get("usage"), dict)
+                        ):
+                            norm.normalize(c)
                         if isinstance(c, dict) and c.get("usage"):
                             captured.update(c["usage"])
                         yield c
@@ -5597,7 +5608,9 @@ def _proxy_streaming(
         try:
             with r:
                 first = True
-                for chunk in r.iter_content(chunk_size=None):
+                for chunk in _normalized_relay(
+                    r.iter_content(chunk_size=None), endpoint, upstream_model, config,
+                ):
                     if chunk:
                         if first:
                             logger.info(
@@ -6472,6 +6485,28 @@ def _stream_buffer_full_enabled(config: dict | None = None) -> bool:
     an interactive chat UI it is not.
     """
     return _config_bool("stream_buffer_full", False, config)
+
+
+def _stream_normalize_enabled(config: dict | None = None) -> bool:
+    """Whether relayed chat-completion stream chunks are normalized (default on).
+
+    See ``llmproxy.stream_normalize``: an upstream whose chunks are almost but
+    not quite OpenAI-shaped (Cloudflare Workers AI omits ``choices[].index`` and
+    can send tool-call arguments as an object) aborts strict clients such as the
+    Vercel AI SDK. Already-valid chunks are relayed byte-for-byte either way.
+    """
+    return _config_bool("stream_normalize", True, config)
+
+
+def _normalized_relay(chunks, endpoint: str, model: str, config: dict | None):
+    """Wrap an identity relay's byte chunks in the chunk normalizer when it applies.
+
+    Only ``chat/completions`` streams are normalized; any other endpoint (the
+    generic passthrough, legacy completions) is relayed untouched.
+    """
+    if endpoint.strip("/") != "chat/completions" or not _stream_normalize_enabled(config):
+        return chunks
+    return _stream_normalize.normalize_sse_stream(chunks, model=model)
 
 
 def _target_reasoning_tier_explained(payload: dict) -> tuple[str, str]:
@@ -7961,7 +7996,9 @@ def _proxy_cycling_streaming(
                     yield lead
                 with r:
                     first = True
-                    for chunk in itertools.chain(pfx, rst):
+                    for chunk in _normalized_relay(
+                        itertools.chain(pfx, rst), endpoint, um, config,
+                    ):
                         if chunk:
                             if first:
                                 logger.info("  upstream %d  first chunk: %s", r.status_code, chunk[:200])
