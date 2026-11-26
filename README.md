@@ -2656,6 +2656,38 @@ renders a turn once it is complete, it is often the right one.
 `server.stream_buffer_max_bytes` (default 8 MiB) caps the buffer; past it the
 response commits and the remainder streams incrementally as usual.
 
+<a name="stream_normalize"></a>
+### `server.stream_normalize` - repair near-OpenAI stream chunks
+
+Some OpenAI-compatible upstreams stream chunks that are almost, but not quite,
+OpenAI-shaped. Cloudflare Workers AI is the known case: its `choices[]` items omit
+`index`, its tool-call deltas can omit `index` or `id` and can send
+`function.arguments` as a JSON object instead of a string, and it can send a
+usage-only chunk with no `choices`. Strict clients reject such a chunk and abort
+the whole stream; the Vercel AI SDK's openai-compatible provider (used by opencode)
+reports `Invalid ... stream event`.
+
+With `server.stream_normalize` on (the default), every relayed
+`chat/completions` stream chunk is checked before it reaches the client:
+
+- each `choices[]` item gets an integer `index` (its position when missing) and a
+  `delta` object;
+- each `tool_calls[]` item gets an integer `index` (a new call id takes the next
+  free slot, an id-less fragment continues the call in progress), `type:
+  "function"` when it names a function, and a string `function.arguments`
+  (objects and arrays are JSON-encoded, `null` becomes `""`);
+- `finish_reason` is `null` or a string;
+- a usage-only chunk gets `"choices": []`;
+- a repaired chunk also gets any missing `object`, `id` (the stream's first id),
+  `created` and `model`;
+- data that is not a JSON object with `choices`, `usage` or `error` is dropped;
+  `error` payloads, SSE comments and `[DONE]` pass through.
+
+Content text is never changed, and a chunk that needs no repair is relayed as the
+exact bytes the upstream sent, so a well-behaved provider's stream is unchanged.
+Other endpoints (the generic passthrough, native legacy `completions`) are never
+touched. Set it to `false` to relay upstream chunks verbatim.
+
 <a name="free_tier_cache_affinity"></a>
 ### `server.free_tier_cache_affinity` — keep one conversation on one free model
 
