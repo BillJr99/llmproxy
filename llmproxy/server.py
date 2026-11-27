@@ -678,8 +678,9 @@ def _parse_retry_after(value) -> float | None:
     if not value:
         return None
     value = str(value).strip()
-    if value.isdigit():
-        return float(value)
+    if value.isascii() and value.isdecimal():
+        seconds = float(value)
+        return seconds if math.isfinite(seconds) else _MAX_SATURATION_COOLDOWN_S
     try:
         from email.utils import parsedate_to_datetime
         dt = parsedate_to_datetime(value)
@@ -2601,7 +2602,7 @@ def _coerce_context_length(value) -> int | None:
         return None
     try:
         parsed = int(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return parsed if parsed > 0 else None
 
@@ -7818,7 +7819,7 @@ def _proxy_cycling_streaming(
             else:
                 error_body, prefix, rest = _peek_stream(resp)
                 buffered = [prefix] if prefix else []
-                window_reason = "peek"
+                window_reason = "peek" if prefix else "empty"
             if error_body is not None:
                 # A stream that opens with a quota error cools the candidate too.
                 if _is_quota_error(None, error_body):
@@ -10866,6 +10867,8 @@ def _proxy_endpoint(
     raw_body = request.get_json(force=True, silent=True)
     if raw_body is None:
         return _error("Request body must be valid JSON.", status=400)
+    if not isinstance(raw_body, dict):
+        return _error("Request body must be a JSON object.", status=400)
 
     inbound_adapter = get_inbound(inbound)
     try:
@@ -10889,9 +10892,11 @@ def _proxy_endpoint(
     if stream_override is not None:
         payload["stream"] = stream_override
 
-    model_full: str = payload.get("model", "")
-    if not model_full:
+    model_full = payload.get("model")
+    if model_full is None or model_full == "":
         return _error("Request body must include a 'model' field.", status=400)
+    if not isinstance(model_full, str):
+        return _error("The 'model' field must be a string.", status=400)
 
     config = load_config()
     # Accept a slash-form id (provider/model) and normalize it back to the
@@ -11275,8 +11280,8 @@ def completions() -> Response:
       applied once bytes are already flowing to the client.
     """
     body = request.get_json(force=True, silent=True)
-    if isinstance(body, dict):
-        model = _canonicalize_model_id(body.get("model", ""), load_config())
+    if isinstance(body, dict) and isinstance(body.get("model"), str):
+        model = _canonicalize_model_id(body["model"], load_config())
         if body.get("stream") or _is_virtual_model(model):
             return _proxy_endpoint("chat/completions", inbound="openai-completions")
 

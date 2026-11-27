@@ -293,6 +293,37 @@ def _virtual_pool(monkeypatch, server, candidates):
 _PROVIDER_CFG = {"base_url": "http://upstream.example/v1", "api_key": "k"}
 
 
+@pytest.mark.parametrize("path", [
+    "/v1/chat/completions", "/v1/completions", "/v1/messages", "/v1/responses",
+    "/v1beta/models/fakeprov__free-model:generateContent",
+])
+@pytest.mark.parametrize("body", [[], True, 17, "text"])
+def test_generation_rejects_non_object_json(client, path, body):
+    response = client.post(path, json=body)
+    assert response.status_code == 400
+    assert response.get_json()["error"]["message"] == "Request body must be a JSON object."
+
+
+@pytest.mark.parametrize("path", [
+    "/v1/chat/completions", "/v1/completions", "/v1/messages", "/v1/responses",
+])
+@pytest.mark.parametrize("model", [17, True, ["fakeprov__free-model"], {"name": "model"}])
+def test_generation_rejects_non_string_model(client, path, model):
+    response = client.post(path, json={"model": model, "stream": True})
+    assert response.status_code == 400
+    assert response.get_json()["error"]["message"] == "The 'model' field must be a string."
+
+
+def test_gemini_generation_uses_model_from_url(server, monkeypatch):
+    _stub_upstream(monkeypatch, server, _FakeResp)
+    response = server.app.test_client().post(
+        "/v1beta/models/fakeprov__free-model:generateContent",
+        json={"model": ["ignored"], "contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+    )
+    assert response.status_code == 200, response.data
+    assert response.headers["X-LLMProxy-Selected-Model"] == "fakeprov/free-model"
+
+
 @pytest.mark.parametrize("path,payload", _PROVENANCE_ROUTES,
                          ids=[p for p, _ in _PROVENANCE_ROUTES])
 def test_every_route_reports_the_model_that_served_a_virtual(

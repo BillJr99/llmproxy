@@ -193,6 +193,41 @@ def test_extract_usage_missing_or_malformed():
     assert extract_usage({"usage": {"prompt_tokens": 0, "completion_tokens": 0}}) is None
 
 
+def test_extract_usage_keeps_finite_counters_when_one_overflows():
+    body = (
+        b'{"usage":{"prompt_tokens":1e999,"completion_tokens":2,"total_tokens":1e999,'
+        b'"prompt_tokens_details":{"cached_tokens":1e999,"cache_write_tokens":4}}}'
+    )
+    assert extract_usage(body) == {
+        "prompt_tokens": 0,
+        "completion_tokens": 2,
+        "total_tokens": 2,
+        "cache_creation_tokens": 4,
+    }
+
+
+def test_stream_usage_skips_overflow_and_uses_previous_valid_record():
+    tail = (
+        b'data: {"usage":{"completion_tokens":2}}\n\n'
+        b'data: {"usage":{"completion_tokens":1e999}}\n\n'
+        b'data: [DONE]\n\n'
+    )
+    assert parse_stream_usage(tail) == {
+        "prompt_tokens": 0,
+        "completion_tokens": 2,
+        "total_tokens": 2,
+    }
+
+
+def test_extract_usage_ignores_nonfinite_cost_and_uses_alternate_cost():
+    body = b'{"usage":{"prompt_tokens":1,"cost":1e999,"total_cost":0.002}}'
+    assert extract_usage(body)["cost"] == 0.002
+    body = {"usage": {"prompt_tokens": 1, "cost": 10**400}}
+    assert "cost" not in extract_usage(body)
+    body = b'{"usage":{"prompt_tokens":1,"cost_details":{"upstream_inference_cost":1e999,"total_cost":0.0}}}'
+    assert extract_usage(body)["cost"] == 0.0
+
+
 # ── parse_stream_usage ──────────────────────────────────────────────────────
 
 def test_parse_stream_usage_final_chunk():
@@ -233,6 +268,14 @@ def test_compute_cost_computed_from_pricing():
 def test_compute_cost_unknown():
     assert compute_cost("p", "m", {"prompt_tokens": 10}, {}) == (0.0, "unknown")
     assert compute_cost("p", "m", None, None) == (0.0, "unknown")
+
+
+def test_compute_cost_ignores_nonfinite_and_overflowing_prices():
+    usage_obj = {"prompt_tokens": 2, "cost": float("inf")}
+    assert compute_cost("p", "m", usage_obj, {"p/m": (0.01, 0.01)}) == (0.02, "computed")
+    assert compute_cost("p", "m", usage_obj, {"p/m": (1e308, 0.01)}) == (0.0, "unknown")
+    usage_obj = {"prompt_tokens": 10**400}
+    assert compute_cost("p", "m", usage_obj, {"p/m": (0.01, 0.01)}) == (0.0, "unknown")
 
 
 def test_usage_timezone_config_pins_the_boundary(monkeypatch):

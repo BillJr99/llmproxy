@@ -116,3 +116,10 @@ def test_retry_after_http_date_parsed():
     assert (server._parse_retry_after(future) or 0) > 0
     past = "Wed, 21 Oct 1999 07:28:00 GMT"
     assert (server._parse_retry_after(past) or 0) == 0
+
+
+def test_retry_after_delay_requires_ascii_digits_and_bounds_overflow():
+    assert server._parse_retry_after("30") == 30
+    assert server._parse_retry_after("²") is None
+    assert server._parse_retry_after("9" * 400) == server._MAX_SATURATION_COOLDOWN_S
+    assert server._saturation_cooldown_seconds("9" * 400) == server._MAX_SATURATION_COOLDOWN_S

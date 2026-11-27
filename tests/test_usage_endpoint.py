@@ -73,6 +73,35 @@ def test_usage_records_tokens_and_totals(usage_server):
     assert m["unexpected_cost"] is False
 
 
+def test_overflowing_provider_usage_does_not_break_a_successful_chat(usage_server, monkeypatch):
+    body = (
+        b'{"choices":[{"message":{"role":"assistant","content":"fixture answer"}}],'
+        b'"usage":{"prompt_tokens":1e999,"completion_tokens":2,"cost":1e999}}'
+    )
+    cfg = usage_server.load_config()
+    monkeypatch.setattr(
+        usage_server,
+        "_resolve_provider",
+        lambda model: ("groq", cfg["providers"]["groq"], "free-model", None),
+    )
+    monkeypatch.setattr(
+        usage_server,
+        "_proxy_request",
+        lambda *args: usage_server.Response(body, content_type="application/json"),
+    )
+    client = usage_server.app.test_client()
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "groq/free-model", "messages": [{"role": "user", "content": "fixture"}]},
+    )
+    assert response.status_code == 200
+    assert response.get_data() == body
+    report = client.get("/v1/usage").get_json()
+    assert report["totals"]["requests"] == 1
+    assert report["totals"]["total_tokens"] == 2
+    assert report["flagged_paid_free_models"] == []
+
+
 def test_usage_key_anonymous_matches_legacy_form(usage_server):
     # No account -> byte-identical to the historical provider/model key.
     assert usage_server._usage_key("groq", "free-model") == "groq/free-model"

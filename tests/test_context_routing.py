@@ -63,6 +63,7 @@ def _long(tokens: int) -> dict:
     (8192, 8192), ("8192", 8192), (8192.0, 8192), (131072, 131072),
     (None, None), (True, None), (False, None), (0, None), (-1, None),
     ("abc", None), ({}, None), ([], None),
+    (json.loads("1e999"), None), ("Infinity", None),
 ])
 def test_coerce_context_length(server, raw, expected):
     assert server._coerce_context_length(raw) == expected
@@ -186,11 +187,13 @@ def test_single_candidate_is_never_reordered(server):
 def test_rebuild_populates_the_context_cache(server, monkeypatch):
     models = [
         {"id": "p__a", "context_length": 8192, "_route": ("p", "a")},
-        {"id": "p__b", "context_length": None, "_route": ("p", "b")},
+        {"id": "p__b", "context_length": "Infinity", "_route": ("p", "b")},
         {"id": "p__c", "context_length": "131072", "_route": ("p", "c")},
     ]
     monkeypatch.setattr(server, "_fetch_provider_models", lambda *a, **k: list(models))
     server._rebuild_route_cache({"p": {"base_url": "http://p/v1"}}, 5)
+    routes = server._get_route_cache_snapshot()
+    assert routes["p__b"] == ("p", "b")
     snap = server._get_model_context_snapshot()
     assert snap["p/a"] == 8192
     assert snap["p/c"] == 131072
