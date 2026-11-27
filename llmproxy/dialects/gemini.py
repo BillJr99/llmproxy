@@ -161,6 +161,14 @@ def _usage(meta: dict | None) -> dict | None:
     return out
 
 
+def _prompt_was_blocked(data: dict) -> bool:
+    if data.get("candidates"):
+        return False
+    feedback = data.get("promptFeedback")
+    reason = feedback.get("blockReason") if isinstance(feedback, dict) else None
+    return isinstance(reason, str) and reason not in ("", "BLOCK_REASON_UNSPECIFIED")
+
+
 class GeminiOutbound(OutboundAdapter):
     name = "gemini"
 
@@ -196,7 +204,8 @@ class GeminiOutbound(OutboundAdapter):
         message: dict = {"role": "assistant", "content": text or None}
         if tool_calls:
             message["tool_calls"] = tool_calls
-        finish = _FINISH_MAP.get(cand.get("finishReason", "STOP"), "stop")
+        finish = ("content_filter" if _prompt_was_blocked(data)
+                  else _FINISH_MAP.get(cand.get("finishReason", "STOP"), "stop"))
         if tool_calls:
             finish = "tool_calls"
         out = {
@@ -238,7 +247,9 @@ class GeminiOutbound(OutboundAdapter):
                 "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
             }
             finish = cand.get("finishReason")
-            if finish:
+            if _prompt_was_blocked(obj):
+                chunk["choices"][0]["finish_reason"] = "content_filter"
+            elif finish:
                 chunk["choices"][0]["finish_reason"] = (
                     "tool_calls" if tool_calls else _FINISH_MAP.get(finish, "stop")
                 )

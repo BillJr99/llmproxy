@@ -111,6 +111,7 @@ def test_zero_timeout_does_not_wait(cfg_path, clock):
 
 @pytest.mark.parametrize("raw,expected", [
     (None, 600), ("", 600), ("120", 120), ("0", 0), ("abc", 600), ("90.5", 90),
+    ("inf", 600), ("-inf", 600), ("1e999", 600), ("nan", 600),
 ])
 def test_timeout_env_parsing(monkeypatch, raw, expected):
     if raw is None:

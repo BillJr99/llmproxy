@@ -267,6 +267,34 @@ def test_openai_in_gemini_up_stream(monkeypatch, server):
     assert "data: [DONE]" in body
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_openai_in_gemini_up_preserves_prompt_filter(monkeypatch, server, stream):
+    blocked = json.dumps({
+        "promptFeedback": {"blockReason": "SAFETY"},
+        "usageMetadata": {"promptTokenCount": 6, "totalTokenCount": 6},
+    }).encode()
+    response = (_FakeResp(chunks=[b"data: " + blocked + b"\n\n"], content_type="text/event-stream")
+                if stream else _FakeResp(body=blocked))
+    _set_post(monkeypatch, server, lambda *_: response)
+    result = server.app.test_client().post(
+        "/v1/chat/completions",
+        json={"model": "gem/gemini-x", "stream": stream,
+              "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert result.status_code == 200
+    if stream:
+        events = [line.removeprefix("data: ") for line in result.get_data(as_text=True).splitlines()
+                  if line.startswith("data: ")]
+        assert events[-1] == "[DONE]"
+        data = next(chunk for event in events[:-1] if (chunk := json.loads(event))["choices"])
+        assert not data["choices"][0]["delta"].get("content")
+    else:
+        data = result.get_json()
+        assert data["choices"][0]["message"]["content"] is None
+    assert data["choices"][0]["finish_reason"] == "content_filter"
+    assert data["usage"]["prompt_tokens"] == 6
+
+
 # --------------------------------------------------------------------------- #
 # cross-dialect: anthropic inbound -> gemini upstream (streaming)
 # --------------------------------------------------------------------------- #

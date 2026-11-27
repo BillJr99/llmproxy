@@ -528,6 +528,15 @@ def test_a_malformed_scores_block_is_ignored_not_fatal(tmp_path, monkeypatch):
     assert s._get_flagship_scores() == {"ok": 0.5}
 
 
+def test_flagship_scores_skip_overflowing_and_nonfinite_numbers(server, monkeypatch):
+    state = json.loads(
+        '{"model_scores":{"healthy":0.5,"huge":' + str(10**400) + '},'
+        '"scores":{"provider/bad":{"combined":1e999},"provider/healthy":{"combined":0.75}}}'
+    )
+    monkeypatch.setattr(server, "load_flagship_state", lambda _: state)
+    assert server._get_flagship_scores() == {"healthy": 0.5, "provider/healthy": 0.75}
+
+
 # ── route provenance ────────────────────────────────────────────────────────
 #
 # A pick that cannot be explained afterwards is a pick nobody can debug, so the

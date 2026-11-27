@@ -399,7 +399,7 @@ def _startup_wait_timeout() -> int:
         return _STARTUP_WAIT_DEFAULT
     try:
         return int(float(raw))
-    except ValueError as e:
+    except (ValueError, OverflowError) as e:
         print(f"[__main__:_startup_wait_timeout] {e}")
         traceback.print_exc()
         return _STARTUP_WAIT_DEFAULT
