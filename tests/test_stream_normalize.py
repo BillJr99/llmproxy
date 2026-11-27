@@ -379,6 +379,188 @@ def test_crlf_within_event_is_not_a_separator():
     assert b"".join(out) == raw
 
 
-def test_lone_surrogate_needing_repair_relays_raw():
+def test_lone_surrogate_is_preserved_when_the_frame_needs_repair():
     raw = b'data: {"choices":[{"delta":{"content":"\\ud800"}}]}\n\n'
+    fixed, = _frames(b"".join(_events(raw)))
+    assert fixed["choices"] == [{"index": 0, "delta": {"content": "\ud800"}}]
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (42, "42"),
+        (1.25, "1.25"),
+        (True, "true"),
+        (False, "false"),
+        ({"text": "untyped object"}, None),
+        ([True, {"type": 5}, {"text": "untyped"}, {"type": "text", "text": "keep"}],
+         [{"type": "text", "text": "keep"}]),
+    ],
+)
+def test_bad_content_relay(content, expected):
+    chunk = copy.deepcopy(VALID)
+    chunk["choices"][0]["delta"]["content"] = content
+    fixed, = _frames(b"".join(_events(_frame(chunk))))
+    delta = fixed["choices"][0]["delta"]
+    if expected is None:
+        assert "content" not in delta
+    else:
+        assert delta["content"] == expected
+
+
+@pytest.mark.parametrize(("field", "value"), [("id", 123), ("model", 9), ("created", "17"), ("created", True)])
+def test_wrong_metadata_type_alone_triggers_repair(field, value):
+    chunk = copy.deepcopy(VALID)
+    chunk[field] = value
+    fixed, = _frames(b"".join(normalize_sse_stream([_frame(chunk)], model="fallback")))
+    assert isinstance(fixed[field], {"id": str, "model": str, "created": int}[field])
+    assert not isinstance(fixed[field], bool)
+    if value == "17":
+        assert fixed[field] == 17
+
+
+def test_invalid_role_reasoning_and_non_array_tool_calls_are_dropped():
+    chunk = copy.deepcopy(VALID)
+    chunk["choices"][0]["delta"].update(
+        role="user", reasoning=5, reasoning_content=False, tool_calls={"function": {}},
+    )
+    fixed, = _frames(b"".join(_events(_frame(chunk))))
+    assert fixed["choices"][0]["delta"] == {"content": "Hi"}
+
+
+def test_malformed_calls_drop_without_inventing_tool_ids():
+    chunk = copy.deepcopy(VALID)
+    chunk["choices"][0]["delta"]["tool_calls"] = [
+        0, {"id": "missing"}, {"function": "wrong"},
+        {"id": 42, "function": {"name": 9, "arguments": "{}"},
+         "extra_content": {"google": {"thought_signature": 42}}},
+        {"id": "real", "function": {"name": "fn", "arguments": "{}"},
+         "extra_content": {"google": {"thought_signature": "sig"}}},
+    ]
+    fixed, = _frames(b"".join(_events(_frame(chunk))))
+    malformed, real = fixed["choices"][0]["delta"]["tool_calls"]
+    assert "id" not in malformed
+    assert malformed["function"] == {"arguments": "{}"}
+    assert malformed["extra_content"] == {"google": {}}
+    assert real["id"] == "real"
+    assert real["function"]["name"] == "fn"
+    assert real["extra_content"] == {"google": {"thought_signature": "sig"}}
+
+
+@pytest.mark.parametrize("extra", [False, {"google": "invalid"}])
+def test_malformed_tool_extra_content_is_removed(extra):
+    chunk = copy.deepcopy(VALID)
+    chunk["choices"][0]["delta"]["tool_calls"] = [
+        {"index": 0, "id": "real", "type": "function", "function": {"arguments": "{}"}, "extra_content": extra},
+    ]
+    fixed, = _frames(b"".join(_events(_frame(chunk))))
+    call = fixed["choices"][0]["delta"]["tool_calls"][0]
+    assert call.get("extra_content") == ({} if isinstance(extra, dict) else None)
+
+
+def test_choice_and_usage_repairs_preserve_numeric_usage_and_unknown_fields():
+    chunk = copy.deepcopy(VALID)
+    chunk["choices"] = [False, None, chunk["choices"][0]]
+    chunk["usage"] = {
+        "prompt_tokens": "7",
+        "completion_tokens": True,
+        "total_tokens": 9.25,
+        "billed_tokens": "unmodeled",
+        "prompt_tokens_details": {"cached_tokens": "6.5e0", "provider": "keep"},
+        "completion_tokens_details": {
+            "reasoning_tokens": "unknown",
+            "accepted_prediction_tokens": "1e999",
+            "rejected_prediction_tokens": 2,
+        },
+    }
+    fixed, = _frames(b"".join(_events(_frame(chunk))))
+    assert fixed["choices"] == VALID["choices"]
+    assert fixed["usage"] == {
+        "prompt_tokens": 7,
+        "total_tokens": 9.25,
+        "billed_tokens": "unmodeled",
+        "prompt_tokens_details": {"cached_tokens": 6.5, "provider": "keep"},
+        "completion_tokens_details": {"rejected_prediction_tokens": 2},
+    }
+
+
+def test_invalid_usage_objects_are_dropped_and_valid_typed_content_is_untouched():
+    chunk = copy.deepcopy(VALID)
+    chunk["usage"] = "invalid"
+    fixed, = _frames(b"".join(_events(_frame(chunk))))
+    assert "usage" not in fixed
+    chunk["usage"] = {"prompt_tokens_details": "invalid", "completion_tokens_details": None}
+    fixed, = _frames(b"".join(_events(_frame(chunk))))
+    assert fixed["usage"] == {"completion_tokens_details": None}
+
+    chunk["usage"] = {"prompt_tokens": 4.25, "completion_tokens": None}
+    chunk["created"] = 1700000000.5
+    chunk["choices"][0]["delta"] = {
+        "content": [{"type": "text", "text": " keep spacing "}],
+        "role": "",
+    }
+    raw = b"data: " + json.dumps(chunk, indent=None).encode() + b"\r\n\r\n"
     assert b"".join(_events(raw)) == raw
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        {"choices": [{"index": 0, "delta": {"content": None, "role": "", "tool_calls": None}}]},
+        {"id": None, "created": None, "model": None, "choices": []},
+        {"error": {"message": "limited", "type": None, "code": 429}},
+    ],
+)
+def test_valid_nullish_metadata_content_and_error_bytes_are_preserved(chunk):
+    raw = b"data: " + json.dumps(chunk).encode() + b"\r\n\r\n"
+    assert b"".join(_events(raw)) == raw
+
+
+@pytest.mark.parametrize("function", [{}, {"arguments": None}])
+def test_legacy_tool_argument_default_is_retained(function):
+    chunk = {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": function}]}}]}
+    fixed, = _frames(b"".join(_events(_frame(chunk))))
+    assert fixed["choices"][0]["delta"]["tool_calls"][0]["function"] == {"arguments": ""}
+
+
+def test_error_sibling_does_not_bypass_chat_field_repairs():
+    chunk = {"error": None, "choices": [{"index": 0, "delta": {"content": 42}}]}
+    fixed, = _frames(b"".join(_events(_frame(chunk))))
+    assert fixed["choices"][0]["delta"] == {"content": "42"}
+
+
+def test_repair_serializes_exponent_overflow_as_valid_json():
+    raw = b'data: {"choices":[{"index":0,"delta":{"content":42}}],"vendor":{"value":1e400}}\n\n'
+    relayed, = _events(raw)
+    assert b"Infinity" not in relayed
+    fixed, = _frames(relayed)
+    assert fixed["choices"][0]["delta"] == {"content": "42"}
+    assert fixed["vendor"] == {"value": None}
+
+
+@pytest.mark.parametrize("constant", [b"NaN", b"Infinity", b"-Infinity"])
+def test_non_json_number_events_are_dropped(constant):
+    assert not list(_events(b'data: {"choices":[],"unknown":' + constant + b"}\n\n"))
+
+
+# --- review round 3 (grok): schema follow-up -----------------------------------
+
+def test_deeply_nested_repaired_chunk_relays_raw():
+    nested = {}
+    cur = nested
+    for _ in range(1200):
+        cur["a"] = {}
+        cur = cur["a"]
+    chunk = {"choices": [{"delta": {"content": 42}}], "vendor": nested}
+    raw = ("data: " + json.dumps(chunk) + "\n\n").encode()
+    assert b"".join(normalize_sse_stream([raw])) == raw
+
+
+def test_inexact_decimal_usage_count_is_dropped_not_rounded():
+    st = ChunkNormalizer()
+    fixed, changed = st.normalize({"choices": [], "usage": {"prompt_tokens": "9007199254740993.0",
+                                                           "completion_tokens": "6.5e0", "total_tokens": "7"}})
+    assert changed
+    assert "prompt_tokens" not in fixed["usage"]
+    assert fixed["usage"]["completion_tokens"] == 6.5
+    assert fixed["usage"]["total_tokens"] == 7
