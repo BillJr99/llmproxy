@@ -23,8 +23,10 @@ candidate in a failover pool broke the client. This module sits in that relay:
   no change is relayed as its original bytes, so a stream that is already valid
   comes out byte-identical.
 
-Error payloads (``{"error": ...}``) pass through unchanged so a client still
-sees the upstream's failure. SSE comments and keep-alives stay comments, and
+Standalone error payloads (``{"error": ...}``) pass through unchanged so a
+client still sees the upstream's failure. OpenAI wire repairs still supply
+choice and tool indices, delta objects and tool argument strings, although
+the SDK schema allows some of those fields to be absent or null. SSE comments and keep-alives stay comments, and
 ``[DONE]`` is kept. Data that is not a JSON object carrying ``choices``,
 ``usage`` or ``error`` is dropped rather than relayed as a data event a strict
 client would reject.
@@ -235,9 +237,9 @@ def normalize_chat_chunk(chunk, state: ChunkNormalizer | None = None) -> tuple[d
         return None, False
     has_choices = isinstance(chunk.get("choices"), list)
     has_usage = isinstance(chunk.get("usage"), dict)
-    if "error" in chunk:
-        return chunk, False
     if not has_choices and not has_usage:
+        if "error" in chunk:
+            return chunk, False
         return None, False
 
     # Structural repairs first: these are what strict clients reject.

@@ -501,3 +501,23 @@ def test_invalid_usage_objects_are_dropped_and_valid_typed_content_is_untouched(
     }
     raw = b"data: " + json.dumps(chunk, indent=None).encode() + b"\r\n\r\n"
     assert b"".join(_events(raw)) == raw
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        {"choices": [{"index": 0, "delta": {"content": None, "role": "", "tool_calls": None}}]},
+        {"id": None, "created": None, "model": None, "choices": []},
+        {"error": {"message": "limited", "type": None, "code": 429}},
+    ],
+)
+def test_valid_nullish_metadata_content_and_error_bytes_are_preserved(chunk):
+    raw = b"data: " + json.dumps(chunk).encode() + b"\r\n\r\n"
+    assert b"".join(_events(raw)) == raw
+
+
+@pytest.mark.parametrize("function", [{}, {"arguments": None}])
+def test_legacy_tool_argument_default_is_retained(function):
+    chunk = {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": function}]}}]}
+    fixed, = _frames(b"".join(_events(_frame(chunk))))
+    assert fixed["choices"][0]["delta"]["tool_calls"][0]["function"] == {"arguments": ""}
