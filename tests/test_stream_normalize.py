@@ -541,3 +541,26 @@ def test_repair_serializes_exponent_overflow_as_valid_json():
 @pytest.mark.parametrize("constant", [b"NaN", b"Infinity", b"-Infinity"])
 def test_non_json_number_events_are_dropped(constant):
     assert not list(_events(b'data: {"choices":[],"unknown":' + constant + b"}\n\n"))
+
+
+# --- review round 3 (grok): schema follow-up -----------------------------------
+
+def test_deeply_nested_repaired_chunk_relays_raw():
+    nested = {}
+    cur = nested
+    for _ in range(1200):
+        cur["a"] = {}
+        cur = cur["a"]
+    chunk = {"choices": [{"delta": {"content": 42}}], "vendor": nested}
+    raw = ("data: " + json.dumps(chunk) + "\n\n").encode()
+    assert b"".join(normalize_sse_stream([raw])) == raw
+
+
+def test_inexact_decimal_usage_count_is_dropped_not_rounded():
+    st = ChunkNormalizer()
+    fixed, changed = st.normalize({"choices": [], "usage": {"prompt_tokens": "9007199254740993.0",
+                                                           "completion_tokens": "6.5e0", "total_tokens": "7"}})
+    assert changed
+    assert "prompt_tokens" not in fixed["usage"]
+    assert fixed["usage"]["completion_tokens"] == 6.5
+    assert fixed["usage"]["total_tokens"] == 7

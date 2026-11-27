@@ -40,6 +40,7 @@ import math
 import re
 import time
 from collections.abc import Callable, Iterable, Iterator
+from decimal import Decimal, InvalidOperation
 
 logger = logging.getLogger("llmproxy.stream_normalize")
 
@@ -159,7 +160,13 @@ def _normalize_usage_counts(obj: dict, keys: tuple[str, ...]) -> bool:
             number = _as_int(value)
             if number is None:
                 number = float(value)
-            if _is_number(number):
+                # Keep a decimal count only when the float reads the string exactly.
+                try:
+                    if Decimal(value.strip()) != Decimal(number):
+                        number = None
+                except (InvalidOperation, ValueError, OverflowError):
+                    number = None
+            if number is not None and _is_number(number):
                 obj[key] = number
                 changed = True
                 continue
@@ -379,7 +386,7 @@ def _normalize_event(raw: bytes, state: ChunkNormalizer) -> bytes:
             _finite_json(fixed), ensure_ascii=False, allow_nan=False, separators=(",", ":"),
         ) + "\n\n"
         return out.encode("utf-8", errors="backslashreplace")
-    except (ValueError, TypeError):
+    except Exception:  # e.g. RecursionError on a deeply nested payload: relay as received
         logger.warning("[stream_normalize] could not re-serialize event; relaying unchanged", exc_info=True)
         return raw
 
