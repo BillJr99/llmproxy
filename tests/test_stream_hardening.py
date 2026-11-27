@@ -208,7 +208,7 @@ def test_identity_stream_connect_timeout_returns_504(server, monkeypatch):
 # ── pre-commit window ───────────────────────────────────────────────────────
 
 def test_precommit_disabled_by_default_commits_on_first_chunk(server, monkeypatch):
-    """The default must reproduce the old behavior exactly."""
+    """The default commits on the first non-empty chunk."""
     seq = iter([FakeStreamResp(200, [PREAMBLE, ERRFRAME]), FakeStreamResp(200, [PREAMBLE, TEXT])])
     tried: list = []
     monkeypatch.setattr(server.requests, "post",
@@ -217,6 +217,26 @@ def test_precommit_disabled_by_default_commits_on_first_chunk(server, monkeypatc
     body = b"".join(resp.response)
     assert len(tried) == 1
     assert b"exploded" in body
+
+
+def test_default_stream_peek_fails_over_on_empty_body(server, monkeypatch):
+    empty = FakeStreamResp(200, [b""])
+    healthy = FakeStreamResp(200, [TEXT, DONE])
+    responses = iter((empty, healthy))
+    attempts = []
+
+    def post(url, **kwargs):
+        attempts.append(url)
+        return next(responses)
+
+    monkeypatch.setattr(server.requests, "post", post)
+
+    response = _run_stream(server, config={"server": {}})
+
+    assert response.status_code == 200
+    assert b"".join(response.response) == TEXT + DONE
+    assert len(attempts) == 2
+    assert empty.closed
 
 
 def test_precommit_window_fails_over_past_role_preamble(monkeypatch, tmp_path):

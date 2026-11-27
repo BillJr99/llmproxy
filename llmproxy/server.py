@@ -7818,7 +7818,7 @@ def _proxy_cycling_streaming(
             else:
                 error_body, prefix, rest = _peek_stream(resp)
                 buffered = [prefix] if prefix else []
-                window_reason = "peek"
+                window_reason = "peek" if prefix else "empty"
             if error_body is not None:
                 # A stream that opens with a quota error cools the candidate too.
                 if _is_quota_error(None, error_body):
