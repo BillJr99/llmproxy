@@ -521,3 +521,23 @@ def test_legacy_tool_argument_default_is_retained(function):
     chunk = {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": function}]}}]}
     fixed, = _frames(b"".join(_events(_frame(chunk))))
     assert fixed["choices"][0]["delta"]["tool_calls"][0]["function"] == {"arguments": ""}
+
+
+def test_error_sibling_does_not_bypass_chat_field_repairs():
+    chunk = {"error": None, "choices": [{"index": 0, "delta": {"content": 42}}]}
+    fixed, = _frames(b"".join(_events(_frame(chunk))))
+    assert fixed["choices"][0]["delta"] == {"content": "42"}
+
+
+def test_repair_serializes_exponent_overflow_as_valid_json():
+    raw = b'data: {"choices":[{"index":0,"delta":{"content":42}}],"vendor":{"value":1e400}}\n\n'
+    relayed, = _events(raw)
+    assert b"Infinity" not in relayed
+    fixed, = _frames(relayed)
+    assert fixed["choices"][0]["delta"] == {"content": "42"}
+    assert fixed["vendor"] == {"value": None}
+
+
+@pytest.mark.parametrize("constant", [b"NaN", b"Infinity", b"-Infinity"])
+def test_non_json_number_events_are_dropped(constant):
+    assert not list(_events(b'data: {"choices":[],"unknown":' + constant + b"}\n\n"))

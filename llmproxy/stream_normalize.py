@@ -126,6 +126,21 @@ def _is_number(value) -> bool:
         return False
 
 
+def _finite_json(value):
+    """Replace exponent overflow with null when a frame must be serialized."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _finite_json(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_finite_json(item) for item in value]
+    return value
+
+
+def _reject_json_constant(value: str):
+    raise ValueError(f"not a JSON number: {value}")
+
+
 def _drop_unless(obj: dict, key: str, valid: Callable[[object], bool]) -> bool:
     value = obj.get(key)
     if value is None or valid(value):
@@ -213,7 +228,7 @@ def _normalize_tool_calls(calls: list, choice_index: int, state: ChunkNormalizer
         if args is None:
             changed |= _set(fn, "arguments", "")
         elif not isinstance(args, str):
-            changed |= _set(fn, "arguments", json.dumps(args, ensure_ascii=False))
+            changed |= _set(fn, "arguments", json.dumps(_finite_json(args), ensure_ascii=False, allow_nan=False))
     return changed
 
 
@@ -343,7 +358,7 @@ def _normalize_event(raw: bytes, state: ChunkNormalizer) -> bytes:
     if data.strip() == "[DONE]":
         return raw
     try:
-        parsed = json.loads(data)
+        parsed = json.loads(data, parse_constant=_reject_json_constant)
     except (ValueError, TypeError):
         logger.debug("[stream_normalize] dropping non-JSON data event: %r", data[:120])
         return b""
@@ -360,7 +375,9 @@ def _normalize_event(raw: bytes, state: ChunkNormalizer) -> bytes:
     others = [ln for ln in lines if ln and not ln.startswith("data:")]
     out = "".join(f"{ln}\n" for ln in others)
     try:
-        out += "data: " + json.dumps(fixed, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+        out += "data: " + json.dumps(
+            _finite_json(fixed), ensure_ascii=False, allow_nan=False, separators=(",", ":"),
+        ) + "\n\n"
         return out.encode("utf-8", errors="backslashreplace")
     except (ValueError, TypeError):
         logger.warning("[stream_normalize] could not re-serialize event; relaying unchanged", exc_info=True)
