@@ -678,8 +678,9 @@ def _parse_retry_after(value) -> float | None:
     if not value:
         return None
     value = str(value).strip()
-    if value.isdigit():
-        return float(value)
+    if value.isascii() and value.isdecimal():
+        seconds = float(value)
+        return seconds if math.isfinite(seconds) else _MAX_SATURATION_COOLDOWN_S
     try:
         from email.utils import parsedate_to_datetime
         dt = parsedate_to_datetime(value)

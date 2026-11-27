@@ -333,6 +333,26 @@ def test_transient_fails_over_immediately_when_alternatives_remain(server, monke
     assert resp.status_code == 200
 
 
+def test_malformed_retry_after_does_not_interrupt_failover(server, monkeypatch):
+    calls: list[str] = []
+
+    def fake(endpoint, pn, cfg, payload, timeout):
+        calls.append(payload["model"])
+        if payload["model"] == "m1":
+            response = _json_resp({"error": "rate limit"}, status=429)
+            response.headers["Retry-After"] = "²"
+            return response
+        return _json_resp(_OK)
+
+    monkeypatch.setattr(server, "_proxy_request", fake)
+    candidates = [("p1", {}, "m1"), ("p2", {}, "m2")]
+    response = server._proxy_cycling_non_streaming("chat/completions", "t", candidates, {}, 5)
+
+    assert calls == ["m1", "m2"]
+    assert response.status_code == 200
+    assert response.json == _OK
+
+
 def test_transient_retry_only_on_last_candidate(server, monkeypatch):
     # The last candidate has no fallback, so it gets the same-candidate retries.
     calls: list[str] = []
