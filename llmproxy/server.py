@@ -9628,7 +9628,11 @@ def _get_flagship_scores(config_path: str | None = None) -> dict[str, float]:
             raw = raw.get("combined")
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             return None
-        return float(raw)
+        try:
+            score = float(raw)
+        except OverflowError:
+            return None
+        return score if math.isfinite(score) else None
 
     for key in ("model_scores", "scores"):
         block = state.get(key)
