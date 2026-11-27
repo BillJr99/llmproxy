@@ -22,6 +22,7 @@ from __future__ import annotations
 import collections
 import datetime
 import json
+import math
 import threading
 import time
 
@@ -241,8 +242,18 @@ class ModelUsage:
 def _coerce_int(value) -> int:
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
+
+
+def _finite_cost(value) -> float | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    try:
+        cost = float(value)
+    except OverflowError:
+        return None
+    return cost if math.isfinite(cost) else None
 
 
 def _coerce_cost(usage: dict) -> float | None:
@@ -252,14 +263,15 @@ def _coerce_cost(usage: dict) -> float | None:
     ``usage.cost_details.upstream_inference_cost`` or report ``total_cost``.
     """
     for key in ("cost", "total_cost"):
-        val = usage.get(key)
-        if isinstance(val, (int, float)):
-            return float(val)
+        cost = _finite_cost(usage.get(key))
+        if cost is not None:
+            return cost
     details = usage.get("cost_details")
     if isinstance(details, dict):
-        val = details.get("upstream_inference_cost") or details.get("total_cost")
-        if isinstance(val, (int, float)):
-            return float(val)
+        for key in ("upstream_inference_cost", "total_cost"):
+            cost = _finite_cost(details.get(key))
+            if cost is not None:
+                return cost
     return None
 
 
@@ -386,9 +398,9 @@ def compute_cost(
     """
     if not usage:
         return 0.0, "unknown"
-    reported = usage.get("cost")
-    if isinstance(reported, (int, float)):
-        return float(reported), "provider"
+    reported = _finite_cost(usage.get("cost"))
+    if reported is not None:
+        return reported, "provider"
     if pricing:
         key = f"{provider}/{model}".lower()
         prices = pricing.get(key)
@@ -397,6 +409,11 @@ def compute_cost(
             prices = pricing.get(model.lower())
         if prices:
             in_cost, out_cost = prices
-            cost = usage.get("prompt_tokens", 0) * in_cost + usage.get("completion_tokens", 0) * out_cost
-            return float(cost), "computed"
+            try:
+                cost = usage.get("prompt_tokens", 0) * in_cost + usage.get("completion_tokens", 0) * out_cost
+            except OverflowError:
+                return 0.0, "unknown"
+            finite_cost = _finite_cost(cost)
+            if finite_cost is not None:
+                return finite_cost, "computed"
     return 0.0, "unknown"
